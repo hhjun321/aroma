@@ -86,7 +86,7 @@ class BackgroundAnalyzer:
 
     def analyze_image(self, image: np.ndarray) -> Dict:
         """Analyze full image using grid-based approach."""
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
         h, w = gray.shape
         gs = self.grid_size
         grid_h = h // gs
