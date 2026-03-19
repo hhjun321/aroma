@@ -90,12 +90,12 @@ def organic_image():
     return img
 
 
-def test_organic_classified_as_organic_or_complex(organic_image):
-    """Random noise should not be smooth or directional.
+def test_noise_not_smooth_or_directional(organic_image):
+    """Random noise should not be classified as smooth or directional.
 
     Pure random noise has a flat power spectrum which produces a sharp
-    autocorrelation peak — so PERIODIC is also a valid classification here.
-    The key requirement is that it is NOT classified as smooth or directional.
+    autocorrelation peak — so PERIODIC, ORGANIC, or COMPLEX are all valid.
+    The key requirement is that it is NOT smooth or directional.
     """
     analyzer = BackgroundAnalyzer(grid_size=64)
     result = analyzer.analyze_image(organic_image)
