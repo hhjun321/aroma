@@ -1,0 +1,168 @@
+{
+  "_comment": "AROMA dataset config — maps each experiment unit to Stage 1/1b CLI args. Base: /content/drive/MyDrive/data/Aroma/",
+  "isp_ASM": {
+    "domain": "isp",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/ASM/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/ASM/test/area",
+    "notes": "256x256px. seed_dir contains real defect images annotated by area."
+  },
+  "isp_LSM_1": {
+    "domain": "isp",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_1/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_1/test/area",
+    "notes": "512x512px. Largest ISP-AD split (3678 train patches). Recommended starting modality."
+  },
+  "isp_LSM_2": {
+    "domain": "isp",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_2/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_2/test/area",
+    "notes": "512x512px."
+  },
+  "mvtec_bottle": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/bottle/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/bottle/test/broken_large"
+  },
+  "mvtec_cable": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/cable/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/cut_outer_insulation"
+  },
+  "mvtec_capsule": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/capsule/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/scratch"
+  },
+  "mvtec_carpet": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/carpet/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/cut"
+  },
+  "mvtec_grid": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/grid/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/broken"
+  },
+  "mvtec_hazelnut": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/test/crack"
+  },
+  "mvtec_leather": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/leather/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/cut"
+  },
+  "mvtec_metal_nut": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/test/scratch"
+  },
+  "mvtec_pill": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/pill/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/crack"
+  },
+  "mvtec_screw": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/screw/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/scratch_head"
+  },
+  "mvtec_tile": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/tile/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/crack"
+  },
+  "mvtec_toothbrush": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/toothbrush/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/toothbrush/test/defective"
+  },
+  "mvtec_transistor": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/transistor/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/bent_lead"
+  },
+  "mvtec_wood": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/wood/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/scratch"
+  },
+  "mvtec_zipper": {
+    "domain": "mvtec",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/zipper/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/broken_teeth"
+  },
+  "visa_candle": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/candle/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/candle/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_capsules": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/capsules/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/capsules/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_cashew": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/cashew/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/cashew/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_chewinggum": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/chewinggum/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/chewinggum/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_fryum": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/fryum/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/fryum/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_macaroni1": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni1/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni1/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_macaroni2": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni2/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni2/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_pcb1": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb1/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb1/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_pcb2": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb2/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb2/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_pcb3": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb3/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb3/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_pcb4": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb4/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb4/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  },
+  "visa_pipe_fryum": {
+    "domain": "visa",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pipe_fryum/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pipe_fryum/test/anomaly",
+    "notes": "Run prepare_visa.py first"
+  }
+}
