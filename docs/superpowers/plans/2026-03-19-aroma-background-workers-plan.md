@@ -1123,3 +1123,221 @@ Expected: No output.
 git add .
 git commit -m "test: full suite verification — background redesign + workers complete"
 ```
+
+---
+
+## Stage Script Reference
+
+각 스크립트의 목적, CLI 인자, 실행 예시를 정리합니다. 모든 스크립트는 Google Colab 셀에서 독립적으로 실행 가능합니다.
+
+---
+
+### `stage1_roi_extraction.py`
+
+**목적:** 이미지 디렉토리 전체에서 전역/로컬 ROI를 추출하고, 각 로컬 ROI의 배경 타입(`smooth | directional | periodic | organic | complex`)과 `dominant_angle`, continuity/stability 점수를 분석하여 `roi_metadata.json`으로 저장합니다.
+
+| 인자 | 필수 | 설명 |
+|---|---|---|
+| `--image_dir` | ✓ | 입력 이미지 디렉토리 |
+| `--output_dir` | ✓ | 출력 디렉토리 (`masks/`, `roi_metadata.json` 생성) |
+| `--domain` | ✓ | `isp` \| `mvtec` \| `visa` |
+| `--roi_levels` |  | `global` \| `local` \| `both` (기본: `both`) |
+| `--grid_size` |  | 배경 분석 그리드 크기 (기본: `64`) |
+| `--workers` |  | 병렬 워커 수 (기본: `0` = 순차, `-1` = 자동) |
+
+```bash
+python stage1_roi_extraction.py \
+  --image_dir ./dataset/images \
+  --output_dir ./out/stage1 \
+  --domain isp \
+  --roi_levels both \
+  --grid_size 64 \
+  --workers 4
+```
+
+출력:
+```
+out/stage1/
+├── masks/
+│   ├── global/img_001.png
+│   └── local/img_001_zone0.png
+└── roi_metadata.json
+```
+
+---
+
+### `stage1b_seed_characterization.py`
+
+**목적:** 단일 결함 시드 이미지에서 SAM(또는 Otsu fallback)으로 마스크를 추출하고, 4가지 기하학적 지표(linearity, solidity, extent, aspect_ratio)를 계산해 결함 서브타입을 분류하여 `seed_profile.json`으로 저장합니다. Stage 1과 병렬 실행 가능합니다.
+
+| 인자 | 필수 | 설명 |
+|---|---|---|
+| `--seed_defect` | ✓ | 시드 결함 이미지 경로 |
+| `--output_dir` | ✓ | 출력 디렉토리 (`seed_profile.json`, `seed_mask.png` 생성) |
+| `--model_checkpoint` |  | SAM 체크포인트 경로 (없으면 Otsu fallback) |
+| `--workers` |  | 수용되지만 무시됨 (단일 이미지 처리) |
+
+```bash
+python stage1b_seed_characterization.py \
+  --seed_defect ./seed_defect.png \
+  --output_dir ./out/stage1b \
+  --model_checkpoint ./sam_vit_b_01ec64.pth
+```
+
+출력:
+```
+out/stage1b/
+├── seed_profile.json   # subtype, linearity, solidity, extent, aspect_ratio
+└── seed_mask.png
+```
+
+---
+
+### `stage2_defect_seed_generation.py`
+
+**목적:** 단일 시드 결함 이미지에서 N개의 변형 이미지를 생성합니다. `seed_profile.json`이 제공되면 서브타입별 특화 augmentation 전략을 적용하고, 없으면 `general` 전략으로 fallback합니다.
+
+| 인자 | 필수 | 설명 |
+|---|---|---|
+| `--seed_defect` | ✓ | 시드 결함 이미지 경로 |
+| `--num_variants` | ✓ | 생성할 변형 이미지 수 |
+| `--output_dir` | ✓ | 출력 디렉토리 |
+| `--seed_profile` |  | `seed_profile.json` 경로 (서브타입 인식 생성) |
+| `--workers` |  | 병렬 워커 수 (기본: `0`) |
+
+```bash
+python stage2_defect_seed_generation.py \
+  --seed_defect ./seed_defect.png \
+  --seed_profile ./out/stage1b/seed_profile.json \
+  --num_variants 20 \
+  --output_dir ./out/stage2 \
+  --workers 4
+```
+
+출력:
+```
+out/stage2/
+├── variant_0000.png
+├── variant_0001.png
+└── ...
+```
+
+---
+
+### `stage3_layout_logic.py`
+
+**목적:** 각 결함 시드에 대해 최적 ROI를 선택하고 배치 좌표를 계산합니다. 단일 통합 매칭 룰 테이블로 suitability 점수를 산출하며, `directional` 배경 + `linear_scratch`/`elongated` 서브타입 조합에서는 `dominant_angle`을 기반으로 결함 회전을 정렬합니다.
+
+| 인자 | 필수 | 설명 |
+|---|---|---|
+| `--roi_metadata` | ✓ | Stage 1 출력 `roi_metadata.json` 경로 |
+| `--defect_seeds_dir` | ✓ | Stage 2 출력 디렉토리 |
+| `--output_dir` | ✓ | 출력 디렉토리 |
+| `--seed_profile` |  | `seed_profile.json` 경로 (없으면 `general` subtype) |
+| `--image_dir` |  | 원본 이미지 디렉토리 (Gram matrix 계산 시 필요) |
+| `--domain` |  | `isp` \| `mvtec` \| `visa` (기본: `isp`) |
+| `--workers` |  | 병렬 워커 수 (기본: `0`) |
+
+```bash
+python stage3_layout_logic.py \
+  --roi_metadata ./out/stage1/roi_metadata.json \
+  --defect_seeds_dir ./out/stage2 \
+  --seed_profile ./out/stage1b/seed_profile.json \
+  --image_dir ./dataset/images \
+  --domain isp \
+  --output_dir ./out/stage3 \
+  --workers 4
+```
+
+출력:
+```
+out/stage3/
+└── placement_map.json  # x, y, scale, rotation, suitability_score, matched_background_type
+```
+
+---
+
+### `stage4_mpb_synthesis.py`
+
+**목적:** `placement_map.json`에 따라 결함 패치를 배경 이미지에 Modified Poisson Blending으로 합성합니다. YOLO 또는 분류 폴더 포맷으로 출력합니다.
+
+| 인자 | 필수 | 설명 |
+|---|---|---|
+| `--image_dir` | ✓ | 원본 이미지 디렉토리 |
+| `--placement_map` | ✓ | Stage 3 출력 `placement_map.json` 경로 |
+| `--output_dir` | ✓ | 출력 디렉토리 |
+| `--format` |  | `yolo` \| `cls` (기본: `yolo`) |
+| `--workers` |  | 병렬 워커 수 (기본: `0`) |
+
+```bash
+python stage4_mpb_synthesis.py \
+  --image_dir ./dataset/images \
+  --placement_map ./out/stage3/placement_map.json \
+  --output_dir ./out/stage4 \
+  --format yolo \
+  --workers 4
+```
+
+출력 (`yolo` 포맷):
+```
+out/stage4/
+├── images/img_001_aug.png
+└── labels/img_001_aug.txt
+```
+
+출력 (`cls` 포맷):
+```
+out/stage4/
+├── defect/img_001_aug.png
+└── normal/...
+```
+
+---
+
+### Google Colab 전체 파이프라인 실행 예시
+
+```python
+# Cell 1 — 드라이브 마운트 + 의존성 설치
+from google.colab import drive
+drive.mount('/content/drive')
+!pip install -r requirements.txt
+
+# Cell 2 — Stage 1 (배경 분석 포함)
+!python stage1_roi_extraction.py \
+  --image_dir /content/drive/MyDrive/dataset/images \
+  --output_dir /content/drive/MyDrive/aroma_out/stage1 \
+  --domain isp --roi_levels both --workers 2
+
+# Cell 3 — Stage 1b (Cell 2와 병렬 실행 가능)
+!python stage1b_seed_characterization.py \
+  --seed_defect /content/drive/MyDrive/seed.png \
+  --output_dir /content/drive/MyDrive/aroma_out/stage1b
+
+# Cell 4 — Stage 2
+!python stage2_defect_seed_generation.py \
+  --seed_defect /content/drive/MyDrive/seed.png \
+  --seed_profile /content/drive/MyDrive/aroma_out/stage1b/seed_profile.json \
+  --num_variants 20 \
+  --output_dir /content/drive/MyDrive/aroma_out/stage2 \
+  --workers 2
+
+# Cell 5 — Stage 3
+!python stage3_layout_logic.py \
+  --roi_metadata /content/drive/MyDrive/aroma_out/stage1/roi_metadata.json \
+  --defect_seeds_dir /content/drive/MyDrive/aroma_out/stage2 \
+  --seed_profile /content/drive/MyDrive/aroma_out/stage1b/seed_profile.json \
+  --image_dir /content/drive/MyDrive/dataset/images \
+  --domain isp \
+  --output_dir /content/drive/MyDrive/aroma_out/stage3 \
+  --workers 2
+
+# Cell 6 — Stage 4
+!python stage4_mpb_synthesis.py \
+  --image_dir /content/drive/MyDrive/dataset/images \
+  --placement_map /content/drive/MyDrive/aroma_out/stage3/placement_map.json \
+  --output_dir /content/drive/MyDrive/aroma_out/stage4 \
+  --format yolo \
+  --workers 2
+```
+
+> **Colab `--workers` 권장값:** RAM 제약으로 `--workers 2` 사용. 모델(SAM 등)을 worker마다 로드하므로 `workers × model_size` 만큼 메모리 소모.
