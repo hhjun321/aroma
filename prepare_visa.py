@@ -51,10 +51,14 @@ def reorganize_category(visa_root: Path, category: str) -> None:
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            split = row["split"].strip()
-            label = row["label"].strip()
-            img_rel = row["image_path"].strip()
-            mask_rel = row.get("mask_path", "").strip()
+            try:
+                split = row["split"].strip()
+                label = row["label"].strip()
+                img_rel = row["image_path"].strip()
+                mask_rel = row.get("mask_path", "").strip()
+            except KeyError as e:
+                print(f"  [WARN] Malformed CSV row in {csv_path}: missing column {e}, skipping")
+                continue
 
             folder = _SPLIT_MAP.get((split, label))
             if folder is None:
