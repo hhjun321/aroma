@@ -13,6 +13,7 @@ Detection pipeline (lazy evaluation, cheapest first):
 """
 import numpy as np
 import cv2
+from skimage.feature import local_binary_pattern
 from typing import Dict, Optional, Tuple
 from enum import Enum
 
@@ -33,6 +34,10 @@ class BackgroundAnalyzer:
         grid_size: int = 64,
         variance_threshold: float = 100.0,
         periodic_threshold: float = 0.15,
+        # direction_entropy_threshold=1.0: tightened from initial estimate of 2.0.
+        # At 2.0, strongly periodic patterns (e.g., dot grids with entropy≈1.67)
+        # were misclassified as directional. 1.0 cleanly separates directional
+        # (entropy≈0 for pure stripes) from periodic and organic patterns.
         direction_entropy_threshold: float = 1.0,
         organic_entropy_threshold: float = 2.5,
     ):
@@ -79,11 +84,11 @@ class BackgroundAnalyzer:
 
     def _compute_lbp_entropy(self, patch: np.ndarray) -> float:
         """Returns LBP histogram entropy. High = organic/random texture."""
-        from skimage.feature import local_binary_pattern
         lbp = local_binary_pattern(patch, P=8, R=1, method="uniform")
-        counts, _ = np.histogram(lbp.ravel(), bins=10, density=True)
-        counts = counts + 1e-12
-        return float(-np.sum(counts * np.log2(counts)))
+        counts, _ = np.histogram(lbp.ravel(), bins=10)
+        total = counts.sum() + 1e-6
+        probs = counts / total + 1e-12
+        return float(-np.sum(probs * np.log2(probs)))
 
     def classify_patch(
         self, patch: np.ndarray
