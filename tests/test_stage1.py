@@ -44,3 +44,21 @@ def test_roi_boxes_within_image_bounds(tmp_path, temp_image_dir):
             x, y, w, h = box["box"]
             assert x >= 0 and y >= 0
             assert x + w <= 64 and y + h <= 64
+
+
+def test_roi_boxes_have_dominant_angle_field(tmp_path, temp_image_dir):
+    from stage1_roi_extraction import run_extraction
+    output_dir = tmp_path / "output"
+    run_extraction(str(temp_image_dir), str(output_dir), domain="mvtec", roi_levels="both")
+    meta = json.loads((output_dir / "roi_metadata.json").read_text())
+    for box in meta[0]["roi_boxes"]:
+        assert "dominant_angle" in box, "Missing dominant_angle"
+        assert box["dominant_angle"] is None or isinstance(box["dominant_angle"], float)
+
+
+def test_workers_argument_accepted(tmp_path, temp_image_dir):
+    from stage1_roi_extraction import run_extraction
+    output_dir = tmp_path / "output"
+    run_extraction(str(temp_image_dir), str(output_dir), domain="mvtec",
+                   roi_levels="both", workers=1)
+    assert (output_dir / "roi_metadata.json").exists()
