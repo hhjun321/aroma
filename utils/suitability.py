@@ -1,37 +1,42 @@
+"""
+Suitability Scoring — unified domain-agnostic matching rules.
+
+A single table covers ISP-AD, MVTec AD, and VisA.
+Structural relationships between defect geometry and background structure
+are domain-invariant, so no per-domain branching is needed.
+"""
 from typing import Optional
 
+# Unified matching rules — background types: smooth | directional | periodic | organic | complex
 MATCHING_RULES = {
-    "isp": {
-        "linear_scratch":  {"vertical_stripe": 1.0, "horizontal_stripe": 1.0, "smooth": 0.5, "textured": 0.4, "complex_pattern": 0.3},
-        "elongated":       {"vertical_stripe": 0.9, "horizontal_stripe": 0.9, "smooth": 0.6, "textured": 0.5, "complex_pattern": 0.4},
-        "compact_blob":    {"vertical_stripe": 0.5, "horizontal_stripe": 0.5, "smooth": 1.0, "textured": 0.6, "complex_pattern": 0.4},
-        "irregular":       {"vertical_stripe": 0.4, "horizontal_stripe": 0.4, "smooth": 0.5, "textured": 0.8, "complex_pattern": 1.0},
-        "general":         {"vertical_stripe": 0.7, "horizontal_stripe": 0.7, "smooth": 0.7, "textured": 0.7, "complex_pattern": 0.7},
+    "linear_scratch": {
+        "smooth": 0.5, "directional": 1.0, "periodic": 0.7, "organic": 0.3, "complex": 0.3,
     },
-    "mvtec": {
-        "linear_scratch":  {"vertical_stripe": 0.8, "horizontal_stripe": 0.8, "smooth": 0.6, "textured": 0.5, "complex_pattern": 0.3},
-        "elongated":       {"vertical_stripe": 0.7, "horizontal_stripe": 0.7, "smooth": 0.6, "textured": 0.6, "complex_pattern": 0.4},
-        "compact_blob":    {"vertical_stripe": 0.4, "horizontal_stripe": 0.4, "smooth": 0.9, "textured": 0.7, "complex_pattern": 0.5},
-        "irregular":       {"vertical_stripe": 0.4, "horizontal_stripe": 0.4, "smooth": 0.5, "textured": 0.8, "complex_pattern": 0.9},
-        "general":         {"vertical_stripe": 0.7, "horizontal_stripe": 0.7, "smooth": 0.7, "textured": 0.7, "complex_pattern": 0.7},
+    "elongated": {
+        "smooth": 0.6, "directional": 0.9, "periodic": 0.7, "organic": 0.4, "complex": 0.4,
+    },
+    "compact_blob": {
+        "smooth": 0.9, "directional": 0.4, "periodic": 0.7, "organic": 0.6, "complex": 0.5,
+    },
+    "irregular": {
+        "smooth": 0.5, "directional": 0.4, "periodic": 0.5, "organic": 0.8, "complex": 0.9,
+    },
+    "general": {
+        "smooth": 0.7, "directional": 0.7, "periodic": 0.7, "organic": 0.7, "complex": 0.7,
     },
 }
-# Fallback: use "general" row from "isp" for unknown domains
-_FALLBACK_RULES = MATCHING_RULES["isp"]["general"]
 
 
 class SuitabilityEvaluator:
-    # Hybrid score weights
-    W_MATCHING    = 0.4
-    W_CONTINUITY  = 0.3
-    W_STABILITY   = 0.2
-    W_GRAM        = 0.1
+    """Compute hybrid suitability score for defect-ROI placement."""
 
-    def __init__(self, domain: str = "isp"):
-        self._rules = MATCHING_RULES.get(domain, MATCHING_RULES["isp"])
+    W_MATCHING   = 0.4
+    W_CONTINUITY = 0.3
+    W_STABILITY  = 0.2
+    W_GRAM       = 0.1
 
     def matching_score(self, defect_subtype: str, background_type: str) -> float:
-        row = self._rules.get(defect_subtype, self._rules.get("general", _FALLBACK_RULES))
+        row = MATCHING_RULES.get(defect_subtype, MATCHING_RULES["general"])
         return float(row.get(background_type, 0.5))
 
     def compute_suitability(
