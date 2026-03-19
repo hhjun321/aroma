@@ -135,11 +135,32 @@ def _brightness_contrast_jitter(image: np.ndarray,
 # Public API
 # ---------------------------------------------------------------------------
 
+def generate_variant(image: np.ndarray, rng_seed: int = None,
+                     subtype: str = "general") -> np.ndarray:
+    """Generate a single augmented variant of *image* using *subtype* strategy."""
+    rng = np.random.default_rng(rng_seed)
+    warp_fn = _WARP_STRATEGIES.get(subtype, _warp_general)
+    variant = warp_fn(image, rng)
+    return _brightness_contrast_jitter(variant, rng)
+
+
+def _generate_single_variant_worker(args_tuple):
+    """Module-level worker for variant generation (pickle-safe)."""
+    seed_path_str, out_path_str, rng_seed, subtype = args_tuple
+    seed = cv2.imread(seed_path_str)
+    if seed is None:
+        return None
+    variant = generate_variant(seed, rng_seed=rng_seed, subtype=subtype)
+    cv2.imwrite(out_path_str, variant)
+    return out_path_str
+
+
 def run_seed_generation(
     seed_defect: str,
     num_variants: int,
     output_dir: str,
     seed_profile: str | None = None,
+    workers: int = 0,
 ) -> None:
     """Generate *num_variants* augmented defect seeds from *seed_defect*.
 
@@ -154,10 +175,11 @@ def run_seed_generation(
     seed_profile:
         Optional path to a JSON profile produced by Stage 1b.  When
         supplied the ``subtype`` field selects the augmentation strategy.
+    workers:
+        Number of parallel workers (0=sequential, -1=auto, N>=2=N processes).
     """
-    # Load seed image
-    image = cv2.imread(seed_defect)
-    if image is None:
+    # Validate seed image exists
+    if not Path(seed_defect).exists():
         raise FileNotFoundError(f"Cannot read seed image: {seed_defect}")
 
     # Determine subtype
@@ -166,19 +188,18 @@ def run_seed_generation(
         profile = load_json(seed_profile)
         subtype = profile.get("subtype", "general")
 
-    warp_fn = _WARP_STRATEGIES.get(subtype, _warp_general)
-
     # Prepare output directory
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    rng = np.random.default_rng()
-
-    for i in range(num_variants):
-        variant = warp_fn(image, rng)
-        variant = _brightness_contrast_jitter(variant, rng)
-        filename = out_path / f"variant_{i:04d}.png"
-        cv2.imwrite(str(filename), variant)
+    from utils.parallel import resolve_workers, run_parallel
+    num_workers = resolve_workers(workers)
+    tasks = [
+        (str(seed_defect), str(out_dir / f"variant_{i:04d}.png"), i, subtype)
+        for i in range(num_variants)
+    ]
+    run_parallel(_generate_single_variant_worker, tasks, num_workers,
+                 desc=f"Stage2 variant generation (workers={num_workers})")
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +218,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Number of variant images to generate.")
     p.add_argument("--output_dir", required=True,
                    help="Directory to write variant images into.")
+    p.add_argument("--workers", type=int, default=0,
+                   help="병렬 워커 수 (0=순차 처리, -1=자동 감지, N>=2=N개 프로세스 병렬 처리)")
     return p
 
 
@@ -207,6 +230,7 @@ def main() -> None:
         num_variants=args.num_variants,
         output_dir=args.output_dir,
         seed_profile=args.seed_profile,
+        workers=args.workers,
     )
 
 

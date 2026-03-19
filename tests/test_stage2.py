@@ -44,3 +44,12 @@ def test_seed_profile_subtype_used(tmp_path, synthetic_defect):
         run_seed_generation(str(seed_path), num_variants=2,
                             output_dir=str(out_dir), seed_profile=str(profile_path))
         assert len(list(out_dir.glob("*.png"))) == 2
+
+
+def test_workers_argument_parallel_produces_correct_count(tmp_path, synthetic_defect):
+    from stage2_defect_seed_generation import run_seed_generation
+    seed_path = tmp_path / "seed.png"
+    cv2.imwrite(str(seed_path), synthetic_defect)
+    out_dir = tmp_path / "seeds_parallel"
+    run_seed_generation(str(seed_path), num_variants=12, output_dir=str(out_dir), workers=1)
+    assert len(list(out_dir.glob("*.png"))) == 12
