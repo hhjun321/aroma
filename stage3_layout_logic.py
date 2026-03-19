@@ -10,6 +10,51 @@ from utils.io import load_json, save_json
 from utils.suitability import SuitabilityEvaluator
 
 
+def _compute_placement_worker(args_tuple):
+    """Module-level worker for placement computation (pickle-safe)."""
+    image_id, roi_boxes, seed_paths_str, defect_subtype, domain, image_dir_str = args_tuple
+    from utils.suitability import SuitabilityEvaluator
+    import cv2
+    evaluator = SuitabilityEvaluator()
+    placements = []
+    # For each seed, find best ROI by suitability score
+    for seed_path_str in seed_paths_str:
+        seed = cv2.imread(seed_path_str)
+        if seed is None:
+            continue
+        best_score = -1.0
+        best_box = roi_boxes[0] if roi_boxes else None
+        for roi_box in roi_boxes:
+            score = evaluator.compute_suitability(
+                defect_subtype=defect_subtype,
+                background_type=roi_box.get("background_type", "smooth"),
+                continuity_score=float(roi_box.get("continuity_score", 0.5)),
+                stability_score=float(roi_box.get("stability_score", 0.5)),
+            )
+            if score > best_score:
+                best_score = score
+                best_box = roi_box
+        if best_box is None:
+            continue
+        x, y, w, h = best_box["box"]
+        rotation = float(np.random.uniform(0, 360))
+        # dominant_angle alignment
+        if (best_box.get("background_type") == "directional"
+                and defect_subtype in ("linear_scratch", "elongated")
+                and best_box.get("dominant_angle") is not None):
+            rotation = float(best_box["dominant_angle"])
+        placements.append({
+            "defect_path": seed_path_str,
+            "x": x + w // 4,
+            "y": y + h // 4,
+            "scale": 1.0,
+            "rotation": rotation,
+            "suitability_score": round(best_score, 4),
+            "matched_background_type": best_box.get("background_type", "smooth"),
+        })
+    return {"image_id": image_id, "placements": placements}
+
+
 def _gram_similarity(img1: np.ndarray, img2: np.ndarray) -> float:
     """Cosine similarity between Gram matrices of two patches."""
     def gram(x):
@@ -53,6 +98,7 @@ def run_layout_logic(
     seed_profile: Optional[str] = None,
     domain: str = "mvtec",
     image_dir: Optional[str] = None,
+    workers: int = 0,
 ) -> None:
     """Select best ROI for each defect seed using hybrid suitability score.
 
@@ -63,12 +109,16 @@ def run_layout_logic(
         seed_profile:    Optional path to seed_profile.json with 'subtype' field.
         domain:          Matching-rules domain ("isp" or "mvtec").
         image_dir:       Optional directory of source images for Gram similarity.
+        workers:         Number of parallel workers (0=sequential, -1=auto, N>=2=N processes).
     """
+    from utils.parallel import resolve_workers, run_parallel
+
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     meta_list = load_json(roi_metadata)
     seeds = _load_seeds(defect_seeds_dir)
+    seed_paths = [p for p, _ in seeds]
 
     # Resolve defect subtype
     defect_subtype = "general"
@@ -76,80 +126,33 @@ def run_layout_logic(
         profile = load_json(seed_profile)
         defect_subtype = profile.get("subtype", "general")
 
-    evaluator = SuitabilityEvaluator(domain=domain)
+    num_workers = resolve_workers(workers)
 
-    placement_map = []
+    tasks = [
+        (
+            entry["image_id"],
+            entry.get("roi_boxes", []),
+            seed_paths,
+            defect_subtype,
+            domain,
+            image_dir,
+        )
+        for entry in meta_list
+    ]
 
-    for entry in meta_list:
-        image_id = entry["image_id"]
-        roi_boxes = entry.get("roi_boxes", [])
+    results = run_parallel(
+        _compute_placement_worker,
+        tasks,
+        num_workers,
+        desc=f"Stage3 placement computation (workers={num_workers})",
+    )
 
-        # Load source image for Gram similarity if available
-        source_image = None
-        if image_dir is not None:
-            img_path = Path(image_dir) / f"{image_id}.png"
-            if img_path.exists():
-                source_image = cv2.imread(str(img_path))
-
-        placements = []
-
-        for seed_path, seed_img in seeds:
-            best_score = -1.0
-            best_box = None
-            best_bg_type = "unknown"
-
-            for roi in roi_boxes:
-                bg_type = roi.get("background_type", "smooth")
-                continuity = float(roi.get("continuity_score", 0.5))
-                stability = float(roi.get("stability_score", 0.5))
-
-                # Gram similarity: use actual crop if source image available, else 0.5
-                if source_image is not None:
-                    crop = _crop_roi(source_image, roi["box"])
-                    if crop is not None and crop.size > 0:
-                        # Resize seed to crop size for comparison if needed
-                        seed_resized = cv2.resize(seed_img, (crop.shape[1], crop.shape[0]))
-                        gram_sim = _gram_similarity(seed_resized, crop)
-                    else:
-                        gram_sim = 0.5
-                else:
-                    gram_sim = 0.5
-
-                score = evaluator.compute_suitability(
-                    defect_subtype=defect_subtype,
-                    background_type=bg_type,
-                    continuity_score=continuity,
-                    stability_score=stability,
-                    gram_similarity=gram_sim,
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_box = roi["box"]
-                    best_bg_type = bg_type
-
-            # Compute placement coordinates from best ROI box center
-            if best_box is not None:
-                bx, by, bw, bh = best_box
-                cx = int(bx + bw / 2)
-                cy = int(by + bh / 2)
-            else:
-                cx, cy = 0, 0
-
-            placements.append({
-                "defect_path": seed_path,
-                "x": cx,
-                "y": cy,
-                "scale": 1.0,
-                "rotation": 0,
-                "suitability_score": round(best_score, 6) if best_score >= 0 else 0.0,
-                "matched_background_type": best_bg_type,
-            })
-
-        placement_map.append({
-            "image_id": image_id,
-            "placements": placements,
-        })
+    # run_parallel may reorder results in parallel mode; preserve meta_list order
+    id_to_result = {r["image_id"]: r for r in results}
+    placement_map = [
+        id_to_result.get(entry["image_id"], {"image_id": entry["image_id"], "placements": []})
+        for entry in meta_list
+    ]
 
     save_json(placement_map, out_path / "placement_map.json")
 
@@ -162,6 +165,8 @@ def _parse_args():
     parser.add_argument("--seed_profile", default=None, help="Path to seed_profile.json")
     parser.add_argument("--image_dir", default=None, help="Directory of source images (for Gram similarity)")
     parser.add_argument("--domain", default="mvtec", choices=["isp", "mvtec"], help="Matching rules domain")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="병렬 워커 수 (0=순차 처리, -1=자동 감지, N>=2=N개 프로세스 병렬 처리)")
     return parser.parse_args()
 
 
@@ -174,4 +179,5 @@ if __name__ == "__main__":
         seed_profile=args.seed_profile,
         domain=args.domain,
         image_dir=args.image_dir,
+        workers=args.workers,
     )
