@@ -251,7 +251,6 @@ def _process_image(
 def _process_single_image_worker(args_tuple):
     """Module-level worker — pickle-safe for ProcessPoolExecutor."""
     img_path_str, output_dir_str, domain, roi_levels, grid_size = args_tuple
-    from pathlib import Path
     try:
         return _process_image(Path(img_path_str), Path(output_dir_str), domain, roi_levels, grid_size)
     except Exception:
