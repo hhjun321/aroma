@@ -17,7 +17,8 @@ Creates:
   ground_truth/anomaly/  ← Anomaly masks (test split)
 
 Usage:
-    python prepare_visa.py --visa_dir /path/to/visa [--convert_png]
+    python prepare_visa.py --visa_dir /path/to/visa [--convert_png] [--workers N]
+    --workers  -1 = auto (cpu_count-1), 0 = sequential, N = N workers
 
 Idempotent: existing symlinks/files are skipped without error.
 """
@@ -26,7 +27,11 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from utils.parallel import resolve_workers, run_parallel
 
 
 _SPLIT_MAP = {
@@ -71,7 +76,6 @@ def _process_rows(visa_root: Path, category: str, rows, convert_png: bool = Fals
         try:
             split = row["split"].strip()
             label = row["label"].strip()
-            # Accept both 'image' (VisA standard) and 'image_path' (legacy)
             img_rel = (row.get("image") or row.get("image_path") or "").strip()
             mask_rel = (row.get("mask") or row.get("mask_path") or "").strip()
         except KeyError as e:
@@ -104,6 +108,14 @@ def _process_rows(visa_root: Path, category: str, rows, convert_png: bool = Fals
                 print(f"  [WARN] Mask not found: {mask_src}")
 
 
+# Module-level for ProcessPoolExecutor pickle compatibility
+def _process_category_task(args: tuple) -> None:
+    """Parallel task wrapper: (visa_root, category, rows, convert_png)."""
+    visa_root, category, rows, convert_png = args
+    print(f"Processing: {category}")
+    _process_rows(visa_root, category, rows, convert_png)
+
+
 def reorganize_category(visa_root: Path, category: str, convert_png: bool = False) -> None:
     """Process one VisA category using its per-category split CSV."""
     csv_path = visa_root / "split_csv" / f"{category}.csv"
@@ -117,11 +129,14 @@ def reorganize_category(visa_root: Path, category: str, convert_png: bool = Fals
     _process_rows(visa_root, category, rows, convert_png)
 
 
-def reorganize_all(visa_root: Path, convert_png: bool = False) -> None:
+def reorganize_all(visa_root: Path, convert_png: bool = False, num_workers: int = 0) -> None:
     """Process all categories.
 
     Prefers split_csv/1cls.csv (standard VisA combined format, 'object' column).
     Falls back to per-category CSVs (split_csv/<category>.csv) if 1cls.csv absent.
+
+    Args:
+        num_workers: from resolve_workers(). 0 = sequential.
     """
     csv_dir = visa_root / "split_csv"
     if not csv_dir.exists():
@@ -129,21 +144,27 @@ def reorganize_all(visa_root: Path, convert_png: bool = False) -> None:
 
     one_cls = csv_dir / "1cls.csv"
     if one_cls.exists():
-        _reorganize_from_combined_csv(visa_root, one_cls, convert_png)
+        _reorganize_from_combined_csv(visa_root, one_cls, convert_png, num_workers)
         return
 
     # Legacy: per-category CSVs
+    tasks = []
     for csv_file in sorted(csv_dir.glob("*.csv")):
         category = csv_file.stem
         if not (visa_root / category).is_dir():
             print(f"Skipping:   {csv_file.name} (no matching category directory)")
             continue
-        print(f"Processing: {category}")
-        reorganize_category(visa_root, category, convert_png=convert_png)
+        with open(csv_file, newline="") as f:
+            rows = list(csv.DictReader(f))
+        tasks.append((visa_root, category, rows, convert_png))
+
+    run_parallel(_process_category_task, tasks, num_workers, desc="VisA categories")
 
 
-def _reorganize_from_combined_csv(visa_root: Path, csv_path: Path, convert_png: bool = False) -> None:
-    """Read 1cls.csv, group rows by 'object', dispatch to _process_rows."""
+def _reorganize_from_combined_csv(
+    visa_root: Path, csv_path: Path, convert_png: bool = False, num_workers: int = 0
+) -> None:
+    """Read 1cls.csv, group rows by 'object', dispatch to _process_category_task."""
     rows_by_category: dict[str, list] = {}
     with open(csv_path, newline="") as f:
         for row in csv.DictReader(f):
@@ -151,12 +172,14 @@ def _reorganize_from_combined_csv(visa_root: Path, csv_path: Path, convert_png: 
             if obj:
                 rows_by_category.setdefault(obj, []).append(row)
 
+    tasks = []
     for category, rows in sorted(rows_by_category.items()):
         if not (visa_root / category).is_dir():
             print(f"Skipping:   {category} (no matching category directory)")
             continue
-        print(f"Processing: {category}")
-        _process_rows(visa_root, category, rows, convert_png)
+        tasks.append((visa_root, category, rows, convert_png))
+
+    run_parallel(_process_category_task, tasks, num_workers, desc="VisA categories")
 
 
 def _parse_args():
@@ -171,10 +194,15 @@ def _parse_args():
         "--convert_png", action="store_true",
         help="Convert non-PNG images to PNG (needed when VisA images are JPG)"
     )
+    parser.add_argument(
+        "--workers", type=int, default=-1,
+        help="Parallel workers: -1=auto (cpu_count-1), 0=sequential, N=N workers"
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    reorganize_all(Path(args.visa_dir), convert_png=args.convert_png)
+    num_workers = resolve_workers(args.workers)
+    reorganize_all(Path(args.visa_dir), convert_png=args.convert_png, num_workers=num_workers)
     print("Done.")
