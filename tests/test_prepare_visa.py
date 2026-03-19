@@ -75,3 +75,29 @@ def test_idempotent_second_run_does_not_raise(fake_visa):
 def test_reorganize_all_processes_all_csv_categories(fake_visa):
     reorganize_all(fake_visa)
     assert (fake_visa / "candle" / "train" / "good" / "n001.png").exists()
+
+
+def test_jpg_images_converted_to_png_when_flag_set(fake_visa):
+    """If source images are JPG, convert_png=True creates PNG files in destination."""
+    # Rename the normal image to .jpg in the fixture
+    cat_dir = fake_visa / "candle" / "Data" / "Images" / "Normal"
+    old = cat_dir / "n001.png"
+    new_jpg = cat_dir / "n001.jpg"
+    # Write a minimal valid JPEG (1x1 white pixel)
+    import cv2
+    import numpy as np
+    img = np.ones((4, 4, 3), dtype=np.uint8) * 255
+    cv2.imwrite(str(new_jpg), img)
+    old.unlink()
+
+    # Update split CSV to reference the jpg
+    csv_path = fake_visa / "split_csv" / "candle.csv"
+    text = csv_path.read_text()
+    csv_path.write_text(text.replace("n001.png", "n001.jpg"))
+
+    reorganize_category(fake_visa, "candle", convert_png=True)
+
+    # The destination must be a PNG file (not a symlink to jpg)
+    converted = fake_visa / "candle" / "train" / "good" / "n001.png"
+    assert converted.exists(), f"Expected PNG at {converted}"
+    assert not converted.name.endswith(".jpg")

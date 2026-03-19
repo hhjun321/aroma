@@ -41,7 +41,24 @@ def _make_symlink(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def reorganize_category(visa_root: Path, category: str) -> None:
+def _link_or_convert(src: Path, dst: Path, convert_png: bool) -> None:
+    """Symlink src to dst, or convert to PNG if convert_png is True and src is not PNG."""
+    if convert_png and src.suffix.lower() != ".png":
+        dst_png = dst.with_suffix(".png")
+        if dst_png.exists():
+            return
+        dst_png.parent.mkdir(parents=True, exist_ok=True)
+        import cv2
+        frame = cv2.imread(str(src))
+        if frame is not None:
+            cv2.imwrite(str(dst_png), frame)
+        else:
+            print(f"  [WARN] Could not read image for conversion: {src}")
+    else:
+        _make_symlink(src, dst)
+
+
+def reorganize_category(visa_root: Path, category: str, convert_png: bool = False) -> None:
     """Process one VisA category using its split CSV."""
     csv_path = visa_root / "split_csv" / f"{category}.csv"
     if not csv_path.exists():
@@ -67,7 +84,7 @@ def reorganize_category(visa_root: Path, category: str) -> None:
             img_src = visa_root / img_rel
             img_dst = visa_root / category / folder[0] / folder[1] / Path(img_rel).name
             if img_src.exists():
-                _make_symlink(img_src, img_dst)
+                _link_or_convert(img_src, img_dst, convert_png)
             else:
                 print(f"  [WARN] Image not found: {img_src}")
 
@@ -84,7 +101,7 @@ def reorganize_category(visa_root: Path, category: str) -> None:
                     print(f"  [WARN] Mask not found: {mask_src}")
 
 
-def reorganize_all(visa_root: Path) -> None:
+def reorganize_all(visa_root: Path, convert_png: bool = False) -> None:
     """Process all categories found in split_csv/."""
     csv_dir = visa_root / "split_csv"
     if not csv_dir.exists():
@@ -92,7 +109,7 @@ def reorganize_all(visa_root: Path) -> None:
     for csv_file in sorted(csv_dir.glob("*.csv")):
         category = csv_file.stem
         print(f"Processing: {category}")
-        reorganize_category(visa_root, category)
+        reorganize_category(visa_root, category, convert_png=convert_png)
 
 
 def _parse_args():
@@ -103,10 +120,14 @@ def _parse_args():
         "--visa_dir", required=True,
         help="Path to VisA root (contains split_csv/ and category folders)"
     )
+    parser.add_argument(
+        "--convert_png", action="store_true",
+        help="Convert non-PNG images to PNG (needed when VisA images are JPG)"
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    reorganize_all(Path(args.visa_dir))
+    reorganize_all(Path(args.visa_dir), convert_png=args.convert_png)
     print("Done.")
