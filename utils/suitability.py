@@ -5,7 +5,7 @@ A single table covers ISP-AD, MVTec AD, and VisA.
 Structural relationships between defect geometry and background structure
 are domain-invariant, so no per-domain branching is needed.
 """
-from typing import Optional
+
 
 # Unified matching rules — background types: smooth | directional | periodic | organic | complex
 MATCHING_RULES = {
