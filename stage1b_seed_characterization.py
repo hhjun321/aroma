@@ -69,6 +69,12 @@ def main():
     parser.add_argument("--seed_defect", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--model_checkpoint", default=None)
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help="병렬 워커 수 (0=순차 처리, -1=자동 감지, N>=2=N개 프로세스 병렬 처리)"
+        " — Stage 1b processes a single seed; this argument is accepted for CLI"
+        " consistency but has no effect."
+    )
     args = parser.parse_args()
     run_seed_characterization(args.seed_defect, args.output_dir, args.model_checkpoint)
 
