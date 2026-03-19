@@ -108,6 +108,9 @@ def reorganize_all(visa_root: Path, convert_png: bool = False) -> None:
         raise FileNotFoundError(f"split_csv directory not found: {csv_dir}")
     for csv_file in sorted(csv_dir.glob("*.csv")):
         category = csv_file.stem
+        if not (visa_root / category).is_dir():
+            print(f"Skipping:   {csv_file.name} (no matching category directory)")
+            continue
         print(f"Processing: {category}")
         reorganize_category(visa_root, category, convert_png=convert_png)
 
