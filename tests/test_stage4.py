@@ -41,7 +41,7 @@ def test_output_image_created(tmp_path, synthetic_image, synthetic_defect):
     from stage4_mpb_synthesis import run_synthesis
     map_path, img_dir = _make_placement_map(tmp_path, synthetic_image, synthetic_defect)
     out = tmp_path / "output"
-    run_synthesis(str(map_path), str(img_dir), str(out), format="cls")
+    run_synthesis(str(img_dir), str(map_path), str(out), format="cls")
     output_images = list(out.rglob("*.png"))
     assert len(output_images) > 0, "No output images created"
 
@@ -49,7 +49,7 @@ def test_output_image_shape_matches(tmp_path, synthetic_image, synthetic_defect)
     from stage4_mpb_synthesis import run_synthesis
     map_path, img_dir = _make_placement_map(tmp_path, synthetic_image, synthetic_defect)
     out = tmp_path / "output"
-    run_synthesis(str(map_path), str(img_dir), str(out), format="cls")
+    run_synthesis(str(img_dir), str(map_path), str(out), format="cls")
     output_images = list(out.rglob("*.png"))
     result = cv2.imread(str(output_images[0]))
     assert result.shape == synthetic_image.shape, "Output shape must match background"
@@ -58,7 +58,7 @@ def test_output_differs_from_background(tmp_path, synthetic_image, synthetic_def
     from stage4_mpb_synthesis import run_synthesis
     map_path, img_dir = _make_placement_map(tmp_path, synthetic_image, synthetic_defect)
     out = tmp_path / "output"
-    run_synthesis(str(map_path), str(img_dir), str(out), format="cls")
+    run_synthesis(str(img_dir), str(map_path), str(out), format="cls")
     output_images = list(out.rglob("*.png"))
     result = cv2.imread(str(output_images[0]))
     diff = np.mean(np.abs(result.astype(float) - synthetic_image.astype(float)))
@@ -68,6 +68,29 @@ def test_yolo_format_creates_labels(tmp_path, synthetic_image, synthetic_defect)
     from stage4_mpb_synthesis import run_synthesis
     map_path, img_dir = _make_placement_map(tmp_path, synthetic_image, synthetic_defect)
     out = tmp_path / "output_yolo"
-    run_synthesis(str(map_path), str(img_dir), str(out), format="yolo")
+    run_synthesis(str(img_dir), str(map_path), str(out), format="yolo")
     label_files = list(out.rglob("*.txt"))
     assert len(label_files) > 0, "YOLO format should produce label .txt files"
+
+
+def test_workers_argument_accepted(tmp_path, temp_image_dir, synthetic_defect):
+    import json, cv2
+    from stage4_mpb_synthesis import run_synthesis
+    from utils.io import save_json
+
+    defect_path = tmp_path / "defect_seeds" / "v_000.png"
+    defect_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(defect_path), synthetic_defect)
+
+    placement_map = [{"image_id": "img_001", "placements": [{
+        "defect_path": str(defect_path),
+        "x": 10, "y": 10, "scale": 1.0, "rotation": 0,
+        "suitability_score": 0.8, "matched_background_type": "smooth",
+    }]}]
+    placement_path = tmp_path / "placement_map.json"
+    save_json(placement_map, placement_path)
+
+    out_dir = tmp_path / "output"
+    run_synthesis(str(temp_image_dir), str(placement_path), str(out_dir),
+                  format="cls", workers=1)
+    assert len(list((out_dir / "defect").glob("*.png"))) > 0
