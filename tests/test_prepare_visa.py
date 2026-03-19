@@ -73,6 +73,24 @@ def test_idempotent_second_run_does_not_raise(fake_visa):
 
 
 def test_reorganize_all_processes_all_csv_categories(fake_visa):
+    """reorganize_all should prefer 1cls.csv when present."""
+    # Replace the per-category CSV with a combined 1cls.csv
+    (fake_visa / "split_csv" / "candle.csv").unlink()
+    cat = "candle"
+    rows = [
+        {"object": cat, "split": "train", "label": "normal",
+         "image": f"{cat}/Data/Images/Normal/n001.png", "mask": ""},
+        {"object": cat, "split": "test",  "label": "normal",
+         "image": f"{cat}/Data/Images/Normal/n002.png", "mask": ""},
+        {"object": cat, "split": "test",  "label": "anomaly",
+         "image": f"{cat}/Data/Images/Anomaly/a001.png",
+         "mask":  f"{cat}/Data/Masks/Anomaly/a001.png"},
+    ]
+    with open(fake_visa / "split_csv" / "1cls.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["object", "split", "label", "image", "mask"])
+        writer.writeheader()
+        writer.writerows(rows)
+
     reorganize_all(fake_visa)
     assert (fake_visa / "candle" / "train" / "good" / "n001.png").exists()
 
