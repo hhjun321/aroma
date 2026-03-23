@@ -147,6 +147,8 @@ def generate_variant(image: np.ndarray, rng_seed: int = None,
 def _generate_single_variant_worker(args_tuple):
     """Module-level worker for variant generation (pickle-safe)."""
     seed_path_str, out_path_str, rng_seed, subtype = args_tuple
+    if Path(out_path_str).exists():
+        return out_path_str
     seed = cv2.imread(seed_path_str)
     if seed is None:
         return None
@@ -194,12 +196,25 @@ def run_seed_generation(
 
     from utils.parallel import resolve_workers, run_parallel
     num_workers = resolve_workers(workers)
-    tasks = [
-        (str(seed_defect), str(out_dir / f"variant_{i:04d}.png"), i, subtype)
-        for i in range(num_variants)
-    ]
-    run_parallel(_generate_single_variant_worker, tasks, num_workers,
-                 desc=f"Stage2 variant generation (workers={num_workers})")
+
+    if num_workers == 0:
+        # Sequential fast path: load seed image once, skip existing files
+        seed_img = cv2.imread(str(seed_defect))
+        if seed_img is None:
+            raise ValueError(f"Cannot read seed image: {seed_defect}")
+        for i in range(num_variants):
+            out_path = out_dir / f"variant_{i:04d}.png"
+            if out_path.exists():
+                continue
+            variant = generate_variant(seed_img, rng_seed=i, subtype=subtype)
+            cv2.imwrite(str(out_path), variant)
+    else:
+        tasks = [
+            (str(seed_defect), str(out_dir / f"variant_{i:04d}.png"), i, subtype)
+            for i in range(num_variants)
+        ]
+        run_parallel(_generate_single_variant_worker, tasks, num_workers,
+                     desc=f"Stage2 variant generation (workers={num_workers})")
 
 
 # ---------------------------------------------------------------------------

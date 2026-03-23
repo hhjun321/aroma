@@ -55,6 +55,46 @@ def _compute_placement_worker(args_tuple):
     return {"image_id": image_id, "placements": placements}
 
 
+def _compute_placement_gpu(
+    image_id: str,
+    roi_boxes: list,
+    seed_paths_str: list,
+    defect_subtype: str,
+    evaluator,          # GPUSuitabilityEvaluator instance
+) -> dict:
+    """GPU-accelerated placement: compute ROI scores once, reuse for all seeds."""
+    import numpy as np
+    if not roi_boxes or not seed_paths_str:
+        return {"image_id": image_id, "placements": []}
+
+    scores    = evaluator.compute_batch(defect_subtype, roi_boxes)
+    best_idx  = int(np.argmax(scores))
+    best_box  = roi_boxes[best_idx]
+    bg_type   = best_box.get("background_type", "smooth")
+    x, y, w, h = best_box["box"]
+
+    if (bg_type == "directional"
+            and defect_subtype in ("linear_scratch", "elongated")
+            and best_box.get("dominant_angle") is not None):
+        rotation = float(best_box["dominant_angle"])
+    else:
+        rotation = float(np.random.uniform(0, 360))
+
+    placements = [
+        {
+            "defect_path":             seed_path_str,
+            "x":                       x + w // 4,
+            "y":                       y + h // 4,
+            "scale":                   1.0,
+            "rotation":                rotation,
+            "suitability_score":       round(float(scores[best_idx]), 4),
+            "matched_background_type": bg_type,
+        }
+        for seed_path_str in seed_paths_str
+    ]
+    return {"image_id": image_id, "placements": placements}
+
+
 def _gram_similarity(img1: np.ndarray, img2: np.ndarray) -> float:
     """Cosine similarity between Gram matrices of two patches."""
     def gram(x):
@@ -99,6 +139,7 @@ def run_layout_logic(
     domain: str = "mvtec",
     image_dir: Optional[str] = None,
     workers: int = 0,
+    use_gpu: bool = False,
 ) -> None:
     """Select best ROI for each defect seed using hybrid suitability score.
 
@@ -110,6 +151,7 @@ def run_layout_logic(
         domain:          Matching-rules domain ("isp" or "mvtec").
         image_dir:       Optional directory of source images for Gram similarity.
         workers:         Number of parallel workers (0=sequential, -1=auto, N>=2=N processes).
+        use_gpu:         Use GPU-accelerated batch scoring (requires PyTorch).
     """
     from utils.parallel import resolve_workers, run_parallel
 
@@ -128,24 +170,37 @@ def run_layout_logic(
 
     num_workers = resolve_workers(workers)
 
-    tasks = [
-        (
-            entry["image_id"],
-            entry.get("roi_boxes", []),
-            seed_paths,
-            defect_subtype,
-            domain,
-            image_dir,
+    if use_gpu:
+        from utils.suitability import GPUSuitabilityEvaluator
+        evaluator = GPUSuitabilityEvaluator()
+        results = [
+            _compute_placement_gpu(
+                entry["image_id"],
+                entry.get("roi_boxes", []),
+                seed_paths,
+                defect_subtype,
+                evaluator,
+            )
+            for entry in meta_list
+        ]
+    else:
+        tasks = [
+            (
+                entry["image_id"],
+                entry.get("roi_boxes", []),
+                seed_paths,
+                defect_subtype,
+                domain,
+                image_dir,
+            )
+            for entry in meta_list
+        ]
+        results = run_parallel(
+            _compute_placement_worker,
+            tasks,
+            num_workers,
+            desc=f"Stage3 placement computation (workers={num_workers})",
         )
-        for entry in meta_list
-    ]
-
-    results = run_parallel(
-        _compute_placement_worker,
-        tasks,
-        num_workers,
-        desc=f"Stage3 placement computation (workers={num_workers})",
-    )
 
     # run_parallel may reorder results in parallel mode; preserve meta_list order
     id_to_result = {r["image_id"]: r for r in results}
@@ -167,6 +222,8 @@ def _parse_args():
     parser.add_argument("--domain", default="mvtec", choices=["isp", "mvtec"], help="Matching rules domain")
     parser.add_argument("--workers", type=int, default=0,
                         help="병렬 워커 수 (0=순차 처리, -1=자동 감지, N>=2=N개 프로세스 병렬 처리)")
+    parser.add_argument("--use_gpu", action="store_true",
+                        help="GPU 가속 배치 평가 사용 (PyTorch 필요)")
     return parser.parse_args()
 
 
@@ -180,4 +237,5 @@ if __name__ == "__main__":
         domain=args.domain,
         image_dir=args.image_dir,
         workers=args.workers,
+        use_gpu=args.use_gpu,
     )
