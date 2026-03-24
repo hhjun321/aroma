@@ -1,0 +1,46 @@
+dataset:
+  eval_batch_size: 32
+  image_size: 256
+  num_workers: 4
+  pruning_threshold: 0.6
+  task_by_domain:
+    isp: classification
+    mvtec: segmentation
+    visa: segmentation
+  train_batch_size: 32
+dataset_groups:
+  aroma_full:
+    description: 원본 + 전체 Stage 4 합성
+  aroma_pruned:
+    description: 원본 + quality_score 필터링 합성
+  baseline:
+    description: 원본 train/good 만
+evaluation:
+  metrics:
+  - image_auroc
+  - image_f1
+  - pixel_auroc
+  pixel_auroc_domains:
+  - mvtec
+  - visa
+experiment:
+  name: aroma_benchmark_v1
+  output_dir: outputs/benchmark_results
+  seed: 42
+models:
+  draem:
+    enable_sspcab: false
+    epochs: 700
+    lr: 0.0001
+  efficientnet_b4:
+    backbone: efficientnet_b4
+    epochs: 30
+    lr: 0.0001
+    optimizer: adam
+    pretrained: true
+  resnet50:
+    backbone: resnet50
+    epochs: 30
+    lr: 0.0001
+    optimizer: adam
+    pretrained: true
