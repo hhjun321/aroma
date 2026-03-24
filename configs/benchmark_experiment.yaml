@@ -23,6 +23,23 @@ evaluation:
   pixel_auroc_domains:
   - mvtec
   - visa
+
+# 중복 카테고리 제거
+# 동일 제품군의 번호형 변종(macaroni1/2, pcb1-4, LSM_1/2)은 배경 특성·결함
+# 패턴이 유사하여 독립적인 평가 신호를 제공하지 않는다.
+# 각 제품군에서 첫 번째 카테고리만 유지함으로써 다양한 도메인 커버리지를
+# 유지하면서 실험 규모를 270 → 225 runs (16.7% 절감) 으로 줄인다.
+# 제거 기준: 동일 소재·형태의 번호형 반복 촬영본 (뷰포인트·샘플 차이만 존재)
+category_filter:
+  exclude:
+    isp:
+    - LSM_2        # LSM_1 과 동일 라인스캔 센서, 샘플만 다름
+    mvtec: []      # 전 카테고리 고유 제품 — 제외 없음
+    visa:
+    - macaroni2    # macaroni1 과 동일 제품, 촬영 앵글만 상이
+    - pcb2         # pcb1~4 는 동일 PCB 기판 유형의 반복 변종
+    - pcb3
+    - pcb4
 experiment:
   name: aroma_benchmark_v1
   output_dir: outputs/benchmark_results
