@@ -103,6 +103,9 @@ def test_aroma_pruned_threshold(tmp_path):
     defect_dir = tmp_path / "augmented_dataset" / "aroma_pruned" / "train" / "defect"
     assert defect_dir.exists()
     assert len(list(defect_dir.glob("*.png"))) == 1
+    kept_files = list(defect_dir.glob("*.png"))
+    assert any("001" in f.name for f in kept_files), \
+        f"Expected image_id '001' to be kept, got: {[f.name for f in kept_files]}"
     assert result["aroma_pruned"]["defect_count"] == 1
 
 
@@ -171,7 +174,11 @@ def test_missing_quality_scores_skips_seed(tmp_path):
         warnings.simplefilter("always")
         result = build_dataset_groups(str(tmp_path), str(image_dir), seed_dirs,
                                        pruning_threshold=0.6)
-        assert any("quality_scores.json" in str(warning.message) for warning in w)
+        assert any(
+            issubclass(warning.category, UserWarning)
+            and "quality_scores.json" in str(warning.message)
+            for warning in w
+        )
 
     assert result["aroma_pruned"]["defect_count"] == 0
 
