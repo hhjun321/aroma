@@ -137,7 +137,7 @@ def build_dataset_groups(
         if abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6:
             return cached
 
-    from utils.parallel import resolve_workers
+    from utils.parallel import resolve_workers, run_parallel
     num_workers = resolve_workers(workers)
 
     # ── baseline/train/good/ ───────────────────────────────────────────────
@@ -169,7 +169,6 @@ def build_dataset_groups(
 
     full_defect_pairs = _collect_defect_paths(cat_dir, pruning_threshold=None)
     if full_defect_pairs:
-        from utils.parallel import run_parallel
         full_defect_dst = aug_dir / "aroma_full" / "train" / "defect"
         full_defect_dst.mkdir(parents=True, exist_ok=True)
         tasks = [(src, str(full_defect_dst / dst_name))
@@ -184,7 +183,6 @@ def build_dataset_groups(
     pruned_defect_pairs = _collect_defect_paths(cat_dir,
                                                  pruning_threshold=pruning_threshold)
     if pruned_defect_pairs:
-        from utils.parallel import run_parallel
         pruned_defect_dst = aug_dir / "aroma_pruned" / "train" / "defect"
         pruned_defect_dst.mkdir(parents=True, exist_ok=True)
         tasks = [(src, str(pruned_defect_dst / dst_name))
