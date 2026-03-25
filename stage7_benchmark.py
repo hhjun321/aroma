@@ -270,11 +270,17 @@ def run_benchmark(
     groups: Optional[list[str]] = None,
     models: Optional[list[str]] = None,
     resume: bool = True,
+    output_dir: Optional[str] = None,
 ) -> dict:
-    """cat_dir 에 대해 모든 model × group 실험을 수행한다."""
+    """cat_dir 에 대해 모든 model × group 실험을 수행한다.
+
+    Args:
+        output_dir: 결과 저장 루트 경로. 지정하면 yaml의 output_dir 를 덮어씀.
+            Colab 환경에서 cat_dir 를 로컬 경로로, 결과는 Drive 에 저장할 때 사용.
+    """
     config = load_config(config_path)
     seed = config["experiment"]["seed"]
-    output_root = Path(config["experiment"]["output_dir"])
+    output_root = Path(output_dir) if output_dir else Path(config["experiment"]["output_dir"])
     cat_name = Path(cat_dir).name
     output_dir = output_root / cat_name
 
