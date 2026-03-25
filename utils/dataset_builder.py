@@ -84,8 +84,11 @@ def _collect_defect_paths(
 
 def _copy_images(src_dir: Path, dst_dir: Path, num_workers: int,
                  desc: str = "") -> int:
-    """src_dir 아래 PNG/JPG 전체를 dst_dir 로 복사. 복사 파일 수 반환."""
-    from utils.parallel import run_parallel
+    """src_dir 아래 PNG/JPG 전체를 dst_dir 로 복사. 복사 파일 수 반환.
+
+    Google Drive 같은 I/O-bound 환경에서는 ThreadPoolExecutor 가 효율적.
+    """
+    from concurrent.futures import ThreadPoolExecutor
     imgs = (
         sorted(src_dir.glob("*.png"))
         + sorted(src_dir.glob("*.jpg"))
@@ -95,7 +98,12 @@ def _copy_images(src_dir: Path, dst_dir: Path, num_workers: int,
         return 0
     dst_dir.mkdir(parents=True, exist_ok=True)
     tasks = [(str(s), str(dst_dir / s.name)) for s in imgs]
-    run_parallel(_copy_worker, tasks, num_workers, desc=desc)
+    if num_workers <= 1:
+        for t in tasks:
+            _copy_worker(t)
+    else:
+        with ThreadPoolExecutor(max_workers=num_workers) as ex:
+            list(ex.map(_copy_worker, tasks))
     return len(imgs)
 
 
@@ -137,7 +145,8 @@ def build_dataset_groups(
         if abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6:
             return cached
 
-    from utils.parallel import resolve_workers, run_parallel
+    from concurrent.futures import ThreadPoolExecutor
+    from utils.parallel import resolve_workers
     num_workers = resolve_workers(workers)
 
     # ── baseline/train/good/ ───────────────────────────────────────────────
@@ -173,7 +182,12 @@ def build_dataset_groups(
         full_defect_dst.mkdir(parents=True, exist_ok=True)
         tasks = [(src, str(full_defect_dst / dst_name))
                  for src, dst_name in full_defect_pairs]
-        run_parallel(_copy_worker, tasks, num_workers, desc="aroma_full/train/defect")
+        if num_workers <= 1:
+            for t in tasks:
+                _copy_worker(t)
+        else:
+            with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                list(ex.map(_copy_worker, tasks))
 
     # ── aroma_pruned/train/ ───────────────────────────────────────────────
     _copy_images(Path(image_dir),
@@ -187,7 +201,12 @@ def build_dataset_groups(
         pruned_defect_dst.mkdir(parents=True, exist_ok=True)
         tasks = [(src, str(pruned_defect_dst / dst_name))
                  for src, dst_name in pruned_defect_pairs]
-        run_parallel(_copy_worker, tasks, num_workers, desc="aroma_pruned/train/defect")
+        if num_workers <= 1:
+            for t in tasks:
+                _copy_worker(t)
+        else:
+            with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                list(ex.map(_copy_worker, tasks))
 
     report = {
         "pruning_threshold": pruning_threshold,
