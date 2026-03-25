@@ -193,3 +193,31 @@ def test_empty_stage4_output(tmp_path):
 
     assert result["aroma_full"]["defect_count"] == 0
     assert result["aroma_pruned"]["defect_count"] == 0
+
+
+def test_skip_not_applied_when_cached_defect_zero_and_stage4_now_exists(tmp_path):
+    """stage4 미실행 상태로 캐시(defect_count=0)된 뒤 stage4 완료 시 재실행돼야 한다."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=2)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+
+    # 1차 실행 — stage4 없이 캐시 생성 (defect_count=0)
+    stale_cache = {
+        "pruning_threshold": 0.6,
+        "baseline":     {"good_count": 2, "defect_count": 0},
+        "aroma_full":   {"good_count": 2, "defect_count": 0},
+        "aroma_pruned": {"good_count": 2, "defect_count": 0},
+    }
+    aug_dir = tmp_path / "augmented_dataset"
+    aug_dir.mkdir(parents=True, exist_ok=True)
+    (aug_dir / "build_report.json").write_text(json.dumps(stale_cache))
+
+    # stage4 완료 후 상태 시뮬레이션
+    _make_stage4_seed(tmp_path, "seed_001", ["000", "001"],
+                      scores={"000": 0.8, "001": 0.9})
+
+    # 2차 실행 — 캐시 무효화 후 재실행돼야 함
+    result = build_dataset_groups(str(tmp_path), str(image_dir), seed_dirs,
+                                   pruning_threshold=0.6)
+    assert result["aroma_full"]["defect_count"] == 2, \
+        "stage4 완료 후 재실행 시 defect_count 가 갱신돼야 함"

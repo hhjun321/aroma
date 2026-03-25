@@ -140,9 +140,15 @@ def build_dataset_groups(
     report_path = aug_dir / "build_report.json"
 
     # Skip 조건 확인
+    # stage4_output 이 존재하고 이전 실행에서 실제 defect 가 수집됐을 때만 skip.
+    # stage4 가 미실행인 채로 캐시된 경우(defect_count=0) stage4 완료 후 재실행 가능하도록 skip 하지 않음.
+    stage4_dir = cat_path / "stage4_output"
     if report_path.exists():
         cached = json.loads(report_path.read_text())
-        if abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6:
+        threshold_match = abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6
+        cached_has_defects = cached.get("aroma_full", {}).get("defect_count", 0) > 0
+        stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
+        if threshold_match and (cached_has_defects or not stage4_now_exists):
             return cached
 
     from concurrent.futures import ThreadPoolExecutor
@@ -177,6 +183,12 @@ def build_dataset_groups(
                  num_workers, desc="aroma_full/train/good")
 
     full_defect_pairs = _collect_defect_paths(cat_dir, pruning_threshold=None)
+    if not full_defect_pairs and not stage4_dir.exists():
+        warnings.warn(
+            f"stage4_output 없음 — Stage 4 미실행으로 aroma_* defect 이미지가 0건입니다: "
+            f"{cat_dir}",
+            stacklevel=2,
+        )
     if full_defect_pairs:
         full_defect_dst = aug_dir / "aroma_full" / "train" / "defect"
         full_defect_dst.mkdir(parents=True, exist_ok=True)
