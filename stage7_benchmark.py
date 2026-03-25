@@ -158,7 +158,18 @@ def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Pa
 
 def _evaluate_classifier(model, test_dir: Path, group: str,
                           config: dict) -> tuple[list, list]:
-    """timm 분류 모델 평가 → (y_true, y_score) 반환."""
+    """timm 분류 모델 평가 → (y_true, y_score) 반환.
+
+    y_true 규약: 0=정상(good), 1=이상(anomaly).
+    y_score: 높을수록 이상 가능성 높음.
+
+    ImageFolder 는 폴더명 알파벳순으로 class index 를 부여하므로
+    "good" 폴더가 항상 label=0 이 아닐 수 있다 (대소문자·이름에 따라 다름).
+    → dataset.class_to_idx["good"] 로 정상 클래스 index 를 확인 후 y_true 를 구성한다.
+
+    aroma 그룹 학습 폴더는 defect(d) / good(g) 두 클래스이며 알파벳순 defect=0, good=1.
+    → 이상 점수 = softmax[:, 0] (P(defect)).
+    """
     import torch
     import torch.nn.functional as F
     from torch.utils.data import DataLoader
@@ -170,6 +181,8 @@ def _evaluate_classifier(model, test_dir: Path, group: str,
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
     dataset = datasets.ImageFolder(str(test_dir), transform=transform)
+    # test 폴더에서 "good" 클래스의 index 확인 (이름·대소문자 무관)
+    good_label = dataset.class_to_idx.get("good", -1)
     loader = DataLoader(dataset,
                         batch_size=config["dataset"]["eval_batch_size"],
                         shuffle=False,
@@ -198,14 +211,19 @@ def _evaluate_classifier(model, test_dir: Path, group: str,
                 if isinstance(f, (list, tuple)):
                     f = f[-1]
                 f = F.adaptive_avg_pool2d(f, 1).squeeze(-1).squeeze(-1)
+                # 1 - cosine_sim: 정상 평균과 멀수록 높은 이상 점수
                 scores = 1.0 - F.cosine_similarity(f, mean_feat)
-                y_true.extend(labels.tolist())
+                # y_true: good→0, anomaly→1
+                y_true.extend([0 if l == good_label else 1
+                                for l in labels.tolist()])
                 y_score.extend(scores.cpu().tolist())
         else:
+            # aroma 학습 폴더: defect(d<g)=0, good=1 → P(defect) = softmax[:, 0]
             for imgs, labels in loader:
                 out = model(imgs.to(device))
-                probs = F.softmax(out, dim=1)[:, 1]
-                y_true.extend(labels.tolist())
+                probs = F.softmax(out, dim=1)[:, 0]   # P(defect) = 이상 점수
+                y_true.extend([0 if l == good_label else 1
+                                for l in labels.tolist()])
                 y_score.extend(probs.cpu().tolist())
 
     return y_true, y_score
