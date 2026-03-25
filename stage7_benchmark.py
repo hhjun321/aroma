@@ -119,6 +119,9 @@ def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Pa
     if group == "baseline":
         return  # baseline 은 fine-tuning 없이 feature distance 사용
 
+    # 재현성을 위한 seed 고정
+    torch.manual_seed(seed)
+
     model_cfg = config["models"]
     epochs, lr = 30, 1e-4
     for name, mcfg in model_cfg.items():
@@ -135,6 +138,18 @@ def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Pa
 
     train_dir = train_good_dir.parent
     dataset = datasets.ImageFolder(str(train_dir), transform=transform)
+
+    # 클래스 불균형 보정 — defect가 good보다 수십 배 많을 수 있음.
+    # 각 클래스 가중치 = 전체 샘플 수 / (클래스 수 × 클래스 샘플 수)
+    counts = [0, 0]
+    for _, label in dataset.samples:
+        counts[label] += 1
+    n_total = sum(counts)
+    class_weight = torch.tensor(
+        [n_total / (2 * c) if c > 0 else 1.0 for c in counts],
+        dtype=torch.float,
+    )
+
     loader = DataLoader(dataset,
                         batch_size=config["dataset"]["train_batch_size"],
                         shuffle=True,
@@ -143,7 +158,7 @@ def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Pa
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=class_weight.to(device))
 
     model.train()
     for epoch in range(epochs):
