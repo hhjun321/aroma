@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # dataset_config.json 에 기록된 원본 base 경로
@@ -212,6 +213,8 @@ def _parse_args() -> argparse.Namespace:
                    help=f"Drive 경로({_CONFIG_BASE!r})를 대체할 로컬 base 경로")
     p.add_argument("--domain", default=None,
                    help="특정 도메인만 확인 (isp / mvtec / visa)")
+    p.add_argument("--workers", type=int, default=8,
+                   help="병렬 워커 수 (기본: 8, Drive I/O 병렬화)")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="누락 seed ID 상세 출력")
     return p.parse_args()
@@ -227,13 +230,18 @@ def main() -> None:
     with open(args.config, encoding="utf-8") as f:
         config = json.load(f)
 
-    results = []
-    for key, entry in config.items():
-        if key.startswith("_"):
-            continue
-        if args.domain and entry.get("domain") != args.domain:
-            continue
-        results.append(check_category(key, entry, args.base))
+    tasks = [
+        (key, entry, args.base)
+        for key, entry in config.items()
+        if not key.startswith("_")
+        and (args.domain is None or entry.get("domain") == args.domain)
+    ]
+
+    if args.workers > 1 and len(tasks) > 1:
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            results = list(ex.map(lambda t: check_category(*t), tasks))
+    else:
+        results = [check_category(*t) for t in tasks]
 
     print_report(results, verbose=args.verbose)
 
