@@ -370,77 +370,83 @@ else:
 ## Stage 4: MPB 합성
 
 **Sentinel:** `{cat_dir}/stage4_output/{seed_id}/defect/*.png` 존재
-**병렬:** seed 단위 `ThreadPoolExecutor` (내부 `workers=-1` 이미지 합성 병렬)
+**병렬:** 카테고리 단위 `run_synthesis_batch` (배경 이미지 1회 로드 → 전체 seed 적용)
+
+> **개선 사항:**
+> - `run_synthesis_batch` — 배경 이미지당 1회 로드 후 모든 seed 합성 (I/O N배 절감)
+> - `USE_FAST_BLEND = True` — Gaussian soft-mask 합성 (~10-30× 빠름, seamlessClone 대체)
+> - `IMG_THREADS = 4` — 카테고리 내 이미지 단위 ThreadPoolExecutor 병렬화
 
 ```python
 import json, sys
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm.auto import tqdm
 
 sys.path.insert(0, "/content/aroma")
-from stage4_mpb_synthesis import run_synthesis
+from stage4_mpb_synthesis import run_synthesis_batch
 
 REPO   = Path("/content/drive/MyDrive/project/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
-LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
-
-# 병렬 설정
-SEED_THREADS = 2    # seed 단위 동시 처리 (각 seed 내부에서 workers=-1 사용)
-IMG_WORKERS  = -1   # run_synthesis 내부 이미지 단위 병렬 수
+DOMAIN_FILTER  = "isp"   # "isp" / "mvtec" / "visa"
+LABEL          = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+USE_FAST_BLEND = True    # False → seamlessClone (느리지만 품질 높음)
+IMG_THREADS    = 4       # 이미지 단위 병렬 (ThreadPoolExecutor)
 
 ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
 
-all_seeds, skip = [], 0
+# 카테고리 단위로 묶기
+categories = {}
 for key, entry in ENTRIES:
-    cat_dir    = Path(entry["seed_dir"]).parents[1]
+    cat_dir = Path(entry["seed_dir"]).parents[1]
+    categories.setdefault(str(cat_dir), (cat_dir, entry))
+
+all_cats, skip_total = [], 0
+for cat_dir_str, (cat_dir, entry) in categories.items():
     stage3_dir = cat_dir / "stage3_output"
     if not stage3_dir.exists():
         continue
+    seed_pm_pairs, skip = [], 0
     for d in sorted(stage3_dir.iterdir()):
         if not d.is_dir():
+            continue
+        pm_path = d / "placement_map.json"
+        if not pm_path.exists():
             continue
         out_defect = cat_dir / "stage4_output" / d.name / "defect"
         if out_defect.exists() and any(out_defect.glob("*.png")):
             skip += 1
         else:
-            all_seeds.append((cat_dir, d.name))
+            seed_pm_pairs.append((d.name, str(pm_path)))
+    skip_total += skip
+    if seed_pm_pairs:
+        all_cats.append((cat_dir, seed_pm_pairs))
 
-if not all_seeds:
+if not all_cats:
     print(f"✓ {LABEL} 모든 작업 완료")
 else:
-    print(f"{LABEL}: {len(all_seeds)} seeds 처리 예정 (skip {skip}건)")
+    total_seeds = sum(len(p) for _, p in all_cats)
+    print(f"{LABEL}: {len(all_cats)} 카테고리 / {total_seeds} seeds 처리 예정 (skip {skip_total}건)")
     failed = []
 
-    def _run_stage4(args):
-        cat_dir, seed_id = args
-        run_synthesis(
-            image_dir     = str(cat_dir / "train" / "good"),
-            placement_map = str(cat_dir / "stage3_output" / seed_id / "placement_map.json"),
-            output_dir    = str(cat_dir / "stage4_output" / seed_id),
-            format        = "cls",
-            workers       = IMG_WORKERS,
-        )
-        return cat_dir.name, seed_id
-
-    with tqdm(total=len(all_seeds), desc=f"Stage4 {LABEL}") as bar:
-        with ThreadPoolExecutor(max_workers=SEED_THREADS) as ex:
-            futs = {ex.submit(_run_stage4, t): t for t in all_seeds}
-            for fut in as_completed(futs):
-                cat_dir, seed_id = futs[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    failed.append({"category": Path(cat_dir).name, "seed": seed_id,
-                                   "error": str(e), "type": type(e).__name__})
-                bar.update(1)
+    for cat_dir, seed_pm_pairs in tqdm(all_cats, desc=f"Stage4 {LABEL}"):
+        try:
+            run_synthesis_batch(
+                image_dir          = str(cat_dir / "train" / "good"),
+                seed_placement_maps = seed_pm_pairs,
+                output_root        = str(cat_dir / "stage4_output"),
+                format             = "cls",
+                use_fast_blend     = USE_FAST_BLEND,
+                workers            = IMG_THREADS,
+            )
+        except Exception as e:
+            failed.append({"category": cat_dir.name,
+                           "error": str(e), "type": type(e).__name__})
 
     print("\n" + (f"✓ {LABEL} 완료" if not failed else f"✗ {len(failed)}건 실패"))
     for f in failed:
-        print(f"  [{f['category']}/{f['seed']}] {f['type']}: {f['error'][:120]}")
+        print(f"  [{f['category']}] {f['type']}: {f['error'][:120]}")
 ```
 
 ---
