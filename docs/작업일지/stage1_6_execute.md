@@ -170,7 +170,7 @@ else:
                 try:
                     fut.result()
                 except Exception as e:
-                    failed.append({"category": Path(cat_dir).name, "seed": seed.stem,
+                    failed.append({"category": cat_dir.name, "seed": seed.stem,
                                    "error": str(e), "type": type(e).__name__})
                 bar.update(1)
 
@@ -370,12 +370,7 @@ else:
 ## Stage 4: MPB 합성
 
 **Sentinel:** `{cat_dir}/stage4_output/{seed_id}/defect/*.png` 존재
-**병렬:** 카테고리 단위 `run_synthesis_batch` (배경 이미지 1회 로드 → 전체 seed 적용)
-
-> **개선 사항:**
-> - `run_synthesis_batch` — 배경 이미지당 1회 로드 후 모든 seed 합성 (I/O N배 절감)
-> - `USE_FAST_BLEND = True` — Gaussian soft-mask 합성 (~10-30× 빠름, seamlessClone 대체)
-> - `IMG_THREADS = 4` — 카테고리 내 이미지 단위 ThreadPoolExecutor 병렬화
+**병렬:** 카테고리 단위 `run_synthesis_batch` (배경 이미지 1회 로드 → 전체 seed 적용, `IMG_THREADS` 이미지 병렬)
 
 ```python
 import json, sys
@@ -400,10 +395,10 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
 categories = {}
 for key, entry in ENTRIES:
     cat_dir = Path(entry["seed_dir"]).parents[1]
-    categories.setdefault(str(cat_dir), (cat_dir, entry))
+    categories.setdefault(str(cat_dir), (cat_dir, entry["image_dir"]))
 
 all_cats, skip_total = [], 0
-for cat_dir_str, (cat_dir, entry) in categories.items():
+for cat_dir_str, (cat_dir, image_dir) in categories.items():
     stage3_dir = cat_dir / "stage3_output"
     if not stage3_dir.exists():
         continue
@@ -421,24 +416,24 @@ for cat_dir_str, (cat_dir, entry) in categories.items():
             seed_pm_pairs.append((d.name, str(pm_path)))
     skip_total += skip
     if seed_pm_pairs:
-        all_cats.append((cat_dir, seed_pm_pairs))
+        all_cats.append((cat_dir, image_dir, seed_pm_pairs))
 
 if not all_cats:
     print(f"✓ {LABEL} 모든 작업 완료")
 else:
-    total_seeds = sum(len(p) for _, p in all_cats)
+    total_seeds = sum(len(p) for _, _, p in all_cats)
     print(f"{LABEL}: {len(all_cats)} 카테고리 / {total_seeds} seeds 처리 예정 (skip {skip_total}건)")
     failed = []
 
-    for cat_dir, seed_pm_pairs in tqdm(all_cats, desc=f"Stage4 {LABEL}"):
+    for cat_dir, image_dir, seed_pm_pairs in tqdm(all_cats, desc=f"Stage4 {LABEL}"):
         try:
             run_synthesis_batch(
-                image_dir          = str(cat_dir / "train" / "good"),
+                image_dir           = image_dir,
                 seed_placement_maps = seed_pm_pairs,
-                output_root        = str(cat_dir / "stage4_output"),
-                format             = "cls",
-                use_fast_blend     = USE_FAST_BLEND,
-                workers            = IMG_THREADS,
+                output_root         = str(cat_dir / "stage4_output"),
+                format              = "cls",
+                use_fast_blend      = USE_FAST_BLEND,
+                workers             = IMG_THREADS,
             )
         except Exception as e:
             failed.append({"category": cat_dir.name,
@@ -615,6 +610,6 @@ else:
 | Stage 1b | `NUM_WORKERS=4` | 없음 | seed 단위 독립, CPU-bound |
 | Stage 2  | `SEED_THREADS=2` | `IMG_WORKERS=-1` | 변형 생성 CPU 집약, 내부 병렬로 코어 포화 |
 | Stage 3  | 순차 | GPU 배치 | GPU 인스턴스 공유 불가 |
-| Stage 4  | `SEED_THREADS=2` | `IMG_WORKERS=-1` | 합성 CPU 집약, 내부 병렬로 코어 포화 |
+| Stage 4  | 카테고리 단위 순차 | `IMG_THREADS=4` (Thread) | 배경 1회 로드 + Gaussian 합성, I/O 절감 |
 | Stage 5  | `SEED_THREADS=4` | `IMG_WORKERS=-1` | I/O + CPU 혼합, seed 단위 독립 |
 | Stage 6  | `CAT_THREADS=2` | `NUM_IO_THREADS=8` | I/O-bound Drive 복사, Thread 유리 |
