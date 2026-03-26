@@ -24,22 +24,20 @@ evaluation:
   - mvtec
   - visa
 
-# 중복 카테고리 제거
-# 동일 제품군의 번호형 변종(macaroni1/2, pcb1-4, LSM_1/2)은 배경 특성·결함
-# 패턴이 유사하여 독립적인 평가 신호를 제공하지 않는다.
-# 각 제품군에서 첫 번째 카테고리만 유지함으로써 다양한 도메인 커버리지를
-# 유지하면서 실험 규모를 270 → 225 runs (16.7% 절감) 으로 줄인다.
-# 제거 기준: 동일 소재·형태의 번호형 반복 촬영본 (뷰포인트·샘플 차이만 존재)
+# dataset_config.json 카테고리 구성:
+#   ISP(3): ASM, LSM_1, LSM_2
+#   MVTec(15): 전 카테고리
+#   VisA(8): candle, capsules, cashew, chewinggum, fryum, macaroni, pcb, pipe_fryum
+#     - macaroni: macaroni1 경로 사용 (macaroni2 config에서 제거)
+#     - pcb: pcb1 경로 사용 (pcb2-4 config에서 제거)
+# benchmark 실험 규모: 3 models × 3 groups × 25 categories = 225 runs
+#   (LSM_2는 LSM_1과 동일 센서·라인이므로 benchmark에서 제외)
 category_filter:
   exclude:
     isp:
     - LSM_2        # LSM_1 과 동일 라인스캔 센서, 샘플만 다름
     mvtec: []      # 전 카테고리 고유 제품 — 제외 없음
-    visa:
-    - macaroni2    # macaroni1 과 동일 제품, 촬영 앵글만 상이
-    - pcb2         # pcb1~4 는 동일 PCB 기판 유형의 반복 변종
-    - pcb3
-    - pcb4
+    visa: []       # macaroni2/pcb2-4 는 dataset_config 에서 완전 제거됨
 experiment:
   name: aroma_benchmark_v1
   output_dir: outputs/benchmark_results

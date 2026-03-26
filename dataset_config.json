@@ -123,40 +123,16 @@
     "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/fryum/test/anomaly",
     "notes": "Run prepare_visa.py first"
   },
-  "visa_macaroni1": {
+  "visa_macaroni": {
     "domain": "visa",
     "image_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni1/train/good",
     "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni1/test/anomaly",
     "notes": "Run prepare_visa.py first"
   },
-  "visa_macaroni2": {
-    "domain": "visa",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni2/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/macaroni2/test/anomaly",
-    "notes": "Run prepare_visa.py first"
-  },
-  "visa_pcb1": {
+  "visa_pcb": {
     "domain": "visa",
     "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb1/train/good",
     "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb1/test/anomaly",
-    "notes": "Run prepare_visa.py first"
-  },
-  "visa_pcb2": {
-    "domain": "visa",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb2/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb2/test/anomaly",
-    "notes": "Run prepare_visa.py first"
-  },
-  "visa_pcb3": {
-    "domain": "visa",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb3/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb3/test/anomaly",
-    "notes": "Run prepare_visa.py first"
-  },
-  "visa_pcb4": {
-    "domain": "visa",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb4/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb4/test/anomaly",
     "notes": "Run prepare_visa.py first"
   },
   "visa_pipe_fryum": {
