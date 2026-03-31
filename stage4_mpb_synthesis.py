@@ -208,15 +208,28 @@ def _synthesize_image_multi_seed_worker(args_tuple):
 
     Loads the background once and writes one output per seed — avoids redundant I/O.
 
-    args_tuple: (bg_path_str, seed_entries, output_root_str, fmt, use_fast_blend)
+    args_tuple: (bg_path_str, seed_entries, output_root_str, fmt, use_fast_blend,
+                 png_compression, max_background_dim)
         seed_entries: list of (seed_id, placements)
     """
-    bg_path_str, seed_entries, output_root_str, fmt, use_fast_blend = args_tuple
+    bg_path_str, seed_entries, output_root_str, fmt, use_fast_blend, \
+        png_compression, max_background_dim = args_tuple
+
     bg = cv2.imread(bg_path_str)
     if bg is None:
         return
     image_id = Path(bg_path_str).stem
+
+    # Optional downscale: reduce I/O and compute for large images (e.g. VisA)
+    if max_background_dim is not None:
+        ih, iw = bg.shape[:2]
+        max_side = max(ih, iw)
+        if max_side > max_background_dim:
+            scale = max_background_dim / max_side
+            bg = cv2.resize(bg, (max(1, int(iw * scale)), max(1, int(ih * scale))))
+
     ih, iw = bg.shape[:2]
+    png_params = [cv2.IMWRITE_PNG_COMPRESSION, png_compression]
 
     for seed_id, placements in seed_entries:
         composited = bg.copy()
@@ -249,11 +262,11 @@ def _synthesize_image_multi_seed_worker(args_tuple):
         if fmt == "cls":
             d = seed_out / "defect"
             d.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(d / f"{image_id}.png"), composited)
+            cv2.imwrite(str(d / f"{image_id}.png"), composited, png_params)
         elif fmt == "yolo":
             (seed_out / "images").mkdir(parents=True, exist_ok=True)
             (seed_out / "labels").mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(seed_out / "images" / f"{image_id}.png"), composited)
+            cv2.imwrite(str(seed_out / "images" / f"{image_id}.png"), composited, png_params)
             (seed_out / "labels" / f"{image_id}.txt").write_text("\n".join(yolo_boxes))
 
 
@@ -264,6 +277,8 @@ def run_synthesis_batch(
     format: str = "cls",
     use_fast_blend: bool = False,
     workers: int = 0,
+    png_compression: int = 3,
+    max_background_dim: Optional[int] = None,
 ) -> None:
     """Category-level batch synthesis with background caching.
 
@@ -272,12 +287,20 @@ def run_synthesis_batch(
     once per seed.
 
     Args:
-        image_dir:          Directory containing background images (<image_id>.png).
+        image_dir:           Directory containing background images (<image_id>.png).
         seed_placement_maps: List of (seed_id, placement_map_path) tuples.
-        output_root:        Root output directory; outputs go to output_root/<seed_id>/.
-        format:             'cls' or 'yolo'.
-        use_fast_blend:     Use Gaussian soft-mask instead of seamlessClone.
-        workers:            Thread workers (0=sequential, -1=auto, N=N threads).
+        output_root:         Root output directory; outputs go to output_root/<seed_id>/.
+        format:              'cls' or 'yolo'.
+        use_fast_blend:      Use Gaussian soft-mask instead of seamlessClone.
+        workers:             Thread workers (0=sequential, -1=auto, N=N threads).
+        png_compression:     PNG compression level 0-9 (0=none, 1=fastest, 9=smallest).
+                             Default 3. Use 1 for large images (e.g. VisA ~2MB).
+        max_background_dim:  If set, downscale background so max(H,W) <= this value
+                             before synthesis. Reduces I/O and compute for large images.
+                             WARNING: output images are saved at the reduced resolution.
+                             Stage 6 copies these as-is, so the final dataset will have
+                             mismatched resolutions (good=original, defect=reduced).
+                             Only use this if the downstream dataset is resolution-agnostic.
     """
     from utils.parallel import resolve_workers
 
@@ -295,7 +318,9 @@ def run_synthesis_batch(
          seed_entries,
          output_root,
          format,
-         use_fast_blend)
+         use_fast_blend,
+         png_compression,
+         max_background_dim)
         for image_id, seed_entries in image_seed_map.items()
         if (img_dir / f"{image_id}.png").exists()
     ]

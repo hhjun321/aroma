@@ -388,6 +388,15 @@ LABEL          = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_F
 USE_FAST_BLEND = True    # False → seamlessClone (느리지만 품질 높음)
 IMG_THREADS    = 4       # 이미지 단위 병렬 (ThreadPoolExecutor)
 
+# 도메인별 I/O 최적화
+# - isp/mvtec : 이미지 작음 → 기본값(3) 유지
+# - visa      : 이미지 ~2MB(3032×2016) → png_compression=1 (~4× 쓰기 빠름)
+# ※ max_background_dim 은 사용하지 말 것:
+#   Stage 4 출력이 축소 해상도로 저장되어 Stage 6 최종 데이터셋에서
+#   good(원본 3032px) vs defect(축소 1024px) 해상도 불일치 발생 → 학습 불가
+PNG_COMPRESSION    = {"isp": 3, "mvtec": 3, "visa": 1}[DOMAIN_FILTER]
+MAX_BACKGROUND_DIM = None   # 해상도 불일치 방지 — 변경 금지
+
 ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
 
@@ -434,6 +443,8 @@ else:
                 format              = "cls",
                 use_fast_blend      = USE_FAST_BLEND,
                 workers             = IMG_THREADS,
+                png_compression     = PNG_COMPRESSION,
+                max_background_dim  = MAX_BACKGROUND_DIM,
             )
         except Exception as e:
             failed.append({"category": cat_dir.name,
