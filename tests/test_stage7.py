@@ -176,10 +176,10 @@ def test_train_path_baseline_no_defect(tmp_path):
 def test_build_yolo_model():
     from stage7_benchmark import build_yolo_model
 
-    with patch("stage7_benchmark.YOLO") as MockYOLO:
-        MockYOLO.return_value = MagicMock()
+    mock_yolo_cls = MagicMock()
+    with patch.dict("sys.modules", {"ultralytics": MagicMock(YOLO=mock_yolo_cls)}):
         build_yolo_model()
-        MockYOLO.assert_called_once_with("yolo11n-cls.pt")
+    mock_yolo_cls.assert_called_once_with("yolo11n-cls.pt")
 
 
 # ---------------------------------------------------------------------------
@@ -193,19 +193,20 @@ def test_build_effdet_classifier():
     mock_feat_info.channels.return_value = [16, 32, 64, 128]
     mock_backbone = MagicMock()
     mock_backbone.feature_info = mock_feat_info
-
     mock_det = MagicMock()
     mock_det.backbone = mock_backbone
 
+    mock_create = MagicMock(return_value=mock_det)
     mock_nn = MagicMock()
-    mock_nn.Module = object  # base class for _EfficientDetClassifier
+    mock_nn.Module = object
 
-    with patch("stage7_benchmark.create_effdet_model", return_value=mock_det), \
-         patch.dict("sys.modules", {"torch": MagicMock(), "torch.nn": mock_nn}):
-        # Just verify the builder calls create_effdet_model correctly
-        import stage7_benchmark as s7
-        s7.create_effdet_model("efficientdet_d0", pretrained=False, num_classes=90)
-        # No exception → API contract satisfied
+    with patch.dict("sys.modules", {
+        "effdet": MagicMock(create_model=mock_create),
+        "torch": MagicMock(),
+        "torch.nn": mock_nn,
+    }):
+        build_effdet_classifier(pretrained=False)
+    mock_create.assert_called_once_with("efficientdet_d0", pretrained=False, num_classes=90)
 
 
 # ---------------------------------------------------------------------------

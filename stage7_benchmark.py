@@ -16,16 +16,6 @@ from typing import Optional
 
 import yaml
 
-try:
-    from ultralytics import YOLO
-except ImportError:
-    YOLO = None  # type: ignore
-
-try:
-    from effdet import create_model as create_effdet_model
-except ImportError:
-    create_effdet_model = None  # type: ignore
-
 
 # ---------------------------------------------------------------------------
 # Config
@@ -70,9 +60,11 @@ def _save_meta(output_dir: Path, model: str, group: str, metrics: dict) -> None:
 # Model builders
 # ---------------------------------------------------------------------------
 
-def build_yolo_model() -> "YOLO":
+def build_yolo_model():
     """YOLO11n-cls pretrained 모델 반환."""
-    if YOLO is None:
+    try:
+        from ultralytics import YOLO
+    except ImportError:
         raise ImportError("ultralytics 패키지가 필요합니다: pip install ultralytics")
     return YOLO("yolo11n-cls.pt")
 
@@ -83,7 +75,9 @@ def build_effdet_classifier(pretrained: bool = True):
     effdet 의 EfficientDet-D0 백본(EfficientNet-B0)에 AdaptiveAvgPool + Linear 헤드를 붙여
     이미지 분류 모델로 사용한다.
     """
-    if create_effdet_model is None:
+    try:
+        from effdet import create_model as create_effdet_model
+    except ImportError:
         raise ImportError("effdet 패키지가 필요합니다: pip install effdet")
 
     import torch.nn as nn
