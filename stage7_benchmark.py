@@ -2,8 +2,10 @@
 
 Stage 7 of the AROMA pipeline: anomaly detection benchmark.
 
-3 models × 3 dataset groups × 30 categories = 270 runs.
-Models: EfficientNet-B4 / ResNet50 (timm) + DRAEM (anomalib).
+Models: YOLO11 (ultralytics) + EfficientDet-D0 (effdet)
+  - baseline    : pretrained 특징 cosine 거리 (one-class scoring)
+  - aroma_full  : good + defect 이진 분류 fine-tuning
+  - aroma_pruned: good + defect 이진 분류 fine-tuning (quality_score 필터링)
 """
 from __future__ import annotations
 
@@ -14,16 +16,15 @@ from typing import Optional
 
 import yaml
 
-# anomalib / timm 은 런타임 import — 테스트 시 mock 가능
 try:
-    import timm
+    from ultralytics import YOLO
 except ImportError:
-    timm = None  # type: ignore
+    YOLO = None  # type: ignore
 
 try:
-    from anomalib.models import Draem
+    from effdet import create_model as create_effdet_model
 except ImportError:
-    Draem = None  # type: ignore
+    create_effdet_model = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +32,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def load_config(config_path: str) -> dict:
-    """benchmark_experiment.yaml 을 로드한다."""
     with open(config_path) as f:
         return yaml.safe_load(f)
 
@@ -41,10 +41,6 @@ def load_config(config_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def build_train_paths(cat_dir: str, group: str) -> tuple[Path, Optional[Path]]:
-    """group 별 train_good_dir / train_defect_dir 경로를 반환한다.
-
-    baseline 의 경우 train/defect/ 없음 → train_defect_dir = None.
-    """
     aug = Path(cat_dir) / "augmented_dataset"
     train_good_dir = aug / group / "train" / "good"
     defect_path = aug / group / "train" / "defect"
@@ -53,7 +49,6 @@ def build_train_paths(cat_dir: str, group: str) -> tuple[Path, Optional[Path]]:
 
 
 def get_task_for_domain(domain: str, config: dict) -> str:
-    """domain → 'classification' | 'segmentation' 반환."""
     return config["dataset"]["task_by_domain"].get(domain, "classification")
 
 
@@ -62,9 +57,7 @@ def get_task_for_domain(domain: str, config: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _should_skip(output_dir: Path, model: str, group: str) -> bool:
-    """experiment_meta.json 존재 시 True (재학습 불필요)."""
-    meta_path = output_dir / model / group / "experiment_meta.json"
-    return meta_path.exists()
+    return (output_dir / model / group / "experiment_meta.json").exists()
 
 
 def _save_meta(output_dir: Path, model: str, group: str, metrics: dict) -> None:
@@ -77,58 +70,107 @@ def _save_meta(output_dir: Path, model: str, group: str, metrics: dict) -> None:
 # Model builders
 # ---------------------------------------------------------------------------
 
-def build_draem_model(train_defect_dir: Optional[Path]):
-    """DRAEM 모델을 생성한다.
+def build_yolo_model() -> "YOLO":
+    """YOLO11n-cls pretrained 모델 반환."""
+    return YOLO("yolo11n-cls.pt")
 
-    baseline: anomaly_source_path 미지정 → Perlin noise fallback (원논문 설정).
-    aroma_full / aroma_pruned: train_defect_dir → anomaly_source_path 전달.
+
+def build_effdet_classifier(pretrained: bool = True):
+    """EfficientDet-D0 백본 + 분류 헤드 모델 반환.
+
+    effdet 의 EfficientDet-D0 백본(EfficientNet-B0)에 AdaptiveAvgPool + Linear 헤드를 붙여
+    이미지 분류 모델로 사용한다.
     """
-    if train_defect_dir is None:
-        return Draem()
-    return Draem(anomaly_source_path=str(train_defect_dir))
+    import torch.nn as nn
+
+    det = create_effdet_model("efficientdet_d0", pretrained=pretrained, num_classes=90)
+    backbone = det.backbone
+    num_features = backbone.feature_info.channels()[-1]
+
+    class _EfficientDetClassifier(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.backbone = backbone
+            self.pool = nn.AdaptiveAvgPool2d(1)
+            self.head = nn.Linear(num_features, 2)
+
+        def forward(self, x):
+            return self.head(self._pool(x))
+
+        def extract_features(self, x):
+            return self._pool(x)
+
+        def _pool(self, x):
+            feats = self.backbone(x)       # list of feature maps per FPN level
+            return self.pool(feats[-1]).flatten(1)
+
+    return _EfficientDetClassifier()
 
 
-def build_classifier_model(backbone: str, group: str, pretrained: bool = True):
-    """EfficientNet-B4 / ResNet50 모델을 생성한다.
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
 
-    baseline: features_only=True — pretrained feature distance 기반 one-class scoring.
-    aroma_full / aroma_pruned: num_classes=2 — 이진 분류 fine-tuning.
+def _train_yolo(
+    model: "YOLO",
+    train_good_dir: Path,
+    group: str,
+    config: dict,
+    seed: int,
+) -> None:
+    """YOLO11 fine-tuning.
+
+    baseline: fine-tuning 없음 (pretrained 특징 거리 사용).
+    aroma: train/{good,defect}/ 구조로 이진 분류 fine-tuning.
     """
     if group == "baseline":
-        return timm.create_model(backbone, pretrained=pretrained, features_only=True)
-    return timm.create_model(backbone, pretrained=pretrained, num_classes=2)
+        return
+
+    import torch
+    torch.manual_seed(seed)
+
+    model_cfg = config["models"].get("yolo11", {})
+    # train_good_dir.parent.parent = augmented_dataset/{group}/
+    # YOLO expects: data/train/class_a/, data/train/class_b/
+    model.train(
+        data=str(train_good_dir.parent.parent),
+        epochs=model_cfg.get("epochs", 30),
+        imgsz=config["dataset"]["image_size"],
+        batch=config["dataset"]["train_batch_size"],
+        lr0=model_cfg.get("lr", 0.01),
+        verbose=False,
+        exist_ok=True,
+        seed=seed,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Training / evaluation stubs (Colab 에서 실제 GPU 학습)
-# ---------------------------------------------------------------------------
+def _train_effdet(
+    model,
+    train_good_dir: Path,
+    train_defect_dir: Optional[Path],
+    group: str,
+    config: dict,
+    seed: int,
+) -> None:
+    """EfficientDet 분류기 fine-tuning.
 
-def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Path],
-                      group: str, config: dict, seed: int) -> None:
-    """timm 분류 모델 학습.
-
-    baseline: 학습 없음 (pretrained feature distance 사용).
-    aroma_full / aroma_pruned: good + defect 이진 분류 fine-tuning.
+    baseline: fine-tuning 없음 (pretrained 특징 거리 사용).
+    aroma: good + defect 이진 분류 fine-tuning.
     """
+    if group == "baseline":
+        return
+
     import torch
     import torch.nn as nn
     import torch.optim as optim
     from torch.utils.data import DataLoader
     from torchvision import datasets, transforms
 
-    if group == "baseline":
-        return  # baseline 은 fine-tuning 없이 feature distance 사용
-
-    # 재현성을 위한 seed 고정
     torch.manual_seed(seed)
 
-    model_cfg = config["models"]
-    epochs, lr = 30, 1e-4
-    for name, mcfg in model_cfg.items():
-        if name in ("efficientnet_b4", "resnet50"):
-            epochs = mcfg.get("epochs", 30)
-            lr = mcfg.get("lr", 1e-4)
-            break
+    model_cfg = config["models"].get("efficientdet_d0", {})
+    epochs = model_cfg.get("epochs", 30)
+    lr = model_cfg.get("lr", 1e-4)
 
     transform = transforms.Compose([
         transforms.Resize((config["dataset"]["image_size"],) * 2),
@@ -136,24 +178,22 @@ def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Pa
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
-    train_dir = train_good_dir.parent
-    dataset = datasets.ImageFolder(str(train_dir), transform=transform)
+    dataset = datasets.ImageFolder(str(train_good_dir.parent), transform=transform)
 
-    # 클래스 불균형 보정 — defect가 good보다 수십 배 많을 수 있음.
-    # 각 클래스 가중치 = 전체 샘플 수 / (클래스 수 × 클래스 샘플 수)
     counts = [0, 0]
     for _, label in dataset.samples:
         counts[label] += 1
     n_total = sum(counts)
     class_weight = torch.tensor(
-        [n_total / (2 * c) if c > 0 else 1.0 for c in counts],
-        dtype=torch.float,
+        [n_total / (2 * c) if c > 0 else 1.0 for c in counts], dtype=torch.float
     )
 
-    loader = DataLoader(dataset,
-                        batch_size=config["dataset"]["train_batch_size"],
-                        shuffle=True,
-                        num_workers=config["dataset"]["num_workers"])
+    loader = DataLoader(
+        dataset,
+        batch_size=config["dataset"]["train_batch_size"],
+        shuffle=True,
+        num_workers=config["dataset"]["num_workers"],
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -161,47 +201,152 @@ def _train_classifier(model, train_good_dir: Path, train_defect_dir: Optional[Pa
     criterion = nn.CrossEntropyLoss(weight=class_weight.to(device))
 
     model.train()
-    for epoch in range(epochs):
+    for _ in range(epochs):
         for imgs, labels in loader:
             imgs, labels = imgs.to(device), labels.to(device)
             optimizer.zero_grad()
-            out = model(imgs)
-            loss = criterion(out, labels)
-            loss.backward()
+            criterion(model(imgs), labels).backward()
             optimizer.step()
 
 
-def _evaluate_classifier(model, test_dir: Path, group: str,
-                          config: dict) -> tuple[list, list]:
-    """timm 분류 모델 평가 → (y_true, y_score) 반환.
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
 
-    y_true 규약: 0=정상(good), 1=이상(anomaly).
-    y_score: 높을수록 이상 가능성 높음.
+def _collect_test_samples(test_dir: Path) -> tuple[list[str], list[int]]:
+    """test_dir/{good,defect,...}/ 구조에서 (paths, y_true) 수집.
 
-    ImageFolder 는 폴더명 알파벳순으로 class index 를 부여하므로
-    "good" 폴더가 항상 label=0 이 아닐 수 있다 (대소문자·이름에 따라 다름).
-    → dataset.class_to_idx["good"] 로 정상 클래스 index 를 확인 후 y_true 를 구성한다.
+    y_true: 0=good, 1=anomaly.
+    """
+    paths, labels = [], []
+    for cls_dir in sorted(test_dir.iterdir()):
+        if not cls_dir.is_dir():
+            continue
+        label = 0 if cls_dir.name == "good" else 1
+        for p in sorted(cls_dir.glob("*.png")):
+            paths.append(str(p))
+            labels.append(label)
+    return paths, labels
 
-    aroma 그룹 학습 폴더는 defect(d) / good(g) 두 클래스이며 알파벳순 defect=0, good=1.
-    → 이상 점수 = softmax[:, 0] (P(defect)).
+
+def _yolo_feature_distance(
+    nn_model,
+    image_paths: list[str],
+    good_train_dir: Path,
+    config: dict,
+) -> list[float]:
+    """Pretrained YOLO11 penultimate-layer 특징 cosine 거리 계산.
+
+    good 학습 이미지의 평균 특징 벡터와의 거리 = anomaly score.
+    """
+    import torch
+    import torch.nn.functional as F
+    from PIL import Image
+    from torchvision import transforms
+
+    imgsz = config["dataset"]["image_size"]
+    transform = transforms.Compose([
+        transforms.Resize((imgsz, imgsz)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+
+    device = next(nn_model.parameters()).device
+    nn_model.eval()
+
+    # YOLO11 ClassificationModel: model.model = Sequential[..., Classify]
+    # penultimate = layers[-2]
+    captured: dict = {}
+
+    def _hook(m, inp, out):
+        f = out
+        if f.dim() == 4:
+            f = F.adaptive_avg_pool2d(f, 1)
+        captured["feat"] = f.flatten(1).detach().cpu()
+
+    layers = list(nn_model.model.children())
+    handle = layers[-2].register_forward_hook(_hook)
+
+    def _extract(paths: list[str]) -> torch.Tensor:
+        feats = []
+        with torch.no_grad():
+            for p in paths:
+                img = transform(Image.open(p).convert("RGB")).unsqueeze(0).to(device)
+                nn_model(img)
+                feats.append(captured["feat"])
+        return torch.cat(feats)
+
+    good_paths = [str(p) for p in sorted(good_train_dir.glob("*.png"))]
+    mean_feat = _extract(good_paths).mean(0, keepdim=True)
+    test_feats = _extract(image_paths)
+
+    handle.remove()
+    return (1.0 - F.cosine_similarity(test_feats, mean_feat)).tolist()
+
+
+def _evaluate_yolo(
+    model: "YOLO",
+    test_dir: Path,
+    group: str,
+    config: dict,
+) -> tuple[list, list]:
+    """YOLO11 평가 → (y_true, y_score).
+
+    baseline : pretrained 특징 cosine 거리.
+    aroma    : fine-tuned 모델 P(defect=class_0) score.
+    """
+    image_paths, y_true = _collect_test_samples(test_dir)
+
+    if group == "baseline":
+        good_train_dir = test_dir.parent.parent / "baseline" / "train" / "good"
+        y_score = _yolo_feature_distance(
+            model.model, image_paths, good_train_dir, config
+        )
+    else:
+        # fine-tuned: ultralytics predict → probs
+        # ImageFolder sorts classes alphabetically: defect(0) < good(1)
+        results = model.predict(
+            image_paths,
+            imgsz=config["dataset"]["image_size"],
+            batch=config["dataset"]["eval_batch_size"],
+            verbose=False,
+        )
+        y_score = [float(r.probs.data.cpu()[0]) for r in results]  # P(defect)
+
+    return y_true, y_score
+
+
+def _evaluate_effdet(
+    model,
+    test_dir: Path,
+    group: str,
+    config: dict,
+) -> tuple[list, list]:
+    """EfficientDet 분류기 평가 → (y_true, y_score).
+
+    baseline : pretrained 특징 cosine 거리.
+    aroma    : fine-tuned 모델 P(defect=class_0) score.
     """
     import torch
     import torch.nn.functional as F
     from torch.utils.data import DataLoader
     from torchvision import datasets, transforms
 
+    imgsz = config["dataset"]["image_size"]
     transform = transforms.Compose([
-        transforms.Resize((config["dataset"]["image_size"],) * 2),
+        transforms.Resize((imgsz, imgsz)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
+
     dataset = datasets.ImageFolder(str(test_dir), transform=transform)
-    # test 폴더에서 "good" 클래스의 index 확인 (이름·대소문자 무관)
     good_label = dataset.class_to_idx.get("good", -1)
-    loader = DataLoader(dataset,
-                        batch_size=config["dataset"]["eval_batch_size"],
-                        shuffle=False,
-                        num_workers=config["dataset"]["num_workers"])
+    loader = DataLoader(
+        dataset,
+        batch_size=config["dataset"]["eval_batch_size"],
+        shuffle=False,
+        num_workers=config["dataset"]["num_workers"],
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()
@@ -210,69 +355,30 @@ def _evaluate_classifier(model, test_dir: Path, group: str,
 
     with torch.no_grad():
         if group == "baseline":
-            good_train_dir = test_dir.parent.parent / "baseline" / "train"
-            good_dataset = datasets.ImageFolder(str(good_train_dir), transform=transform)
-            good_loader = DataLoader(good_dataset, batch_size=32, shuffle=False)
-            feats = []
-            for imgs, _ in good_loader:
-                f = model(imgs.to(device))
-                if isinstance(f, (list, tuple)):
-                    f = f[-1]
-                feats.append(F.adaptive_avg_pool2d(f, 1).squeeze(-1).squeeze(-1))
-            mean_feat = torch.cat(feats).mean(0, keepdim=True)
+            good_train_dir = test_dir.parent.parent / "baseline" / "train" / "good"
+            good_ds = datasets.ImageFolder(
+                str(good_train_dir.parent), transform=transform
+            )
+            good_loader = DataLoader(good_ds, batch_size=32, shuffle=False,
+                                     num_workers=config["dataset"]["num_workers"])
+            good_feats = torch.cat(
+                [model.extract_features(imgs.to(device)).cpu() for imgs, _ in good_loader]
+            )
+            mean_feat = good_feats.mean(0, keepdim=True)
 
             for imgs, labels in loader:
-                f = model(imgs.to(device))
-                if isinstance(f, (list, tuple)):
-                    f = f[-1]
-                f = F.adaptive_avg_pool2d(f, 1).squeeze(-1).squeeze(-1)
-                # 1 - cosine_sim: 정상 평균과 멀수록 높은 이상 점수
+                f = model.extract_features(imgs.to(device)).cpu()
                 scores = 1.0 - F.cosine_similarity(f, mean_feat)
-                # y_true: good→0, anomaly→1
-                y_true.extend([0 if l == good_label else 1
-                                for l in labels.tolist()])
-                y_score.extend(scores.cpu().tolist())
+                y_true.extend([0 if l == good_label else 1 for l in labels.tolist()])
+                y_score.extend(scores.tolist())
         else:
-            # aroma 학습 폴더: defect(d<g)=0, good=1 → P(defect) = softmax[:, 0]
+            # defect(d) < good(g) 알파벳순 → defect=0 → P(defect) = softmax[:,0]
             for imgs, labels in loader:
-                out = model(imgs.to(device))
-                probs = F.softmax(out, dim=1)[:, 0]   # P(defect) = 이상 점수
-                y_true.extend([0 if l == good_label else 1
-                                for l in labels.tolist()])
+                probs = F.softmax(model(imgs.to(device)), dim=1)[:, 0]
+                y_true.extend([0 if l == good_label else 1 for l in labels.tolist()])
                 y_score.extend(probs.cpu().tolist())
 
     return y_true, y_score
-
-
-def _run_draem(model, train_good_dir: Path, test_dir: Path,
-               config: dict) -> dict:
-    """anomalib Engine 으로 DRAEM 학습 + 평가 → metrics dict 반환."""
-    from anomalib.data import Folder
-    from anomalib.engine import Engine
-
-    engine = Engine()
-    datamodule = Folder(
-        name="aroma",
-        root=str(train_good_dir.parent.parent),
-        normal_dir=str(train_good_dir),
-        test_dir=str(test_dir),
-        image_size=config["dataset"]["image_size"],
-        train_batch_size=config["dataset"]["train_batch_size"],
-        eval_batch_size=config["dataset"]["eval_batch_size"],
-        num_workers=config["dataset"]["num_workers"],
-    )
-    engine.fit(model=model, datamodule=datamodule)
-    test_result = engine.test(model=model, datamodule=datamodule)
-
-    metrics = {}
-    if test_result:
-        r = test_result[0] if isinstance(test_result, list) else test_result
-        metrics["image_auroc"] = float(r.get("image_AUROC", 0.0))
-        metrics["image_f1"] = float(r.get("image_F1Score", 0.0))
-        metrics["pixel_auroc"] = (
-            float(r["pixel_AUROC"]) if "pixel_AUROC" in r else None
-        )
-    return metrics
 
 
 # ---------------------------------------------------------------------------
@@ -287,63 +393,66 @@ def run_benchmark(
     resume: bool = True,
     output_dir: Optional[str] = None,
 ) -> dict:
-    """cat_dir 에 대해 모든 model × group 실험을 수행한다.
+    """cat_dir 에 대해 model × group 전체 실험을 수행한다.
 
     Args:
-        output_dir: 결과 저장 루트 경로. 지정하면 yaml의 output_dir 를 덮어씀.
-            Colab 환경에서 cat_dir 를 로컬 경로로, 결과는 Drive 에 저장할 때 사용.
+        config_path: benchmark_experiment.yaml 경로.
+        cat_dir:     카테고리 루트 디렉터리.
+        groups:      실행할 그룹 (None=전체).
+        models:      실행할 모델 (None=전체).
+        resume:      True=이미 완료된 실험 skip.
+        output_dir:  결과 저장 루트 (None=yaml의 output_dir 사용).
     """
+    from utils.ad_metrics import extract_metrics
+
     config = load_config(config_path)
     seed = config["experiment"]["seed"]
     output_root = Path(output_dir) if output_dir else Path(config["experiment"]["output_dir"])
     cat_name = Path(cat_dir).name
-    output_dir = output_root / cat_name
+    out_dir = output_root / cat_name
 
     domain = Path(cat_dir).parent.name
+    use_pixel = domain in config["evaluation"].get("pixel_auroc_domains", [])
 
     all_groups = groups or list(config["dataset_groups"].keys())
     all_models = models or list(config["models"].keys())
 
     test_dir = Path(cat_dir) / "augmented_dataset" / "baseline" / "test"
-    task = get_task_for_domain(domain, config)
-    pixel_auroc_domains = config["evaluation"].get("pixel_auroc_domains", [])
-    use_pixel = domain in pixel_auroc_domains
-
     results: dict = {}
 
     for model_name in all_models:
         results[model_name] = {}
-        model_cfg = config["models"][model_name]
 
         for group in all_groups:
-            if resume and _should_skip(output_dir, model_name, group):
+            if resume and _should_skip(out_dir, model_name, group):
                 meta = json.loads(
-                    (output_dir / model_name / group / "experiment_meta.json").read_text()
+                    (out_dir / model_name / group / "experiment_meta.json").read_text()
                 )
                 results[model_name][group] = meta
                 continue
 
             train_good_dir, train_defect_dir = build_train_paths(cat_dir, group)
 
-            if model_name == "draem":
-                model = build_draem_model(train_defect_dir)
-                metrics = _run_draem(model, train_good_dir, test_dir, config)
+            if model_name == "yolo11":
+                model = build_yolo_model()
+                _train_yolo(model, train_good_dir, group, config, seed)
+                y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
+
+            elif model_name == "efficientdet_d0":
+                model = build_effdet_classifier(
+                    pretrained=config["models"]["efficientdet_d0"].get("pretrained", True)
+                )
+                _train_effdet(model, train_good_dir, train_defect_dir, group, config, seed)
+                y_true, y_score = _evaluate_effdet(model, test_dir, group, config)
 
             else:
-                backbone = model_cfg["backbone"]
-                model = build_classifier_model(backbone, group,
-                                               pretrained=model_cfg.get("pretrained", True))
-                _train_classifier(model, train_good_dir, train_defect_dir,
-                                  group, config, seed)
+                continue
 
-                y_true, y_score = _evaluate_classifier(model, test_dir, group, config)
+            metrics = extract_metrics(y_true, y_score)
+            if not use_pixel:
+                metrics["pixel_auroc"] = None
 
-                from utils.ad_metrics import extract_metrics
-                metrics = extract_metrics(y_true, y_score)
-                if not use_pixel:
-                    metrics["pixel_auroc"] = None
-
-            _save_meta(output_dir, model_name, group, metrics)
+            _save_meta(out_dir, model_name, group, metrics)
             results[model_name][group] = metrics
 
     return results
@@ -354,17 +463,14 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Stage 7 — AD benchmark")
+    p = argparse.ArgumentParser(description="Stage 7 — AD benchmark (YOLO11 + EfficientDet-D0)")
     p.add_argument("--config", default="configs/benchmark_experiment.yaml",
                    help="benchmark_experiment.yaml 경로.")
-    p.add_argument("--cat_dir", required=True,
-                   help="카테고리 루트 디렉터리.")
-    p.add_argument("--groups", nargs="*",
-                   help="실행할 그룹 (미지정=전체).")
-    p.add_argument("--models", nargs="*",
-                   help="실행할 모델 (미지정=전체).")
-    p.add_argument("--no-resume", action="store_true",
-                   help="이미 완료된 실험도 재실행.")
+    p.add_argument("--cat_dir", required=True, help="카테고리 루트 디렉터리.")
+    p.add_argument("--groups", nargs="*", help="실행할 그룹 (미지정=전체).")
+    p.add_argument("--models", nargs="*", help="실행할 모델 (미지정=전체).")
+    p.add_argument("--no-resume", action="store_true", help="이미 완료된 실험도 재실행.")
+    p.add_argument("--output_dir", default=None, help="결과 저장 루트 경로.")
     return p.parse_args()
 
 
@@ -376,6 +482,7 @@ def main() -> None:
         groups=args.groups,
         models=args.models,
         resume=not args.no_resume,
+        output_dir=args.output_dir,
     )
     print(json.dumps(results, indent=2))
 

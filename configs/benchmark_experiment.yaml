@@ -8,53 +8,53 @@ dataset:
     mvtec: segmentation
     visa: segmentation
   train_batch_size: 32
+
 dataset_groups:
+  baseline:
+    description: 원본 train/good 만 (pretrained 특징 거리)
   aroma_full:
     description: 원본 + 전체 Stage 4 합성
   aroma_pruned:
     description: 원본 + quality_score 필터링 합성
-  baseline:
-    description: 원본 train/good 만
+
 evaluation:
   metrics:
-  - image_auroc
-  - image_f1
-  - pixel_auroc
+    - image_auroc
+    - image_f1
+    - pixel_auroc
   pixel_auroc_domains:
-  - mvtec
-  - visa
+    - mvtec
+    - visa
 
 # dataset_config.json 카테고리 구성:
-#   ISP(3): ASM, LSM_1, LSM_2
+#   ISP(3)   : ASM, LSM_1, LSM_2
 #   MVTec(15): 전 카테고리
-#   VisA(8): candle, capsules, cashew, chewinggum, fryum, macaroni, pcb, pipe_fryum
+#   VisA(8)  : candle, capsules, cashew, chewinggum, fryum, macaroni, pcb, pipe_fryum
 #     - macaroni: macaroni1 경로 사용 (macaroni2 config에서 제거)
-#     - pcb: pcb1 경로 사용 (pcb2-4 config에서 제거)
-# benchmark 실험 규모: 3 models × 3 groups × 25 categories = 225 runs
+#     - pcb    : pcb1 경로 사용 (pcb2-4 config에서 제거)
+# benchmark 실험 규모: 2 models × 3 groups × 24 categories = 144 runs
 #   (LSM_2는 LSM_1과 동일 센서·라인이므로 benchmark에서 제외)
 category_filter:
   exclude:
     isp:
-    - LSM_2        # LSM_1 과 동일 라인스캔 센서, 샘플만 다름
-    mvtec: []      # 전 카테고리 고유 제품 — 제외 없음
-    visa: []       # macaroni2/pcb2-4 는 dataset_config 에서 완전 제거됨
+      - LSM_2        # LSM_1 과 동일 라인스캔 센서, 샘플만 다름
+    mvtec: []        # 전 카테고리 고유 제품 — 제외 없음
+    visa: []         # macaroni2/pcb2-4 는 dataset_config 에서 완전 제거됨
+
 experiment:
   name: aroma_benchmark_v1
   output_dir: outputs/benchmark_results
   seed: 42
+
 models:
-  draem:
-    enable_sspcab: false
-    epochs: 700
-    lr: 0.0001
-  efficientnet_b4:
-    backbone: efficientnet_b4
+  yolo11:
+    model: yolo11n-cls.pt          # ultralytics YOLO11 nano (classification)
     epochs: 30
-    lr: 0.0001
-    optimizer: adam
+    lr: 0.01                       # ultralytics default SGD lr
     pretrained: true
-  resnet50:
-    backbone: resnet50
+
+  efficientdet_d0:
+    backbone: efficientdet_d0      # effdet EfficientDet-D0 (EfficientNet-B0 backbone)
     epochs: 30
     lr: 0.0001
     optimizer: adam

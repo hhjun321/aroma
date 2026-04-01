@@ -613,6 +613,136 @@ else:
 
 ---
 
+## Stage 7: 벤치마크
+
+**Sentinel:** `{output_dir}/{cat_name}/{model}/{group}/experiment_meta.json` (전체 model × group 완료)
+**병렬:** GPU 점유 → 카테고리 순차 처리 (`resume=True` 로 중단 재개 가능)
+
+> **모델 구성:** `draem` (700 epoch, GPU 집약) · `efficientnet_b4` · `resnet50` (각 30 epoch)
+> **그룹 구성:** `baseline` · `aroma_full` · `aroma_pruned`
+> **전제 조건:** Stage 6 완료 (`augmented_dataset/` 존재)
+
+```python
+import json, sys, yaml
+from pathlib import Path
+from tqdm.auto import tqdm
+
+sys.path.insert(0, "/content/aroma")
+from stage7_benchmark import run_benchmark
+
+REPO        = Path("/content/drive/MyDrive/project/aroma")
+CONFIG_PATH = str(REPO / "configs" / "benchmark_experiment.yaml")
+CONFIG      = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
+
+DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+OUTPUT_DIR    = str(REPO / "outputs" / "benchmark_results")
+
+EXCLUDE = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
+MODELS  = list(BENCH_CFG["models"].keys())
+GROUPS  = list(BENCH_CFG["dataset_groups"].keys())
+
+# 처리 대상 수집 (중복 cat_dir 제거 + exclude 필터 + sentinel 확인)
+seen = set()
+all_cats, skip = [], 0
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    cat_dir = Path(entry["seed_dir"]).parents[1]
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+    if cat_dir.name in EXCLUDE:
+        continue
+    out_root = Path(OUTPUT_DIR) / cat_dir.name
+    if all((out_root / m / g / "experiment_meta.json").exists()
+           for m in MODELS for g in GROUPS):
+        skip += 1
+    else:
+        all_cats.append(cat_dir)
+
+if not all_cats:
+    print(f"✓ {LABEL} 모든 작업 완료")
+else:
+    print(f"{LABEL}: {len(all_cats)} categories 처리 예정 (skip {skip}건)")
+    print(f"  모델: {MODELS}")
+    print(f"  그룹: {GROUPS}")
+    failed = []
+
+    for cat_dir in tqdm(all_cats, desc=f"Stage7 {LABEL}"):
+        try:
+            run_benchmark(
+                config_path = CONFIG_PATH,
+                cat_dir     = str(cat_dir),
+                resume      = True,
+                output_dir  = OUTPUT_DIR,
+            )
+        except Exception as e:
+            failed.append({"category": cat_dir.name,
+                           "error": str(e), "type": type(e).__name__})
+
+    print("\n" + (f"✓ {LABEL} 완료" if not failed else f"✗ {len(failed)}건 실패"))
+    for f in failed:
+        print(f"  [{f['category']}] {f['type']}: {f['error'][:120]}")
+```
+
+---
+
+## Stage 7: 결과 요약
+
+```python
+import json
+from pathlib import Path
+
+REPO          = Path("/content/drive/MyDrive/project/aroma")
+OUTPUT_DIR    = REPO / "outputs" / "benchmark_results"
+DOMAIN_FILTER = "isp"   # 필터링할 도메인 (없으면 전체 출력)
+
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+BENCH_CFG = __import__("yaml").safe_load(
+    (REPO / "configs" / "benchmark_experiment.yaml").read_text())
+MODELS = list(BENCH_CFG["models"].keys())
+GROUPS = list(BENCH_CFG["dataset_groups"].keys())
+
+# 도메인 필터: dataset_config 에서 해당 도메인 cat_name 목록 추출
+if DOMAIN_FILTER:
+    valid_cats = {Path(v["seed_dir"]).parents[1].name
+                  for k, v in CONFIG.items()
+                  if not k.startswith("_") and v["domain"] == DOMAIN_FILTER}
+else:
+    valid_cats = None
+
+rows = []
+for cat_dir in sorted(OUTPUT_DIR.iterdir()):
+    if not cat_dir.is_dir():
+        continue
+    if valid_cats is not None and cat_dir.name not in valid_cats:
+        continue
+    row = {"category": cat_dir.name}
+    for model in MODELS:
+        for group in GROUPS:
+            meta_path = cat_dir / model / group / "experiment_meta.json"
+            if meta_path.exists():
+                m = json.loads(meta_path.read_text())
+                row[f"{model}/{group}"] = round(m.get("image_auroc", 0.0), 4)
+            else:
+                row[f"{model}/{group}"] = "-"
+    rows.append(row)
+
+if not rows:
+    print("결과 없음")
+else:
+    cols = ["category"] + [f"{m}/{g}" for m in MODELS for g in GROUPS]
+    header = "\t".join(cols)
+    print(header)
+    print("-" * len(header))
+    for row in rows:
+        print("\t".join(str(row.get(c, "-")) for c in cols))
+```
+
+---
+
 ## 병렬 설정 가이드
 
 | 스테이지 | 외부 병렬 | 내부 병렬 | 근거 |
@@ -624,3 +754,4 @@ else:
 | Stage 4  | 카테고리 단위 순차 | `IMG_THREADS=4` (Thread) | 배경 1회 로드 + Gaussian 합성, I/O 절감 |
 | Stage 5  | `SEED_THREADS=4` | `IMG_WORKERS=-1` | I/O + CPU 혼합, seed 단위 독립 |
 | Stage 6  | `CAT_THREADS=2` | `NUM_IO_THREADS=8` | I/O-bound Drive 복사, Thread 유리 |
+| Stage 7  | 순차 (카테고리) | 없음 | GPU 단일 점유, `resume=True` 중단 재개 |
