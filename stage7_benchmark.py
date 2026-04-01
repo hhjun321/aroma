@@ -27,6 +27,21 @@ def load_config(config_path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_IMAGE_EXTENSIONS = ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff", "*.tif")
+
+
+def _glob_images(directory: Path) -> list[Path]:
+    """확장자 무관 이미지 파일 수집."""
+    images: list[Path] = []
+    for ext in _IMAGE_EXTENSIONS:
+        images.extend(directory.glob(ext))
+    return sorted(images)
+
+
+# ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 
@@ -131,16 +146,26 @@ def _train_yolo(
     model_cfg = config["models"].get("yolo11", {})
     # train_good_dir.parent.parent = augmented_dataset/{group}/
     # YOLO expects: data/train/class_a/, data/train/class_b/
-    model.train(
-        data=str(train_good_dir.parent.parent),
-        epochs=model_cfg.get("epochs", 30),
-        imgsz=config["dataset"]["image_size"],
-        batch=config["dataset"]["train_batch_size"],
-        lr0=model_cfg.get("lr", 0.01),
-        verbose=False,
-        exist_ok=True,
-        seed=seed,
-    )
+    try:
+        model.train(
+            data=str(train_good_dir.parent.parent),
+            epochs=model_cfg.get("epochs", 30),
+            imgsz=config["dataset"]["image_size"],
+            batch=config["dataset"]["train_batch_size"],
+            lr0=model_cfg.get("lr", 0.01),
+            verbose=False,
+            exist_ok=True,
+            seed=seed,
+        )
+    except TypeError:
+        # trainer.best = None (validation 개선 없음) → Path(None) → TypeError 방어
+        trainer = getattr(model, "trainer", None)
+        if trainer is not None:
+            last = getattr(trainer, "last", None)
+            if last is not None:
+                last_path = Path(str(last))
+                if last_path.exists():
+                    model.load(str(last_path))
 
 
 def _train_effdet(
@@ -222,7 +247,7 @@ def _collect_test_samples(test_dir: Path) -> tuple[list[str], list[int]]:
         if not cls_dir.is_dir():
             continue
         label = 0 if cls_dir.name == "good" else 1
-        for p in sorted(cls_dir.glob("*.png")):
+        for p in _glob_images(cls_dir):
             paths.append(str(p))
             labels.append(label)
     return paths, labels
@@ -275,7 +300,7 @@ def _yolo_feature_distance(
                 feats.append(captured["feat"])
         return torch.cat(feats)
 
-    good_paths = [str(p) for p in sorted(good_train_dir.glob("*.png"))]
+    good_paths = [str(p) for p in _glob_images(good_train_dir)]
     mean_feat = _extract(good_paths).mean(0, keepdim=True)
     test_feats = _extract(image_paths)
 
@@ -410,6 +435,14 @@ def run_benchmark(
     cat_name = Path(cat_dir).name
     out_dir = output_root / cat_name
 
+    # Stage 6 완료 여부 사전 검증
+    aug_dir = Path(cat_dir) / "augmented_dataset"
+    test_dir_check = aug_dir / "baseline" / "test"
+    if not aug_dir.exists():
+        raise FileNotFoundError(f"Stage 6 미완료 — augmented_dataset 없음: {aug_dir}")
+    if not test_dir_check.exists():
+        raise FileNotFoundError(f"Stage 6 미완료 — baseline/test 없음: {test_dir_check}")
+
     domain = Path(cat_dir).parent.name
     use_pixel = domain in config["evaluation"].get("pixel_auroc_domains", [])
 
@@ -431,6 +464,11 @@ def run_benchmark(
                 continue
 
             train_good_dir, train_defect_dir = build_train_paths(cat_dir, group)
+
+            # group 학습 데이터 존재 확인 — Stage 6 미완료 시 skip
+            if not train_good_dir.exists():
+                results[model_name][group] = None
+                continue
 
             if model_name == "yolo11":
                 model = build_yolo_model()

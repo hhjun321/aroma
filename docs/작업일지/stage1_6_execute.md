@@ -664,6 +664,10 @@ for key, entry in CONFIG.items():
     seen.add(str(cat_dir))
     if cat_dir.name in EXCLUDE:
         continue
+    # Stage 6 sentinel 확인
+    if not (cat_dir / "augmented_dataset" / "baseline" / "test").exists():
+        print(f"  ⚠ {cat_dir.name}: Stage 6 미완료 → skip")
+        continue
     out_root = Path(OUTPUT_DIR) / cat_dir.name
     if all((out_root / m / g / "experiment_meta.json").exists()
            for m in MODELS for g in GROUPS):
