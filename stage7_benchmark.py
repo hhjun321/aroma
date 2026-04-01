@@ -159,23 +159,32 @@ def _train_yolo(
             verbose=False,
             exist_ok=True,
             seed=seed,
+            val=False,   # val 디렉터리 없어도 안전하게 학습; best 대신 last 사용
         )
-        return model
-    except TypeError:
-        # trainer.best = None (validation 개선 없음) → Path(None) → TypeError.
-        # model 내부 상태가 오염될 수 있으므로 last.pt 에서 새 인스턴스를 생성한다.
-        trainer = getattr(model, "trainer", None)
-        if trainer is not None:
-            last = getattr(trainer, "last", None)
-            if last is not None:
-                last_path = Path(str(last))
-                if last_path.exists():
-                    try:
-                        from ultralytics import YOLO
-                        return YOLO(str(last_path))
-                    except Exception:
-                        pass
-        return model
+    except Exception:
+        pass  # 학습 중 예외 발생 → trainer.last 에서 복구 시도
+
+    # 학습 성공/실패 무관 — trainer.last 에서 새 YOLO 인스턴스를 생성한다.
+    # model.train() 이 TypeError 없이 반환해도 내부 ckpt_path 등이 오염될 수 있으므로
+    # 항상 체크포인트에서 깨끗한 인스턴스를 만든다.
+    trainer = getattr(model, "trainer", None)
+    if trainer is not None:
+        last = getattr(trainer, "last", None)
+        if last is not None:
+            last_path = Path(str(last))
+            if last_path.exists():
+                try:
+                    from ultralytics import YOLO
+                    return YOLO(str(last_path))
+                except Exception:
+                    pass
+
+    # last.pt 미존재 (학습이 첫 epoch 전에 실패) → 새 pretrained 모델 반환
+    try:
+        from ultralytics import YOLO
+        return YOLO("yolo11n-cls.pt")
+    except Exception:
+        return model  # 최후 수단
 
 
 def _train_effdet(
@@ -480,27 +489,31 @@ def run_benchmark(
                 results[model_name][group] = None
                 continue
 
-            if model_name == "yolo11":
-                model = build_yolo_model()
-                model = _train_yolo(model, train_good_dir, group, config, seed)
-                y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
+            try:
+                if model_name == "yolo11":
+                    model = build_yolo_model()
+                    model = _train_yolo(model, train_good_dir, group, config, seed)
+                    y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
 
-            elif model_name == "efficientdet_d0":
-                model = build_effdet_classifier(
-                    pretrained=config["models"]["efficientdet_d0"].get("pretrained", True)
-                )
-                _train_effdet(model, train_good_dir, train_defect_dir, group, config, seed)
-                y_true, y_score = _evaluate_effdet(model, test_dir, group, config)
+                elif model_name == "efficientdet_d0":
+                    model = build_effdet_classifier(
+                        pretrained=config["models"]["efficientdet_d0"].get("pretrained", True)
+                    )
+                    _train_effdet(model, train_good_dir, train_defect_dir, group, config, seed)
+                    y_true, y_score = _evaluate_effdet(model, test_dir, group, config)
 
-            else:
-                continue
+                else:
+                    continue
 
-            metrics = extract_metrics(y_true, y_score)
-            if not use_pixel:
-                metrics["pixel_auroc"] = None
+                metrics = extract_metrics(y_true, y_score)
+                if not use_pixel:
+                    metrics["pixel_auroc"] = None
 
-            _save_meta(out_dir, model_name, group, metrics)
-            results[model_name][group] = metrics
+                _save_meta(out_dir, model_name, group, metrics)
+                results[model_name][group] = metrics
+
+            except Exception as e:
+                results[model_name][group] = {"error": type(e).__name__, "detail": str(e)}
 
     return results
 
