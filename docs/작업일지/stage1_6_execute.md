@@ -613,6 +613,15 @@ else:
 
 ---
 
+## Stage 7: 환경 설치
+
+```python
+# Stage 7 최초 실행 전 1회만 실행
+!pip install -q ultralytics effdet
+```
+
+---
+
 ## Stage 7: 벤치마크
 
 **Sentinel:** `{output_dir}/{cat_name}/{model}/{group}/experiment_meta.json` (전체 model × group 완료)
