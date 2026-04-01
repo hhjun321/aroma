@@ -131,14 +131,17 @@ def _train_yolo(
     group: str,
     config: dict,
     seed: int,
-) -> None:
+) -> "YOLO":
     """YOLO11 fine-tuning.
 
     baseline: fine-tuning 없음 (pretrained 특징 거리 사용).
     aroma: train/{good,defect}/ 구조로 이진 분류 fine-tuning.
+
+    Returns:
+        학습된 YOLO 모델 (학습 실패 시 last.pt 에서 재생성, 없으면 원본 반환).
     """
     if group == "baseline":
-        return
+        return model
 
     import torch
     torch.manual_seed(seed)
@@ -157,15 +160,22 @@ def _train_yolo(
             exist_ok=True,
             seed=seed,
         )
+        return model
     except TypeError:
-        # trainer.best = None (validation 개선 없음) → Path(None) → TypeError 방어
+        # trainer.best = None (validation 개선 없음) → Path(None) → TypeError.
+        # model 내부 상태가 오염될 수 있으므로 last.pt 에서 새 인스턴스를 생성한다.
         trainer = getattr(model, "trainer", None)
         if trainer is not None:
             last = getattr(trainer, "last", None)
             if last is not None:
                 last_path = Path(str(last))
                 if last_path.exists():
-                    model.load(str(last_path))
+                    try:
+                        from ultralytics import YOLO
+                        return YOLO(str(last_path))
+                    except Exception:
+                        pass
+        return model
 
 
 def _train_effdet(
@@ -472,7 +482,7 @@ def run_benchmark(
 
             if model_name == "yolo11":
                 model = build_yolo_model()
-                _train_yolo(model, train_good_dir, group, config, seed)
+                model = _train_yolo(model, train_good_dir, group, config, seed)
                 y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
 
             elif model_name == "efficientdet_d0":
