@@ -56,8 +56,18 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    # ── Step 3: model.train() ─────────────────────────────────────────
-    print("\n[Step 3] model.train() 시작 (verbose=True 로 전체 로그 출력)")
+    # ── Step 2-b: check_cls_dataset 결과 확인 ───────────────────────────
+    print("\n[Step 2-b] check_cls_dataset 결과 확인")
+    try:
+        from ultralytics.data.utils import check_cls_dataset
+        ccd = check_cls_dataset(str(data_dir))
+        print(f"  result: {ccd}")
+    except Exception:
+        print("  check_cls_dataset 호출 실패:")
+        traceback.print_exc()
+
+    # ── Step 3: model.train() — 원래 방식 (val/ 없음) ────────────────
+    print("\n[Step 3] model.train(data=str(data_dir)) — 원래 방식")
     train_exc = None
     try:
         model.train(
@@ -66,10 +76,9 @@ def main():
             imgsz=args.imgsz,
             batch=args.batch,
             lr0=0.01,
-            verbose=True,   # 디버그용 전체 출력
+            verbose=True,
             exist_ok=True,
             seed=42,
-            val=False,
         )
         print("  model.train() 정상 완료")
     except Exception as e:
@@ -79,6 +88,43 @@ def main():
         print(f"  msg  : {e}")
         print("\n  -- 전체 traceback --")
         traceback.print_exc()
+
+    # ── Step 3-b: YAML 방식 재시도 ───────────────────────────────────
+    print("\n[Step 3-b] model.train(data=yaml) — val=train 명시 방식")
+    import tempfile, os, yaml as _yaml
+    val_exists = (data_dir / "val").exists() or (data_dir / "test").exists()
+    print(f"  val/ or test/ 존재: {val_exists}")
+    if not val_exists:
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, dir=tempfile.gettempdir())
+        _yaml.dump({"path": str(data_dir), "train": "train", "val": "train"}, tmp)
+        tmp.close()
+        yaml_path = tmp.name
+        print(f"  임시 YAML 생성: {yaml_path}")
+
+        model2 = YOLO("yolo11n-cls.pt")
+        try:
+            model2.train(
+                data=yaml_path,
+                epochs=args.epochs,
+                imgsz=args.imgsz,
+                batch=args.batch,
+                lr0=0.01,
+                verbose=True,
+                exist_ok=True,
+                seed=42,
+            )
+            print("  [3-b] model.train(yaml) 정상 완료")
+            model = model2   # 이후 단계에 사용
+            train_exc = None
+        except Exception as e:
+            train_exc = e
+            print(f"  [3-b] 예외: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        finally:
+            try:
+                os.unlink(yaml_path)
+            except Exception:
+                pass
 
     # ── Step 4: trainer 속성 확인 ─────────────────────────────────────
     print("\n[Step 4] trainer 속성 확인")

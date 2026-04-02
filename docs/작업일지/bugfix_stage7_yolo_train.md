@@ -125,10 +125,60 @@ python debug_yolo_train.py \
 
 ---
 
+---
+
+## 추가 개선: test set 공정성 보장 (CASDA 방식)
+
+### 문제
+
+기존 코드는 모든 그룹의 평가에 `baseline/test` 를 하드코딩:
+
+```python
+# 기존 — 모든 그룹이 baseline/test 를 공유 (fragile)
+test_dir = Path(cat_dir) / "augmented_dataset" / "baseline" / "test"
+```
+
+- baseline 그룹이 없으면 전체 실패
+- aroma_full / aroma_pruned 가 독립적인 test 디렉터리를 갖지 않음
+
+### CASDA 방식
+
+`prepare_benchmark_data.py::symlink_baseline_to_group()` 참조:
+
+> baseline/test → 각 그룹 디렉터리에 복사(cp 또는 symlink)
+> → 각 그룹이 동일한 test set 의 독립 복사본 보유
+
+### 적용
+
+```python
+def _ensure_test_dir(cat_dir: str, group: str) -> Path:
+    """group/test/ 없으면 baseline/test 를 shutil.copytree 로 복사."""
+    group_test = aug / group / "test"
+    if group_test.exists():
+        return group_test
+    shutil.copytree(str(baseline_test), str(group_test))
+    return group_test
+```
+
+`run_benchmark` 내부에서 그룹 루프마다 호출:
+```python
+test_dir = _ensure_test_dir(cat_dir, group)
+```
+
+### 효과
+
+| 구분 | 이전 | 이후 |
+|------|------|------|
+| test_dir 결정 | 항상 `baseline/test` 하드코딩 | 그룹별 `group/test` (없으면 자동 복사) |
+| baseline 의존성 | 항상 필요 | 최초 1회만 필요 |
+| 공정성 | 암묵적 (코드로 보장 안 됨) | 명시적 (동일 내용 복사본) |
+
+---
+
 ## 관련 파일
 
 | 파일 | 변경 |
 |------|------|
-| `stage7_benchmark.py` | `_train_yolo`, `_glob_images`, `run_benchmark` |
+| `stage7_benchmark.py` | `_train_yolo`, `_glob_images`, `_ensure_test_dir`, `run_benchmark` |
 | `debug_yolo_train.py` | 신규 — 원인 파악용 디버그 스크립트 |
-| `tests/test_stage7.py` | 테스트 mock 방식 변경 (`patch.dict sys.modules`) |
+| `tests/test_stage7.py` | 테스트 추가 (`_ensure_test_dir` 3케이스) |

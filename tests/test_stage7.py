@@ -97,6 +97,49 @@ def test_resume_runs_when_missing(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Test 2-b: _ensure_test_dir — CASDA 방식 test set 복사
+# ---------------------------------------------------------------------------
+
+def test_ensure_test_dir_already_exists(tmp_path):
+    """group/test/ 이미 존재 → 복사 없이 그대로 반환."""
+    from stage7_benchmark import _ensure_test_dir
+
+    group_test = tmp_path / "augmented_dataset" / "aroma_full" / "test"
+    group_test.mkdir(parents=True)
+    (group_test / "good").mkdir()
+
+    result = _ensure_test_dir(str(tmp_path), "aroma_full")
+    assert result == group_test
+
+
+def test_ensure_test_dir_symlink_from_baseline(tmp_path):
+    """group/test/ 없고 baseline/test 존재 → symlink 또는 복사 후 반환."""
+    from stage7_benchmark import _ensure_test_dir
+
+    baseline_test = tmp_path / "augmented_dataset" / "baseline" / "test"
+    (baseline_test / "good").mkdir(parents=True)
+    (baseline_test / "good" / "img.png").write_bytes(b"")
+
+    result = _ensure_test_dir(str(tmp_path), "aroma_full")
+
+    expected = tmp_path / "augmented_dataset" / "aroma_full" / "test"
+    assert result == expected
+    # symlink 또는 copytree 어느 쪽이든 내용 접근 가능
+    assert (result / "good" / "img.png").exists()
+
+
+def test_ensure_test_dir_raises_when_baseline_missing(tmp_path):
+    """baseline/test 없으면 FileNotFoundError."""
+    import pytest
+    from stage7_benchmark import _ensure_test_dir
+
+    (tmp_path / "augmented_dataset" / "aroma_full").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError):
+        _ensure_test_dir(str(tmp_path), "aroma_full")
+
+
+# ---------------------------------------------------------------------------
 # Test 3: metrics — image_auroc / image_f1 정상 반환
 # ---------------------------------------------------------------------------
 

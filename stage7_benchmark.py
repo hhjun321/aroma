@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,55 @@ def build_train_paths(cat_dir: str, group: str) -> tuple[Path, Optional[Path]]:
 
 def get_task_for_domain(domain: str, config: dict) -> str:
     return config["dataset"]["task_by_domain"].get(domain, "classification")
+
+
+# ---------------------------------------------------------------------------
+# Test set 관리 (CASDA 방식 — 공정한 비교)
+# ---------------------------------------------------------------------------
+
+def _ensure_test_dir(cat_dir: str, group: str) -> Path:
+    """그룹별 test 디렉터리를 반환한다.
+
+    모든 그룹이 동일한 test set을 사용해야 공정한 벤치마크가 된다.
+    CASDA 방식: baseline/test 를 각 그룹에 준비한다.
+
+    Colab/Google Drive 효율화:
+      test 데이터는 평가 시 읽기 전용이므로 물리 복사가 불필요하다.
+      디렉터리 단위 심볼릭 링크(1회 연산, 추가 스토리지 0)를 우선 시도하고,
+      실패 시에만 shutil.copytree 로 폴백한다.
+
+      shutil.copytree on Drive: O(n_files) 네트워크 I/O → 수십 분
+      os.symlink (디렉터리): O(1) → 수초
+
+    - group/test/ 이미 존재 → 그대로 반환
+    - 없으면 → symlink 시도 → 실패 시 copytree 폴백
+
+    Raises:
+        FileNotFoundError: baseline/test 도 없을 때
+    """
+    import os as _os
+
+    aug = Path(cat_dir) / "augmented_dataset"
+    group_test = aug / group / "test"
+    if group_test.exists():
+        return group_test
+
+    baseline_test = aug / "baseline" / "test"
+    if not baseline_test.exists():
+        raise FileNotFoundError(f"baseline/test 없음: {baseline_test}")
+
+    group_test.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1순위: 디렉터리 단위 심볼릭 링크 (O(1), 추가 스토리지 0)
+    try:
+        _os.symlink(baseline_test.resolve(), group_test)
+        return group_test
+    except OSError:
+        pass
+
+    # 폴백: 물리 복사 (Drive FUSE 환경에서는 느림)
+    shutil.copytree(str(baseline_test), str(group_test))
+    return group_test
 
 
 # ---------------------------------------------------------------------------
@@ -143,15 +193,32 @@ def _train_yolo(
     if group == "baseline":
         return model
 
+    import os
+    import tempfile
     import torch
     torch.manual_seed(seed)
 
+    data_dir = train_good_dir.parent.parent  # augmented_dataset/{group}/
+
+    # ultralytics ClassificationTrainer 는 val/ · test/ 디렉터리가 없으면
+    # testset = None 을 반환 → _build_train_pipeline 에서 ImageFolder(root=None)
+    # → TypeError: expected str, bytes or os.PathLike object, not NoneType.
+    # val/ 이 없을 때는 val=train 을 명시한 임시 YAML 을 /tmp 에 생성해 전달한다.
+    _yaml_path = None
+    if not (data_dir / "val").exists() and not (data_dir / "test").exists():
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, dir=tempfile.gettempdir()
+        )
+        yaml.dump({"path": str(data_dir), "train": "train", "val": "train"}, tmp)
+        tmp.close()
+        _yaml_path = tmp.name
+
+    data_arg = _yaml_path if _yaml_path else str(data_dir)
     model_cfg = config["models"].get("yolo11", {})
-    # train_good_dir.parent.parent = augmented_dataset/{group}/
-    # YOLO expects: data/train/class_a/, data/train/class_b/
+
     try:
         model.train(
-            data=str(train_good_dir.parent.parent),
+            data=data_arg,
             epochs=model_cfg.get("epochs", 30),
             imgsz=config["dataset"]["image_size"],
             batch=config["dataset"]["train_batch_size"],
@@ -159,13 +226,18 @@ def _train_yolo(
             verbose=False,
             exist_ok=True,
             seed=seed,
-            val=False,   # val 디렉터리 없어도 안전하게 학습; best 대신 last 사용
         )
     except Exception:
-        pass  # 학습 중 예외 발생 → trainer.last 에서 복구 시도
+        pass  # 학습 중 예외 → trainer.last 에서 복구 시도
+    finally:
+        if _yaml_path:
+            try:
+                os.unlink(_yaml_path)
+            except Exception:
+                pass
 
     # 학습 성공/실패 무관 — trainer.last 에서 새 YOLO 인스턴스를 생성한다.
-    # model.train() 이 TypeError 없이 반환해도 내부 ckpt_path 등이 오염될 수 있으므로
+    # model.train() 이 정상 반환해도 내부 ckpt_path 등이 오염될 수 있으므로
     # 항상 체크포인트에서 깨끗한 인스턴스를 만든다.
     trainer = getattr(model, "trainer", None)
     if trainer is not None:
@@ -179,7 +251,7 @@ def _train_yolo(
                 except Exception:
                     pass
 
-    # last.pt 미존재 (학습이 첫 epoch 전에 실패) → 새 pretrained 모델 반환
+    # last.pt 미존재 (첫 epoch 전 실패) → 새 pretrained 모델 반환
     try:
         from ultralytics import YOLO
         return YOLO("yolo11n-cls.pt")
@@ -468,7 +540,6 @@ def run_benchmark(
     all_groups = groups or list(config["dataset_groups"].keys())
     all_models = models or list(config["models"].keys())
 
-    test_dir = Path(cat_dir) / "augmented_dataset" / "baseline" / "test"
     results: dict = {}
 
     for model_name in all_models:
@@ -480,6 +551,14 @@ def run_benchmark(
                     (out_dir / model_name / group / "experiment_meta.json").read_text()
                 )
                 results[model_name][group] = meta
+                continue
+
+            # CASDA 방식: 그룹별 test 디렉터리를 보장 (없으면 baseline/test 복사)
+            # → 모든 그룹이 동일한 test set 사용 (공정한 비교)
+            try:
+                test_dir = _ensure_test_dir(cat_dir, group)
+            except FileNotFoundError as e:
+                results[model_name][group] = {"error": "FileNotFoundError", "detail": str(e)}
                 continue
 
             train_good_dir, train_defect_dir = build_train_paths(cat_dir, group)

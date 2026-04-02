@@ -622,14 +622,131 @@ else:
 
 ---
 
+## Stage 7: 데이터 구조 확인
+
+벤치마크 실행 전 각 카테고리의 augmented_dataset 구조를 점검한다.
+
+```python
+import json, yaml, sys
+from pathlib import Path
+
+sys.path.insert(0, "/content/aroma")
+
+REPO          = Path("/content/drive/MyDrive/project/aroma")
+CONFIG        = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+BENCH_CFG     = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
+DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+EXCLUDE       = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
+GROUPS        = list(BENCH_CFG["dataset_groups"].keys())
+
+seen = set()
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    cat_dir = Path(entry["seed_dir"]).parents[1]
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+
+    tag = "[EXCL]" if cat_dir.name in EXCLUDE else "     "
+    aug = cat_dir / "augmented_dataset"
+    if not aug.exists():
+        print(f"{tag} {cat_dir.name}: augmented_dataset 없음 (Stage 6 미완료)")
+        continue
+
+    group_status = []
+    for g in GROUPS:
+        gdir = aug / g
+        has_train = (gdir / "train" / "good").exists()
+        has_defect = (gdir / "train" / "defect").exists()
+        has_test = (gdir / "test").exists()
+        n_good   = len(list((gdir / "train" / "good").glob("*")))   if has_train  else 0
+        n_defect = len(list((gdir / "train" / "defect").glob("*"))) if has_defect else 0
+        n_test   = sum(len(list(d.glob("*"))) for d in (gdir / "test").iterdir()
+                       if d.is_dir()) if has_test else 0
+        group_status.append(
+            f"{g}: train(good={n_good}, defect={n_defect}) test={n_test if has_test else '(auto-symlink)'}"
+        )
+    print(f"{tag} {cat_dir.name}")
+    for s in group_status:
+        print(f"       {s}")
+```
+
+---
+
+## Stage 7: test set 준비
+
+벤치마크 실행 전 각 그룹에 test set을 준비한다.
+`baseline/test` → `aroma_full/test`, `aroma_pruned/test` symlink (실패 시 copytree 폴백).
+
+- symlink: 즉시 완료, Drive 추가 스토리지 없음
+- copytree: Drive FUSE O(n_files) — 느림 (symlink 실패 환경에서만 발생)
+
+```python
+import json, sys, yaml
+from pathlib import Path
+from tqdm.auto import tqdm
+
+sys.path.insert(0, "/content/aroma")
+from stage7_benchmark import _ensure_test_dir
+
+REPO          = Path("/content/drive/MyDrive/project/aroma")
+CONFIG        = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+BENCH_CFG     = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
+DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+EXCLUDE       = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
+
+NON_BASELINE_GROUPS = [g for g in BENCH_CFG["dataset_groups"] if g != "baseline"]
+
+seen, tasks, failed_prep = set(), [], []
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    cat_dir = Path(entry["seed_dir"]).parents[1]
+    if str(cat_dir) in seen or cat_dir.name in EXCLUDE:
+        continue
+    seen.add(str(cat_dir))
+    if not (cat_dir / "augmented_dataset" / "baseline" / "test").exists():
+        continue   # Stage 6 미완료 — 벤치마크 셀에서도 skip 됨
+    for g in NON_BASELINE_GROUPS:
+        group_test = cat_dir / "augmented_dataset" / g / "test"
+        if not group_test.exists():
+            tasks.append((cat_dir, g))
+
+if not tasks:
+    print(f"✓ {LABEL} test set 준비 완료 (모든 그룹에 이미 존재)")
+else:
+    print(f"{LABEL}: {len(tasks)}개 그룹 test set 준비")
+    for cat_dir, group in tqdm(tasks, desc=f"test set 준비 {LABEL}"):
+        try:
+            result = _ensure_test_dir(str(cat_dir), group)
+            method = "symlink" if result.is_symlink() else "copy"
+            print(f"  ✓ {cat_dir.name}/{group}/test [{method}]")
+        except Exception as e:
+            failed_prep.append(f"{cat_dir.name}/{group}: {e}")
+            print(f"  ✗ {cat_dir.name}/{group}: {e}")
+
+    if failed_prep:
+        print(f"\n✗ {len(failed_prep)}건 실패")
+    else:
+        print(f"\n✓ {LABEL} test set 준비 완료")
+```
+
+---
+
 ## Stage 7: 벤치마크
 
-**Sentinel:** `{output_dir}/{cat_name}/{model}/{group}/experiment_meta.json` (전체 model × group 완료)
+**Sentinel:** `{output_dir}/{cat_name}/{model}/{group}/experiment_meta.json`
 **병렬:** GPU 점유 → 카테고리 순차 처리 (`resume=True` 로 중단 재개 가능)
 
-> **모델 구성:** `draem` (700 epoch, GPU 집약) · `efficientnet_b4` · `resnet50` (각 30 epoch)
-> **그룹 구성:** `baseline` · `aroma_full` · `aroma_pruned`
-> **전제 조건:** Stage 6 완료 (`augmented_dataset/` 존재)
+> **모델 구성:** `yolo11` (YOLO11n-cls, 30 epoch) · `efficientdet_d0` (EfficientDet-D0, 30 epoch)
+> **그룹 구성:** `baseline` (pretrained cosine 거리) · `aroma_full` · `aroma_pruned` (fine-tuning)
+> **전제 조건:** Stage 6 완료 (`augmented_dataset/baseline/test` 존재)
+>
+> **자동 처리:**
+> - `aroma_full/test`, `aroma_pruned/test` 없으면 `baseline/test` symlink 자동 생성
+> - YOLO 학습 시 `val/` 없으면 임시 YAML(`val=train`) 자동 생성 후 삭제
 
 ```python
 import json, sys, yaml
@@ -664,9 +781,9 @@ for key, entry in CONFIG.items():
     seen.add(str(cat_dir))
     if cat_dir.name in EXCLUDE:
         continue
-    # Stage 6 sentinel 확인
+    # Stage 6 sentinel: baseline/test 없으면 미완료
     if not (cat_dir / "augmented_dataset" / "baseline" / "test").exists():
-        print(f"  ⚠ {cat_dir.name}: Stage 6 미완료 → skip")
+        print(f"  ⚠ {cat_dir.name}: Stage 6 미완료 (baseline/test 없음) → skip")
         continue
     out_root = Path(OUTPUT_DIR) / cat_dir.name
     if all((out_root / m / g / "experiment_meta.json").exists()
@@ -685,12 +802,21 @@ else:
 
     for cat_dir in tqdm(all_cats, desc=f"Stage7 {LABEL}"):
         try:
-            run_benchmark(
+            results = run_benchmark(
                 config_path = CONFIG_PATH,
                 cat_dir     = str(cat_dir),
                 resume      = True,
                 output_dir  = OUTPUT_DIR,
             )
+            # model+group 단위 내부 오류 확인
+            for model_name, group_results in results.items():
+                for group, val in group_results.items():
+                    if isinstance(val, dict) and "error" in val:
+                        failed.append({
+                            "category": cat_dir.name,
+                            "error": f"{model_name}/{group}: {val['detail'][:80]}",
+                            "type": val["error"],
+                        })
         except Exception as e:
             failed.append({"category": cat_dir.name,
                            "error": str(e), "type": type(e).__name__})
@@ -738,7 +864,10 @@ for cat_dir in sorted(OUTPUT_DIR.iterdir()):
             meta_path = cat_dir / model / group / "experiment_meta.json"
             if meta_path.exists():
                 m = json.loads(meta_path.read_text())
-                row[f"{model}/{group}"] = round(m.get("image_auroc", 0.0), 4)
+                if "error" in m:
+                    row[f"{model}/{group}"] = f"ERR:{m['error']}"
+                else:
+                    row[f"{model}/{group}"] = round(m.get("image_auroc", 0.0), 4)
             else:
                 row[f"{model}/{group}"] = "-"
     rows.append(row)
