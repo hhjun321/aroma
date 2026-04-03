@@ -206,10 +206,13 @@ def _train_yolo(
     # val/ 이 없을 때는 val=train 을 명시한 임시 YAML 을 /tmp 에 생성해 전달한다.
     _yaml_path = None
     if not (data_dir / "val").exists() and not (data_dir / "test").exists():
+        # path: 키 없이 절대 경로로 지정 → ultralytics가 부모 디렉터리를 스캔해
+        # test/ (2클래스)를 val로 잡는 문제 방지.
+        train_abs = str((data_dir / "train").resolve())
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", delete=False, dir=tempfile.gettempdir()
         )
-        yaml.dump({"path": str(data_dir), "train": "train", "val": "train"}, tmp)
+        yaml.dump({"train": train_abs, "val": train_abs}, tmp)
         tmp.close()
         _yaml_path = tmp.name
 
@@ -553,14 +556,6 @@ def run_benchmark(
                 results[model_name][group] = meta
                 continue
 
-            # CASDA 방식: 그룹별 test 디렉터리를 보장 (없으면 baseline/test 복사)
-            # → 모든 그룹이 동일한 test set 사용 (공정한 비교)
-            try:
-                test_dir = _ensure_test_dir(cat_dir, group)
-            except FileNotFoundError as e:
-                results[model_name][group] = {"error": "FileNotFoundError", "detail": str(e)}
-                continue
-
             train_good_dir, train_defect_dir = build_train_paths(cat_dir, group)
 
             # group 학습 데이터 존재 확인 — Stage 6 미완료 시 skip
@@ -572,6 +567,9 @@ def run_benchmark(
                 if model_name == "yolo11":
                     model = build_yolo_model()
                     model = _train_yolo(model, train_good_dir, group, config, seed)
+                    # CASDA 방식: 학습 완료 후 test 디렉터리 준비 (학습 전 준비 시
+                    # ultralytics가 test/ 를 val로 오인하는 문제 방지)
+                    test_dir = _ensure_test_dir(cat_dir, group)
                     y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
 
                 elif model_name == "efficientdet_d0":
@@ -579,6 +577,7 @@ def run_benchmark(
                         pretrained=config["models"]["efficientdet_d0"].get("pretrained", True)
                     )
                     _train_effdet(model, train_good_dir, train_defect_dir, group, config, seed)
+                    test_dir = _ensure_test_dir(cat_dir, group)
                     y_true, y_score = _evaluate_effdet(model, test_dir, group, config)
 
                 else:

@@ -175,6 +175,50 @@ test_dir = _ensure_test_dir(cat_dir, group)
 
 ---
 
+---
+
+## 2차 버그: val 클래스 수 불일치 (1 vs 2)
+
+**증상**
+```
+train: .../aroma_full/train... found 3678 images in 1 classes ✅
+ERROR ❌ val: .../aroma_full/test... found 1519 images in 2 classes (requires 1 classes, not 2)
+```
+
+**원인**
+
+`_ensure_test_dir` 가 학습 전에 `aroma_full/test` 심볼릭 링크를 생성 →
+YAML `{"path": str(data_dir), "train": "train", "val": "train"}` 의 `path:` 키로 인해
+ultralytics 가 `aroma_full/` 전체를 스캔 → `test/` (good + area, 2클래스) 를 발견 →
+`val: train` 을 무시하고 `test/` 를 val 로 사용 → train(1클래스)과 불일치 → 오류
+
+**수정**
+
+1. **YAML에서 `path:` 키 제거, 절대 경로 직접 지정** (`_train_yolo`):
+
+```python
+# 수정 전 (문제): path: 키로 부모 디렉터리 스캔 유발
+yaml.dump({"path": str(data_dir), "train": "train", "val": "train"}, tmp)
+
+# 수정 후: 절대 경로로 지정, path: 키 없음 → 부모 스캔 없음
+train_abs = str((data_dir / "train").resolve())
+yaml.dump({"train": train_abs, "val": train_abs}, tmp)
+```
+
+2. **`_ensure_test_dir` 호출을 학습 완료 후로 이동** (`run_benchmark`):
+
+```python
+# 수정 전: 학습 전 test 심볼릭 링크 생성
+test_dir = _ensure_test_dir(cat_dir, group)  # ← 학습 전
+model = _train_yolo(...)
+
+# 수정 후: 학습 완료 후 test 준비
+model = _train_yolo(...)
+test_dir = _ensure_test_dir(cat_dir, group)  # ← 학습 후
+```
+
+---
+
 ## 관련 파일
 
 | 파일 | 변경 |
