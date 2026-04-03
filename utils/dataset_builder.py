@@ -183,10 +183,16 @@ def build_dataset_groups(
                  num_workers, desc="aroma_full/train/good")
 
     full_defect_pairs = _collect_defect_paths(cat_dir, pruning_threshold=None)
-    if not full_defect_pairs and not stage4_dir.exists():
+    if not full_defect_pairs:
+        # CASDA validate_yolo_dataset 패턴 — 학습 전 데이터 무결성 사전 검증
+        detail = (
+            "stage4_output 미존재"
+            if not stage4_dir.exists()
+            else "stage4_output 존재하나 defect 이미지 0건 — "
+                 "quality_scores.json 누락 또는 Stage 4 미완료 가능성"
+        )
         warnings.warn(
-            f"stage4_output 없음 — Stage 4 미실행으로 aroma_* defect 이미지가 0건입니다: "
-            f"{cat_dir}",
+            f"aroma_* defect 이미지 0건 ({detail}): {cat_dir}",
             stacklevel=2,
         )
     if full_defect_pairs:

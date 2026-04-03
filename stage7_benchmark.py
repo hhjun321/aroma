@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -203,20 +204,23 @@ def _train_yolo(
     # ultralytics ClassificationTrainer 는 val/ · test/ 디렉터리가 없으면
     # testset = None 을 반환 → _build_train_pipeline 에서 ImageFolder(root=None)
     # → TypeError: expected str, bytes or os.PathLike object, not NoneType.
-    # val/ 이 없을 때는 val=train 을 명시한 임시 YAML 을 /tmp 에 생성해 전달한다.
-    _yaml_path = None
-    if not (data_dir / "val").exists() and not (data_dir / "test").exists():
-        # path: 키 없이 절대 경로로 지정 → ultralytics가 부모 디렉터리를 스캔해
-        # test/ (2클래스)를 val로 잡는 문제 방지.
-        train_abs = str((data_dir / "train").resolve())
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, dir=tempfile.gettempdir()
-        )
-        yaml.dump({"train": train_abs, "val": train_abs}, tmp)
-        tmp.close()
-        _yaml_path = tmp.name
+    #
+    # 또한, test/ 심볼릭 링크가 이전 실행에서 남아있으면 ultralytics 가
+    # test/(2클래스)를 val로 사용 → 모델(2클래스) vs test(2클래스) 불일치 없이
+    # 동작하지만, val split 에서 good 샘플만 skip 되어 무의미한 검증이 됨.
+    #
+    # CASDA prepare_yolo_dataset 패턴 참조:
+    # 항상 명시적 YAML 을 생성하여 val=train 으로 지정, ultralytics 의
+    # 자동 디렉터리 탐색을 우회한다.
+    train_abs = str((data_dir / "train").resolve())
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, dir=tempfile.gettempdir()
+    )
+    yaml.dump({"train": train_abs, "val": train_abs}, tmp)
+    tmp.close()
+    _yaml_path = tmp.name
 
-    data_arg = _yaml_path if _yaml_path else str(data_dir)
+    data_arg = _yaml_path
     model_cfg = config["models"].get("yolo11", {})
 
     try:
@@ -563,12 +567,34 @@ def run_benchmark(
                 results[model_name][group] = None
                 continue
 
+            # aroma 그룹: defect 이미지 0건이면 skip (CASDA validate 패턴)
+            # nc=1 학습 (loss=0, acc=100%) + test 2클래스 불일치 방지
+            if group != "baseline":
+                _has_defect = (
+                    train_defect_dir is not None
+                    and train_defect_dir.exists()
+                    and any(train_defect_dir.iterdir())
+                )
+                if not _has_defect:
+                    warnings.warn(
+                        f"[{model_name}/{group}] defect 이미지 0건 → skip "
+                        f"(Stage 4/6 결과 확인 필요: {cat_dir})"
+                    )
+                    results[model_name][group] = {
+                        "error": "NoDefectImages",
+                        "detail": f"train/defect/ 비어있거나 없음: {train_defect_dir}",
+                    }
+                    continue
+
             try:
                 if model_name == "yolo11":
                     model = build_yolo_model()
                     model = _train_yolo(model, train_good_dir, group, config, seed)
-                    # CASDA 방식: 학습 완료 후 test 디렉터리 준비 (학습 전 준비 시
-                    # ultralytics가 test/ 를 val로 오인하는 문제 방지)
+                    # ── 평가용 test 디렉터리: 반드시 학습 완료 후 준비 ──
+                    # _train_yolo 가 항상 val=train YAML 을 사용하므로 test/ 존재
+                    # 여부와 무관하게 안전하지만, 불필요한 파일 노출을 줄이기 위해
+                    # 학습 후에만 test/ 심볼릭 링크를 생성한다.
+                    # (CASDA: inject → train → clean 순서 패턴 참조)
                     test_dir = _ensure_test_dir(cat_dir, group)
                     y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
 
@@ -577,6 +603,8 @@ def run_benchmark(
                         pretrained=config["models"]["efficientdet_d0"].get("pretrained", True)
                     )
                     _train_effdet(model, train_good_dir, train_defect_dir, group, config, seed)
+                    # EfficientDet 은 PyTorch ImageFolder 로 학습하므로 test/ 의
+                    # 존재 여부가 학습에 영향을 주지 않지만, 동일한 타이밍 규칙 적용.
                     test_dir = _ensure_test_dir(cat_dir, group)
                     y_true, y_score = _evaluate_effdet(model, test_dir, group, config)
 
