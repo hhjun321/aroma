@@ -541,6 +541,18 @@ def run_benchmark(
     if not test_dir_check.exists():
         raise FileNotFoundError(f"Stage 6 미완료 — baseline/test 없음: {test_dir_check}")
 
+    # build_report.json 기반 사전 검증 (Stage 6에서 기록한 stage4_status 활용)
+    build_report_path = aug_dir / "build_report.json"
+    build_report = None
+    if build_report_path.exists():
+        build_report = json.loads(build_report_path.read_text())
+        stage4_status = build_report.get("stage4_status", "unknown")
+        if stage4_status in ("incomplete", "not_started"):
+            warnings.warn(
+                f"build_report.json stage4_status={stage4_status!r} — "
+                f"aroma 그룹 학습이 skip될 수 있음: {cat_dir}"
+            )
+
     domain = Path(cat_dir).parent.name
     use_pixel = domain in config["evaluation"].get("pixel_auroc_domains", [])
 

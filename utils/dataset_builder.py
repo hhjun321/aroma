@@ -82,6 +82,34 @@ def _collect_defect_paths(
     return result
 
 
+def _check_stage4_status(cat_dir: str) -> tuple[str, int, int]:
+    """stage4_output 의 완료 상태를 점검한다.
+
+    Returns:
+        (status, n_total_seeds, n_seeds_with_defects)
+        status: "not_started" | "incomplete" | "partial" | "complete"
+    """
+    stage4_dir = Path(cat_dir) / "stage4_output"
+    if not stage4_dir.exists():
+        return ("not_started", 0, 0)
+
+    seed_dirs = [d for d in sorted(stage4_dir.iterdir()) if d.is_dir()]
+    n_total = len(seed_dirs)
+    if n_total == 0:
+        return ("not_started", 0, 0)
+
+    n_with_defects = sum(
+        1 for d in seed_dirs
+        if (d / "defect").is_dir() and any((d / "defect").glob("*.png"))
+    )
+
+    if n_with_defects == 0:
+        return ("incomplete", n_total, 0)
+    if n_with_defects < n_total:
+        return ("partial", n_total, n_with_defects)
+    return ("complete", n_total, n_with_defects)
+
+
 def _copy_images(src_dir: Path, dst_dir: Path, num_workers: int,
                  desc: str = "") -> int:
     """src_dir 아래 PNG/JPG 전체를 dst_dir 로 복사. 복사 파일 수 반환.
@@ -154,6 +182,17 @@ def build_dataset_groups(
     from concurrent.futures import ThreadPoolExecutor
     from utils.parallel import resolve_workers
     num_workers = resolve_workers(workers)
+
+    # ── Stage 4 완료 전제 조건 검증 ────────────────────────────────────────
+    stage4_status, stage4_seeds_total, stage4_seeds_with_defects = (
+        _check_stage4_status(cat_dir)
+    )
+    if stage4_status == "incomplete":
+        warnings.warn(
+            f"Stage 4 미완료 — stage4_output/{stage4_seeds_total}개 seed 중 "
+            f"defect 이미지 보유 0건: {cat_dir}",
+            stacklevel=2,
+        )
 
     # ── baseline/train/good/ ───────────────────────────────────────────────
     baseline_good = aug_dir / "baseline" / "train" / "good"
@@ -228,6 +267,9 @@ def build_dataset_groups(
 
     report = {
         "pruning_threshold": pruning_threshold,
+        "stage4_status": stage4_status,
+        "stage4_seeds_total": stage4_seeds_total,
+        "stage4_seeds_with_defects": stage4_seeds_with_defects,
         "baseline":     {"good_count": good_count, "defect_count": 0},
         "aroma_full":   {"good_count": good_count,
                          "defect_count": len(full_defect_pairs)},

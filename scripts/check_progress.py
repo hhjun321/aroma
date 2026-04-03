@@ -116,8 +116,25 @@ def check_category(cat_key: str, entry: dict, base: str | None) -> dict:
         "missing": missing_5,
     }
 
-    # ── Stage 6: build_report.json ────────────────────────────────────────
-    stages["6"] = {"ok": (cat / "augmented_dataset" / "build_report.json").exists()}
+    # ── Stage 6: build_report.json + defect_count > 0 검증 ─────────────────
+    build_report_path = cat / "augmented_dataset" / "build_report.json"
+    stage6_ok = False
+    stage6_info: dict = {"ok": False}
+    if build_report_path.exists():
+        try:
+            report = json.loads(build_report_path.read_text())
+            defect_count = report.get("aroma_full", {}).get("defect_count", 0)
+            stage4_status = report.get("stage4_status", "unknown")
+            # build_report 존재 + defect_count > 0 이어야 Stage 6 완료로 간주
+            stage6_ok = defect_count > 0
+            stage6_info = {
+                "ok": stage6_ok,
+                "defect_count": defect_count,
+                "stage4_status": stage4_status,
+            }
+        except (json.JSONDecodeError, KeyError):
+            stage6_info = {"ok": False, "error": "build_report.json 파싱 실패"}
+    stages["6"] = stage6_info
 
     return {
         "domain": entry["domain"],
@@ -175,6 +192,11 @@ def print_report(results: list[dict], verbose: bool = False) -> None:
                         excess = len(info["missing"]) - 5
                         if excess > 0:
                             print(f"      [S{stg}] ... 외 {excess}건")
+                    if not info["ok"] and stg == "6":
+                        s4s = info.get("stage4_status", "")
+                        dc = info.get("defect_count", "")
+                        if s4s or dc != "":
+                            print(f"      [S6] stage4_status={s4s}, defect_count={dc}")
 
     print(f"\n{'='*62}")
     print(f"  완료: {total_ok}/{len(results)} categories")

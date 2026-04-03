@@ -297,3 +297,179 @@ def test_yolo_aroma_calls_train():
         _train_yolo(mock_model, Path("/fake/aug/aroma_full/train/good"),
                     group="aroma_full", config=cfg, seed=42)
     mock_model.train.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 10: defect 이미지 0건 → skip + error 결과 반환
+# ---------------------------------------------------------------------------
+
+def _make_minimal_config(tmp_path):
+    """run_benchmark 에 필요한 최소 config + 디렉터리 구조 생성."""
+    cfg = {
+        "experiment": {"name": "test", "seed": 42, "output_dir": str(tmp_path / "out")},
+        "dataset": {
+            "image_size": 256,
+            "train_batch_size": 32,
+            "eval_batch_size": 32,
+            "num_workers": 0,
+            "pruning_threshold": 0.6,
+            "task_by_domain": {"isp": "classification"},
+        },
+        "dataset_groups": {
+            "baseline": {"description": "baseline"},
+            "aroma_full": {"description": "full"},
+        },
+        "models": {
+            "yolo11": {"model": "yolo11n-cls.pt", "epochs": 1, "lr": 0.01},
+        },
+        "evaluation": {
+            "metrics": ["image_auroc", "image_f1", "pixel_auroc"],
+            "pixel_auroc_domains": ["mvtec"],
+        },
+    }
+    return cfg
+
+
+def test_skip_when_no_defect_images(tmp_path):
+    """aroma 그룹에서 defect/ 미존재 시 NoDefectImages 로 skip."""
+    from stage7_benchmark import run_benchmark
+
+    cfg = _make_minimal_config(tmp_path)
+    cfg_path = tmp_path / "cfg.yaml"
+    import yaml as _yaml
+    cfg_path.write_text(_yaml.dump(cfg))
+
+    # 카테고리 디렉터리 구성: good만 있고 defect 없음
+    cat_dir = tmp_path / "isp" / "LSM_1"
+    aug = cat_dir / "augmented_dataset"
+    (aug / "baseline" / "train" / "good").mkdir(parents=True)
+    (aug / "baseline" / "test" / "good").mkdir(parents=True)
+    (aug / "aroma_full" / "train" / "good").mkdir(parents=True)
+    # defect/ 없음 → NoDefectImages 기대
+
+    results = run_benchmark(
+        config_path=str(cfg_path),
+        cat_dir=str(cat_dir),
+        groups=["aroma_full"],
+        models=["yolo11"],
+        resume=False,
+    )
+
+    assert "yolo11" in results
+    aroma_result = results["yolo11"]["aroma_full"]
+    assert aroma_result is not None
+    assert aroma_result["error"] == "NoDefectImages"
+
+
+def test_skip_when_defect_dir_empty(tmp_path):
+    """aroma 그룹에서 defect/ 존재하나 비어있으면 NoDefectImages 로 skip."""
+    from stage7_benchmark import run_benchmark
+
+    cfg = _make_minimal_config(tmp_path)
+    cfg_path = tmp_path / "cfg.yaml"
+    import yaml as _yaml
+    cfg_path.write_text(_yaml.dump(cfg))
+
+    cat_dir = tmp_path / "isp" / "LSM_1"
+    aug = cat_dir / "augmented_dataset"
+    (aug / "baseline" / "train" / "good").mkdir(parents=True)
+    (aug / "baseline" / "test" / "good").mkdir(parents=True)
+    (aug / "aroma_full" / "train" / "good").mkdir(parents=True)
+    (aug / "aroma_full" / "train" / "defect").mkdir(parents=True)
+    # defect/ 존재하지만 비어있음
+
+    results = run_benchmark(
+        config_path=str(cfg_path),
+        cat_dir=str(cat_dir),
+        groups=["aroma_full"],
+        models=["yolo11"],
+        resume=False,
+    )
+
+    aroma_result = results["yolo11"]["aroma_full"]
+    assert aroma_result["error"] == "NoDefectImages"
+
+
+# ---------------------------------------------------------------------------
+# Test 11: _train_yolo 항상 임시 YAML 생성 (test/ 존재 여부 무관)
+# ---------------------------------------------------------------------------
+
+def test_yolo_always_creates_yaml(tmp_path):
+    """test/ 디렉터리가 존재하더라도 _train_yolo 는 val=train YAML 을 생성해야 한다."""
+    from stage7_benchmark import _train_yolo
+
+    # augmented_dataset/{group}/ 구조 구성
+    data_dir = tmp_path / "augmented_dataset" / "aroma_full"
+    train_dir = data_dir / "train"
+    (train_dir / "good").mkdir(parents=True)
+    (train_dir / "defect").mkdir(parents=True)
+    # 이전 실행에서 남은 test/ 심볼릭 링크 시뮬레이션
+    (data_dir / "test" / "good").mkdir(parents=True)
+
+    mock_model = MagicMock()
+    cfg = {"models": {"yolo11": {"epochs": 1, "lr": 0.01}},
+           "dataset": {"image_size": 256, "train_batch_size": 8}}
+
+    with patch.dict("sys.modules", {"torch": MagicMock()}):
+        _train_yolo(mock_model, train_dir / "good",
+                    group="aroma_full", config=cfg, seed=42)
+
+    # model.train 호출 시 data 인자가 .yaml 파일 경로여야 함
+    mock_model.train.assert_called_once()
+    call_kwargs = mock_model.train.call_args
+    data_arg = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
+    assert data_arg is not None
+    assert data_arg.endswith(".yaml"), (
+        f"data 인자가 YAML 파일이어야 함 (test/ 존재 시에도), got: {data_arg}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 12: build_report.json stage4_status="incomplete" + defect_count=0 경고
+# ---------------------------------------------------------------------------
+
+def test_build_report_stage4_incomplete_warning(tmp_path):
+    """build_report.json 에 stage4_status='incomplete' 이고 defect_count=0 이면
+    (1) stage4_status 관련 UserWarning 발생,
+    (2) aroma_full 결과에 error='NoDefectImages' 반환."""
+    import yaml as _yaml
+    from stage7_benchmark import run_benchmark
+
+    cfg = _make_minimal_config(tmp_path)
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(_yaml.dump(cfg))
+
+    # 카테고리 디렉터리 구성
+    cat_dir = tmp_path / "isp" / "LSM_1"
+    aug = cat_dir / "augmented_dataset"
+
+    # Stage 6 사전 검증을 통과하기 위한 최소 구조
+    (aug / "baseline" / "test" / "good").mkdir(parents=True)
+
+    # aroma_full: good 만 존재, defect 없음
+    good_dir = aug / "aroma_full" / "train" / "good"
+    good_dir.mkdir(parents=True)
+    (good_dir / "img_001.png").write_bytes(b"\x89PNG dummy")
+    (good_dir / "img_002.png").write_bytes(b"\x89PNG dummy")
+
+    # build_report.json — stage4 미완료, defect_count=0
+    build_report = {
+        "stage4_status": "incomplete",
+        "aroma_full": {"defect_count": 0},
+    }
+    (aug / "build_report.json").write_text(json.dumps(build_report))
+
+    # 실행 + 경고 캡처
+    with pytest.warns(UserWarning, match="stage4_status"):
+        results = run_benchmark(
+            config_path=str(cfg_path),
+            cat_dir=str(cat_dir),
+            groups=["aroma_full"],
+            models=["yolo11"],
+            resume=False,
+        )
+
+    # aroma_full 결과: defect 이미지 없으므로 NoDefectImages
+    aroma_result = results["yolo11"]["aroma_full"]
+    assert aroma_result is not None
+    assert aroma_result["error"] == "NoDefectImages"

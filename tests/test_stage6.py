@@ -221,3 +221,64 @@ def test_skip_not_applied_when_cached_defect_zero_and_stage4_now_exists(tmp_path
                                    pruning_threshold=0.6)
     assert result["aroma_full"]["defect_count"] == 2, \
         "stage4 완료 후 재실행 시 defect_count 가 갱신돼야 함"
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 precondition warning & stage4_status tests
+# ---------------------------------------------------------------------------
+
+def test_stage4_incomplete_emits_warning(tmp_path):
+    """stage4_output에 seed 디렉터리만 있고 defect/ 하위 폴더가 없으면
+    'Stage 4 미완료' UserWarning 과 stage4_status == 'incomplete'."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=2)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+
+    # seed 디렉터리만 생성, defect/ 서브디렉터리 없음
+    for name in ("seed_001", "seed_002", "seed_003"):
+        (tmp_path / "stage4_output" / name).mkdir(parents=True, exist_ok=True)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        result = build_dataset_groups(str(tmp_path), str(image_dir), seed_dirs)
+
+        assert any(
+            issubclass(warning.category, UserWarning)
+            and "Stage 4 미완료" in str(warning.message)
+            for warning in w
+        ), f"Expected 'Stage 4 미완료' warning, got: {[str(x.message) for x in w]}"
+
+    assert result["stage4_status"] == "incomplete"
+
+
+def test_stage4_status_complete_in_report(tmp_path):
+    """모든 seed에 defect 이미지가 있으면 stage4_status == 'complete'."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=2)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+
+    _make_stage4_seed(tmp_path, "seed_001", ["000", "001"])
+    _make_stage4_seed(tmp_path, "seed_002", ["000"])
+
+    result = build_dataset_groups(str(tmp_path), str(image_dir), seed_dirs)
+
+    assert result["stage4_status"] == "complete"
+    assert result["stage4_seeds_with_defects"] > 0
+
+
+def test_stage4_status_partial_in_report(tmp_path):
+    """일부 seed만 defect 이미지를 보유하면 stage4_status == 'partial'."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=2)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+
+    # seed_001: defect 이미지 있음
+    _make_stage4_seed(tmp_path, "seed_001", ["000"])
+    # seed_002: 디렉터리만 존재, defect 없음
+    (tmp_path / "stage4_output" / "seed_002").mkdir(parents=True, exist_ok=True)
+
+    result = build_dataset_groups(str(tmp_path), str(image_dir), seed_dirs)
+
+    assert result["stage4_status"] == "partial"
+    assert result["stage4_seeds_total"] == 2
+    assert result["stage4_seeds_with_defects"] == 1
