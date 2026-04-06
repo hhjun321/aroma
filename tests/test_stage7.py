@@ -473,3 +473,40 @@ def test_build_report_stage4_incomplete_warning(tmp_path):
     aroma_result = results["yolo11"]["aroma_full"]
     assert aroma_result is not None
     assert aroma_result["error"] == "NoDefectImages"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: EfficientDet baseline good_loader — config eval_batch_size 사용
+# ---------------------------------------------------------------------------
+
+def test_effdet_baseline_good_loader_uses_config_batch_size():
+    """_eval_effdet 의 baseline good_loader 가 하드코딩 32 대신
+    config['dataset']['eval_batch_size'] 를 사용하는지 확인."""
+    import ast
+    from pathlib import Path
+
+    source = Path("stage7_benchmark.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    # _eval_effdet 함수 내의 DataLoader 호출을 모두 찾는다
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            # DataLoader(...) 호출 확인
+            func_name = None
+            if isinstance(func, ast.Name):
+                func_name = func.id
+            elif isinstance(func, ast.Attribute):
+                func_name = func.attr
+            if func_name != "DataLoader":
+                continue
+
+            # batch_size 키워드 인자 확인
+            for kw in node.keywords:
+                if kw.arg == "batch_size":
+                    # 하드코딩된 숫자가 아닌지 확인
+                    assert not isinstance(kw.value, ast.Constant), (
+                        f"stage7_benchmark.py:{node.lineno} — "
+                        f"DataLoader batch_size 가 하드코딩됨 ({kw.value.value}). "
+                        f"config['dataset']['eval_batch_size'] 를 사용해야 함."
+                    )

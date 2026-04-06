@@ -6,7 +6,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from utils.io import load_json, save_json
+from utils.io import load_json, save_json, validate_dir, validate_file
 from utils.suitability import SuitabilityEvaluator
 
 
@@ -153,6 +153,16 @@ def run_layout_logic(
         workers:         Number of parallel workers (0=sequential, -1=auto, N>=2=N processes).
         use_gpu:         Use GPU-accelerated batch scoring (requires PyTorch).
     """
+    # ── 전제조건 검증 ──────────────────────────────────────────────────────
+    validate_file(roi_metadata, name="Stage 1 roi_metadata.json")
+    validate_dir(defect_seeds_dir, name="Stage 2 defect_seeds_dir")
+    if not any(Path(defect_seeds_dir).glob("*.png")):
+        raise FileNotFoundError(
+            f"Stage 2 defect_seeds_dir contains no PNG files: {defect_seeds_dir}"
+        )
+    if seed_profile is not None:
+        validate_file(seed_profile, name="Stage 1b seed_profile.json")
+
     from utils.parallel import resolve_workers, run_parallel
 
     out_path = Path(output_dir)

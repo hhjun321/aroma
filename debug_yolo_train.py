@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--group", default="aroma_full",
                         choices=["baseline", "aroma_full", "aroma_pruned"])
     parser.add_argument("--epochs", type=int, default=2, help="빠른 확인용 소수 epoch")
-    parser.add_argument("--imgsz", type=int, default=256)
+    parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--batch", type=int, default=8)
     args = parser.parse_args()
 

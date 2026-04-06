@@ -31,6 +31,84 @@ print_report(results)
 
 ---
 
+## Stage 0: 이미지 리사이즈 (512×512)
+
+**Sentinel:** `{cat_dir}/.stage0_resize_512_done`
+**병렬:** 카테고리 단위 `ThreadPoolExecutor`
+
+```python
+import json, sys
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm.auto import tqdm
+
+sys.path.insert(0, "/content/aroma")
+from stage0_resize import resize_category, clean_category
+
+REPO   = Path("/content/drive/MyDrive/project/aroma")
+CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+
+DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+TARGET_SIZE = 512
+CLEAN_FIRST = True  # True: stage1~6 출력물 먼저 삭제
+
+# 병렬 설정
+CAT_THREADS = 4   # I/O bound — 높게 설정 가능
+
+# 처리 대상 수집
+cat_tasks, skip = [], 0
+seen = set()
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    cat_dir = Path(entry["seed_dir"]).parents[1]
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+    sentinel = cat_dir / f".stage0_resize_{TARGET_SIZE}_done"
+    if sentinel.exists():
+        skip += 1
+    else:
+        cat_tasks.append((key, entry))
+
+if not cat_tasks:
+    print(f"✓ {LABEL} Stage 0 모든 작업 완료 (skip {skip}건)")
+else:
+    print(f"{LABEL}: {len(cat_tasks)} categories 처리 예정 (skip {skip}건)")
+    failed = []
+
+    # Clean (optional)
+    if CLEAN_FIRST:
+        for key, entry in cat_tasks:
+            deleted = clean_category(entry)
+            if deleted:
+                print(f"  🗑 {key}: {len(deleted)} items deleted")
+
+    # Resize
+    def _do(args):
+        key, entry = args
+        return key, resize_category(entry, target_size=TARGET_SIZE)
+
+    with ThreadPoolExecutor(max_workers=CAT_THREADS) as ex:
+        futs = {ex.submit(_do, t): t[0] for t in cat_tasks}
+        for fut in tqdm(as_completed(futs), total=len(futs), desc="Stage 0"):
+            key = futs[fut]
+            try:
+                _, result = fut.result()
+                print(f"  ✓ {key}: resized={result['resized']} skip={result['skipped']}")
+            except Exception as e:
+                print(f"  ✗ {key}: {e}")
+                failed.append(key)
+
+    if failed:
+        print(f"\n⚠ Failed: {failed}")
+    else:
+        print(f"\n✓ {LABEL} Stage 0 완료")
+```
+
+---
+
 ## Stage 1: ROI 추출
 
 **Sentinel:** `{cat_dir}/stage1_output/roi_metadata.json`
@@ -269,20 +347,17 @@ else:
 
 ```python
 import json, sys
-import numpy as np
 from pathlib import Path
 from tqdm.auto import tqdm
 
 sys.path.insert(0, "/content/aroma")
-from utils.suitability import GPUSuitabilityEvaluator
+from stage3_layout_logic import run_layout_logic
 
 REPO   = Path("/content/drive/MyDrive/project/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
 LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
-
-evaluator = GPUSuitabilityEvaluator()  # GPU 공유 인스턴스 (순차 처리)
 
 ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
@@ -299,7 +374,7 @@ for key, entry in ENTRIES:
         if (cat_dir / "stage3_output" / d.name / "placement_map.json").exists():
             skip += 1
         else:
-            all_seeds.append((cat_dir, d.name))
+            all_seeds.append((cat_dir, d.name, entry))
 
 if not all_seeds:
     print(f"✓ {LABEL} 모든 작업 완료")
@@ -307,54 +382,21 @@ else:
     print(f"{LABEL}: {len(all_seeds)} seeds 처리 예정 (skip {skip}건)")
     failed = []
 
-    for cat_dir, seed_id in tqdm(all_seeds, desc=f"Stage3 {LABEL}"):
+    for cat_dir, seed_id, entry in tqdm(all_seeds, desc=f"Stage3 {LABEL}"):
         try:
-            roi_meta_path = cat_dir / "stage1_output" / "roi_metadata.json"
-            seed_dir      = cat_dir / "stage2_output" / seed_id
-            output_dir    = cat_dir / "stage3_output" / seed_id
+            roi_meta_path = str(cat_dir / "stage1_output" / "roi_metadata.json")
+            seed_dir      = str(cat_dir / "stage2_output" / seed_id)
+            output_dir    = str(cat_dir / "stage3_output" / seed_id)
             profile_path  = cat_dir / "stage1b_output" / seed_id / "seed_profile.json"
 
-            if not roi_meta_path.exists():
-                continue
-
-            meta_list = json.loads(roi_meta_path.read_text())
-            subtype   = json.loads(profile_path.read_text()).get("subtype", "general") \
-                        if profile_path.exists() else "general"
-            seed_paths = [str(p) for p in sorted(seed_dir.glob("*.png"))]
-
-            placement_map = []
-            for entry in meta_list:
-                roi_boxes = entry.get("roi_boxes", [])
-                if not roi_boxes:
-                    placement_map.append({"image_id": entry["image_id"], "placements": []})
-                    continue
-
-                scores   = evaluator.compute_batch(subtype, roi_boxes)
-                best_idx = int(np.argmax(scores))
-                best_box = roi_boxes[best_idx]
-                bg_type  = best_box.get("background_type", "smooth")
-                x, y, w, h = best_box["box"]
-
-                rotation = (float(best_box["dominant_angle"])
-                            if bg_type == "directional"
-                               and subtype in ("linear_scratch", "elongated")
-                               and best_box.get("dominant_angle") is not None
-                            else float(np.random.uniform(0, 360)))
-
-                placements = [
-                    {"defect_path":             s_path,
-                     "x":                       x + w // 4,
-                     "y":                       y + h // 4,
-                     "scale":                   1.0,
-                     "rotation":                rotation,
-                     "suitability_score":       round(float(scores[best_idx]), 4),
-                     "matched_background_type": bg_type}
-                    for s_path in seed_paths
-                ]
-                placement_map.append({"image_id": entry["image_id"], "placements": placements})
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / "placement_map.json").write_text(json.dumps(placement_map, indent=2))
+            run_layout_logic(
+                roi_metadata=roi_meta_path,
+                defect_seeds_dir=seed_dir,
+                output_dir=output_dir,
+                seed_profile=str(profile_path) if profile_path.exists() else None,
+                domain=entry.get("domain", "mvtec"),
+                use_gpu=True,
+            )
 
         except Exception as e:
             failed.append({"category": cat_dir.name, "seed": seed_id,

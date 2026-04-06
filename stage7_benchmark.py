@@ -481,7 +481,9 @@ def _evaluate_effdet(
             good_ds = datasets.ImageFolder(
                 str(good_train_dir.parent), transform=transform
             )
-            good_loader = DataLoader(good_ds, batch_size=32, shuffle=False,
+            good_loader = DataLoader(good_ds,
+                                     batch_size=config["dataset"]["eval_batch_size"],
+                                     shuffle=False,
                                      num_workers=config["dataset"]["num_workers"])
             good_feats = torch.cat(
                 [model.extract_features(imgs.to(device)).cpu() for imgs, _ in good_loader]

@@ -53,3 +53,20 @@ def test_workers_argument_parallel_produces_correct_count(tmp_path, synthetic_de
     out_dir = tmp_path / "seeds_parallel"
     run_seed_generation(str(seed_path), num_variants=12, output_dir=str(out_dir), workers=1)
     assert len(list(out_dir.glob("*.png"))) == 12
+
+
+# ---------------------------------------------------------------------------
+# Prerequisite validation tests (B1)
+# ---------------------------------------------------------------------------
+
+def test_missing_seed_profile_raises(tmp_path, synthetic_defect):
+    """Stage 2 should raise FileNotFoundError for missing seed_profile."""
+    from stage2_defect_seed_generation import run_seed_generation
+    seed_path = tmp_path / "seed.png"
+    cv2.imwrite(str(seed_path), synthetic_defect)
+    with pytest.raises(FileNotFoundError, match="Stage 1b seed_profile"):
+        run_seed_generation(
+            str(seed_path), num_variants=2,
+            output_dir=str(tmp_path / "out"),
+            seed_profile=str(tmp_path / "nonexistent_profile.json"),
+        )

@@ -13,6 +13,27 @@ def load_json(path) -> dict:
         return json.load(f)
 
 
-def validate_dir(path) -> None:
-    if not Path(path).exists():
-        raise FileNotFoundError(f"Directory not found: {path}")
+def validate_dir(path, *, name: str = "Directory") -> None:
+    """Verify *path* is an existing directory.
+
+    Raises:
+        FileNotFoundError: if path does not exist or is not a directory.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"{name} not found: {path}")
+    if not p.is_dir():
+        raise FileNotFoundError(f"{name} is not a directory: {path}")
+
+
+def validate_file(path, *, name: str = "File") -> None:
+    """Verify *path* is an existing file.
+
+    Raises:
+        FileNotFoundError: if path does not exist or is not a file.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"{name} not found: {path}")
+    if not p.is_file():
+        raise FileNotFoundError(f"{name} is not a file: {path}")

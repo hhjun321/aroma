@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 
 from utils.dataset_builder import build_dataset_groups
+from utils.io import validate_dir
 
 
 def run_dataset_builder(
@@ -23,6 +24,10 @@ def run_dataset_builder(
 
     CLI 진입점과 노트북 셀 양쪽이 동일한 함수를 호출하도록 단일화.
     """
+    # ── 전제조건 검증 ──────────────────────────────────────────────────────
+    validate_dir(cat_dir, name="Category root directory")
+    validate_dir(image_dir, name="Train/good image directory")
+
     return build_dataset_groups(
         cat_dir=cat_dir,
         image_dir=image_dir,

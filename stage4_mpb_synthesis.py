@@ -4,6 +4,7 @@ Composites defect patches onto background images using cv2.seamlessClone
 (Poisson blending) guided by a placement_map.json produced by Stage 3.
 """
 import argparse
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
@@ -11,7 +12,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
-from utils.io import load_json
+from utils.io import load_json, validate_dir, validate_file
 
 
 def _transform_patch(patch: np.ndarray, scale: float, rotation: float) -> np.ndarray:
@@ -300,8 +301,19 @@ def run_synthesis_batch(
                              WARNING: output images are saved at the reduced resolution.
                              Stage 6 copies these as-is, so the final dataset will have
                              mismatched resolutions (good=original, defect=reduced).
-                             Only use this if the downstream dataset is resolution-agnostic.
+                              Only use this if the downstream dataset is resolution-agnostic.
     """
+    # ── 전제조건 검증 ──────────────────────────────────────────────────────
+    validate_dir(image_dir, name="Background image_dir")
+    for seed_id, pm_path in seed_placement_maps:
+        validate_file(pm_path, name=f"Stage 3 placement_map ({seed_id})")
+    if format == "yolo":
+        warnings.warn(
+            "format='yolo' 사용 시 Stage 6(dataset_builder)이 defect 이미지를 "
+            "인식하지 못합니다. Stage 6 연계 시 format='cls'를 사용하세요.",
+            stacklevel=2,
+        )
+
     from utils.parallel import resolve_workers
 
     # Build {image_id: [(seed_id, placements), ...]}
@@ -351,6 +363,16 @@ def run_synthesis(
         format:        Output format — 'cls' (classification) or 'yolo' (detection).
         workers:       Number of parallel workers (0=sequential, -1=auto, N>=2=N processes).
     """
+    # ── 전제조건 검증 ──────────────────────────────────────────────────────
+    validate_dir(image_dir, name="Background image_dir")
+    validate_file(placement_map, name="Stage 3 placement_map.json")
+    if format == "yolo":
+        warnings.warn(
+            "format='yolo' 사용 시 Stage 6(dataset_builder)이 defect 이미지를 "
+            "인식하지 못합니다. Stage 6 연계 시 format='cls'를 사용하세요.",
+            stacklevel=2,
+        )
+
     from utils.parallel import resolve_workers, run_parallel
 
     out_path = Path(output_dir)

@@ -59,14 +59,22 @@ def _score_sharpness(gray: np.ndarray) -> float:
     Laplacian variance(lap_score) + P90/P50 gradient contrast ratio(edge_sharpness).
     가중치: 0.5 * lap_score + 0.5 * edge_sharpness.
     Returns: 1.0 = 완전 선명 (higher = better).
+
+    NOTE: lap_var 정규화는 해상도 비례 스케일링을 적용한다.
+    기준 해상도 256×256 (ISP-AD ASM) 에서 경험적 상수 1000.0 을 사용하며,
+    고해상도 이미지는 픽셀 수에 비례하여 기준값을 자동 상향한다.
+    이로써 pruning_threshold 가 해상도에 무관하게 동일한 의미를 갖는다.
     """
     gray_f = gray.astype(np.float32)
 
     # Laplacian variance — 선명한 이미지일수록 높음
     lap = cv2.Laplacian(gray_f, cv2.CV_32F)
     lap_var = float(np.var(lap))
-    # 정규화: 1000을 기준값으로 사용 (경험적)
-    lap_score = float(np.clip(lap_var / 1000.0, 0.0, 1.0))
+    # 해상도 비례 정규화: 기준 해상도(256×256) 대비 픽셀 비율로 스케일링
+    _REF_PIXELS = 256 * 256
+    num_pixels = gray.shape[0] * gray.shape[1]
+    scale = num_pixels / _REF_PIXELS
+    lap_score = float(np.clip(lap_var / (1000.0 * scale), 0.0, 1.0))
 
     # Gradient contrast: P90 / P50 비율
     gx = cv2.Sobel(gray_f, cv2.CV_32F, 1, 0, ksize=3)

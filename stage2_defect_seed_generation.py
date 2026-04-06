@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from utils.io import load_json
+from utils.io import load_json, validate_file
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +183,10 @@ def run_seed_generation(
     # Validate seed image exists
     if not Path(seed_defect).exists():
         raise FileNotFoundError(f"Cannot read seed image: {seed_defect}")
+
+    # Validate seed_profile (Stage 1b output) if provided
+    if seed_profile is not None:
+        validate_file(seed_profile, name="Stage 1b seed_profile.json")
 
     # Determine subtype
     subtype = "general"

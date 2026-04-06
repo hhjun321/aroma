@@ -136,3 +136,61 @@ def test_workers_argument_accepted_stage3(tmp_path, synthetic_image, synthetic_d
     out = tmp_path / "output_w"
     run_layout_logic(str(meta_path), str(seeds_dir), str(out), workers=1)
     assert (out / "placement_map.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Prerequisite validation tests (B1)
+# ---------------------------------------------------------------------------
+
+def test_missing_roi_metadata_raises(tmp_path, synthetic_defect):
+    """Stage 3 should raise FileNotFoundError for missing roi_metadata.json."""
+    from stage3_layout_logic import run_layout_logic
+    seeds_dir = tmp_path / "seeds"
+    seeds_dir.mkdir()
+    cv2.imwrite(str(seeds_dir / "variant_0000.png"), synthetic_defect)
+    with pytest.raises(FileNotFoundError, match="Stage 1 roi_metadata"):
+        run_layout_logic(
+            str(tmp_path / "nonexistent_roi.json"),
+            str(seeds_dir),
+            str(tmp_path / "out"),
+        )
+
+
+def test_missing_seeds_dir_raises(tmp_path, synthetic_image):
+    """Stage 3 should raise FileNotFoundError for missing defect_seeds_dir."""
+    from stage3_layout_logic import run_layout_logic
+    meta = _make_roi_metadata(tmp_path, synthetic_image)
+    with pytest.raises(FileNotFoundError, match="Stage 2 defect_seeds_dir"):
+        run_layout_logic(
+            str(meta),
+            str(tmp_path / "nonexistent_seeds"),
+            str(tmp_path / "out"),
+        )
+
+
+def test_empty_seeds_dir_raises(tmp_path, synthetic_image):
+    """Stage 3 should raise FileNotFoundError when seeds dir has no PNGs."""
+    from stage3_layout_logic import run_layout_logic
+    meta = _make_roi_metadata(tmp_path, synthetic_image)
+    empty_seeds = tmp_path / "empty_seeds"
+    empty_seeds.mkdir()
+    with pytest.raises(FileNotFoundError, match="no PNG files"):
+        run_layout_logic(
+            str(meta),
+            str(empty_seeds),
+            str(tmp_path / "out"),
+        )
+
+
+def test_missing_seed_profile_raises_stage3(tmp_path, synthetic_image, synthetic_defect):
+    """Stage 3 should raise FileNotFoundError for missing seed_profile."""
+    from stage3_layout_logic import run_layout_logic
+    meta = _make_roi_metadata(tmp_path, synthetic_image)
+    seeds = _make_seeds_dir(tmp_path, synthetic_defect)
+    with pytest.raises(FileNotFoundError, match="Stage 1b seed_profile"):
+        run_layout_logic(
+            str(meta),
+            str(seeds),
+            str(tmp_path / "out"),
+            seed_profile=str(tmp_path / "nonexistent_profile.json"),
+        )

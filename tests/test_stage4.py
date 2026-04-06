@@ -168,3 +168,62 @@ def test_run_synthesis_batch_use_fast_blend(
     for seed_id, _ in placement_maps:
         out_img = out_root / seed_id / "defect" / "img_001.png"
         assert out_img.exists(), f"Expected fast-blend output for {seed_id}"
+
+
+# ---------------------------------------------------------------------------
+# Prerequisite validation tests (B1)
+# ---------------------------------------------------------------------------
+
+def test_missing_image_dir_raises(tmp_path, synthetic_image, synthetic_defect):
+    """Stage 4 should raise FileNotFoundError for missing image_dir."""
+    from stage4_mpb_synthesis import run_synthesis
+    map_path, _ = _make_placement_map(tmp_path, synthetic_image, synthetic_defect)
+    with pytest.raises(FileNotFoundError, match="Background image_dir"):
+        run_synthesis(
+            str(tmp_path / "nonexistent_images"),
+            str(map_path),
+            str(tmp_path / "out"),
+        )
+
+
+def test_missing_placement_map_raises(tmp_path, synthetic_image, synthetic_defect):
+    """Stage 4 should raise FileNotFoundError for missing placement_map."""
+    from stage4_mpb_synthesis import run_synthesis
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    cv2.imwrite(str(img_dir / "img_001.png"), synthetic_image)
+    with pytest.raises(FileNotFoundError, match="Stage 3 placement_map"):
+        run_synthesis(
+            str(img_dir),
+            str(tmp_path / "nonexistent_pm.json"),
+            str(tmp_path / "out"),
+        )
+
+
+def test_batch_missing_placement_map_raises(tmp_path, synthetic_image, synthetic_defect):
+    """run_synthesis_batch should raise for missing placement map files."""
+    import warnings
+    from stage4_mpb_synthesis import run_synthesis_batch
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    cv2.imwrite(str(img_dir / "img_001.png"), synthetic_image)
+    bad_maps = [("seed_0001", str(tmp_path / "nonexistent.json"))]
+    with pytest.raises(FileNotFoundError, match="Stage 3 placement_map"):
+        run_synthesis_batch(str(img_dir), bad_maps, str(tmp_path / "out"))
+
+
+# ---------------------------------------------------------------------------
+# Format compatibility warning test (B6)
+# ---------------------------------------------------------------------------
+
+def test_yolo_format_emits_stage6_warning(tmp_path, synthetic_image, synthetic_defect):
+    """Stage 4 should warn when format='yolo' about Stage 6 incompatibility."""
+    import warnings
+    from stage4_mpb_synthesis import run_synthesis
+    map_path, img_dir = _make_placement_map(tmp_path, synthetic_image, synthetic_defect)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        run_synthesis(str(img_dir), str(map_path), str(tmp_path / "out_yolo"),
+                      format="yolo")
+    yolo_warnings = [x for x in w if "format='yolo'" in str(x.message)]
+    assert len(yolo_warnings) >= 1, "Expected warning about yolo/Stage 6 incompatibility"

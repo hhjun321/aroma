@@ -1,13 +1,13 @@
 dataset:
   eval_batch_size: 32
-  image_size: 256
+  image_size: 512
   num_workers: 4
   pruning_threshold: 0.6
   task_by_domain:
     isp: classification
     mvtec: segmentation
     visa: segmentation
-  train_batch_size: 32
+  train_batch_size: 16
 
 dataset_groups:
   baseline:

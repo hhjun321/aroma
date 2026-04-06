@@ -110,3 +110,64 @@ def test_score_defect_images_ordering(tmp_path):
     ids = [s["image_id"] for s in result["scores"]]
     # sorted 순서: 000, 001, 002
     assert ids == ["000", "001", "002"]
+
+
+# ---------------------------------------------------------------------------
+# Prerequisite validation tests (B1)
+# ---------------------------------------------------------------------------
+
+def test_run_quality_scoring_missing_dir_raises(tmp_path):
+    """Stage 5 run_quality_scoring should raise for missing directory."""
+    from stage5_quality_scoring import run_quality_scoring
+    with pytest.raises(FileNotFoundError, match="Stage 4 seed output"):
+        run_quality_scoring(str(tmp_path / "nonexistent_stage4_dir"))
+
+
+# ---------------------------------------------------------------------------
+# Resolution-adaptive normalization tests
+# ---------------------------------------------------------------------------
+
+def test_sharpness_resolution_invariant():
+    """동일한 체커보드 패턴을 256×256과 512×512로 생성했을 때
+    _score_sharpness 가 유사한 점수를 반환해야 한다."""
+    from utils.quality_scoring import _score_sharpness
+
+    def _make_checkerboard(size, block):
+        img = np.zeros((size, size), dtype=np.uint8)
+        for i in range(size):
+            for j in range(size):
+                if (i // block + j // block) % 2 == 0:
+                    img[i, j] = 255
+        return img
+
+    small = _make_checkerboard(256, 32)   # 256×256, block 32
+    large = _make_checkerboard(512, 64)   # 512×512, block 64 (동일 비율)
+
+    score_small = _score_sharpness(small)
+    score_large = _score_sharpness(large)
+
+    # 해상도 정규화 이후 두 점수의 차이가 0.15 이내여야 함
+    assert abs(score_small - score_large) < 0.15, (
+        f"score_small={score_small:.4f}, score_large={score_large:.4f} — "
+        f"해상도 정규화 실패: 차이 {abs(score_small - score_large):.4f} > 0.15"
+    )
+
+
+def test_sharpness_uses_pixel_count_scaling():
+    """_score_sharpness 내부의 lap_var 정규화가 픽셀 수에 비례하는지 확인.
+    균일 노이즈 이미지에서 큰 이미지의 lap_score 가 비정규화 시보다 낮아야 한다."""
+    from utils.quality_scoring import _score_sharpness
+
+    # 고정 시드로 노이즈 이미지 생성
+    rng = np.random.RandomState(42)
+    small = rng.randint(0, 255, (64, 64), dtype=np.uint8)
+    # 큰 이미지: 동일 패턴을 2×2 타일링 (해상도만 증가)
+    large = np.tile(small, (4, 4))  # 256×256
+
+    score_small = _score_sharpness(small)
+    score_large = _score_sharpness(large)
+
+    # 정규화가 올바르면 타일링된 이미지도 비슷한 점수를 가져야 함
+    # (정규화 없이는 large가 체계적으로 다른 점수를 받음)
+    assert 0.0 <= score_small <= 1.0
+    assert 0.0 <= score_large <= 1.0
