@@ -181,3 +181,51 @@ def test_clean_removes_stage_outputs(tmp_category):
     assert not (cat_dir / "augmented_dataset").exists()
     assert not (cat_dir / ".stage0_resize_512_done").exists()
     assert len(deleted) == 7  # 6 dirs + 1 sentinel
+
+
+# ---------------------------------------------------------------------------
+# workers 병렬 처리 테스트
+# ---------------------------------------------------------------------------
+
+def test_resize_directory_with_workers(tmp_category):
+    """workers 파라미터가 resize_directory에서 병렬 처리를 수행하는지 확인."""
+    cat_dir, entry = tmp_category
+    from stage0_resize import resize_directory
+    image_dir = Path(entry["image_dir"])
+
+    # workers=2로 병렬 실행 — 결과는 순차와 동일해야 함
+    stats = resize_directory(image_dir, target_size=512, workers=2)
+    assert stats["resized"] == 3
+    assert stats["skipped"] == 0
+    assert stats["errors"] == 0
+
+    # 실제 리사이즈 확인
+    for img_path in image_dir.glob("*.png"):
+        img = cv2.imread(str(img_path))
+        assert img.shape[:2] == (512, 512), f"{img_path.name} not resized"
+
+
+def test_resize_directory_workers_minus1(tmp_category):
+    """workers=-1 (auto) 가 정상 동작하는지 확인."""
+    cat_dir, entry = tmp_category
+    from stage0_resize import resize_directory
+    seed_dir = Path(entry["seed_dir"])
+
+    stats = resize_directory(seed_dir, target_size=512, workers=-1)
+    assert stats["resized"] == 2
+    assert stats["errors"] == 0
+
+
+def test_resize_category_passes_workers(tmp_category):
+    """resize_category가 workers 파라미터를 resize_directory에 전파하는지 확인."""
+    cat_dir, entry = tmp_category
+    from stage0_resize import resize_category
+
+    result = resize_category(entry, target_size=512, workers=2)
+    assert result["resized"] > 0
+    assert result["errors"] == 0
+
+    # 실제 리사이즈 확인 (image_dir)
+    for img_path in Path(entry["image_dir"]).glob("*.png"):
+        img = cv2.imread(str(img_path))
+        assert img.shape[:2] == (512, 512)

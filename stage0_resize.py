@@ -24,6 +24,7 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.io import load_json, save_json
+from utils.parallel import resolve_workers, run_parallel
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,58 @@ _STAGE_OUTPUT_DIRS = [
 # ---------------------------------------------------------------------------
 # Core functions
 # ---------------------------------------------------------------------------
+def _resize_single_image(args: tuple) -> dict[str, int] | None:
+    """Resize a single image in-place. Module-level for pickle-safe parallelism.
+
+    Args:
+        args: (img_path_str, target_size, dry_run)
+
+    Returns:
+        {"resized": 0|1, "skipped": 0|1, "errors": 0|1}
+    """
+    img_path_str, target_size, dry_run = args
+    img_path = Path(img_path_str)
+
+    try:
+        img = cv2.imread(str(img_path))
+        if img is None:
+            logger.error("Failed to read image: %s", img_path)
+            return {"resized": 0, "skipped": 0, "errors": 1}
+
+        h, w = img.shape[:2]
+        if h == target_size and w == target_size:
+            return {"resized": 0, "skipped": 1, "errors": 0}
+
+        if dry_run:
+            logger.info("[DRY-RUN] Would resize %s (%dx%d -> %dx%d)",
+                        img_path.name, w, h, target_size, target_size)
+            return {"resized": 1, "skipped": 0, "errors": 0}
+
+        needs_downscale = (h > target_size) or (w > target_size)
+        interp = cv2.INTER_AREA if needs_downscale else cv2.INTER_LINEAR
+
+        resized = cv2.resize(img, (target_size, target_size), interpolation=interp)
+        cv2.imwrite(str(img_path), resized)
+        return {"resized": 1, "skipped": 0, "errors": 0}
+
+    except Exception:
+        logger.exception("Error processing %s", img_path)
+        return {"resized": 0, "skipped": 0, "errors": 1}
+
+
 def resize_directory(
     dir_path: Path | str,
     target_size: int = 512,
     dry_run: bool = False,
+    workers: int = 0,
 ) -> dict[str, int]:
     """Resize all images in *dir_path* to *target_size* x *target_size* in-place.
+
+    Args:
+        dir_path: Directory containing images.
+        target_size: Target dimension (square).
+        dry_run: If True, report only without modifying files.
+        workers: Parallel workers (0=sequential, -1=auto, N>=2=N processes).
 
     Returns dict with keys: resized, skipped, errors.
     """
@@ -66,36 +113,20 @@ def resize_directory(
         image_files.extend(dir_path.glob(ext))
     image_files.sort()
 
-    for img_path in image_files:
-        try:
-            img = cv2.imread(str(img_path))
-            if img is None:
-                logger.error("Failed to read image: %s", img_path)
-                stats["errors"] += 1
-                continue
+    if not image_files:
+        return stats
 
-            h, w = img.shape[:2]
-            if h == target_size and w == target_size:
-                stats["skipped"] += 1
-                continue
+    num_workers = resolve_workers(workers)
+    tasks = [(str(p), target_size, dry_run) for p in image_files]
+    results = run_parallel(
+        _resize_single_image, tasks, num_workers,
+        desc=f"Stage0 resize ({dir_path.name})",
+    )
 
-            if dry_run:
-                logger.info("[DRY-RUN] Would resize %s (%dx%d -> %dx%d)",
-                            img_path.name, w, h, target_size, target_size)
-                stats["resized"] += 1
-                continue
-
-            # Choose interpolation: INTER_AREA for downscale, INTER_LINEAR for upscale
-            needs_downscale = (h > target_size) or (w > target_size)
-            interp = cv2.INTER_AREA if needs_downscale else cv2.INTER_LINEAR
-
-            resized = cv2.resize(img, (target_size, target_size), interpolation=interp)
-            cv2.imwrite(str(img_path), resized)
-            stats["resized"] += 1
-
-        except Exception:
-            logger.exception("Error processing %s", img_path)
-            stats["errors"] += 1
+    for r in results:
+        stats["resized"] += r["resized"]
+        stats["skipped"] += r["skipped"]
+        stats["errors"] += r["errors"]
 
     return stats
 
@@ -104,11 +135,18 @@ def resize_category(
     entry: dict[str, Any],
     target_size: int = 512,
     dry_run: bool = False,
+    workers: int = 0,
 ) -> dict[str, Any]:
     """Resize all images for a single dataset category.
 
     Processes three directories: image_dir, seed_dir, cat_dir/test/good/.
     Creates a sentinel file on success to enable resume.
+
+    Args:
+        entry: dataset_config.json entry with image_dir, seed_dir.
+        target_size: Target dimension (square).
+        dry_run: If True, report only without modifying files.
+        workers: Parallel workers (0=sequential, -1=auto, N>=2=N processes).
 
     Returns dict with: category, resized, skipped, errors, skipped_category.
     """
@@ -140,7 +178,7 @@ def resize_category(
         ("test/good", test_good_dir),
     ]:
         logger.info("Resizing %s: %s", label, dir_path)
-        stats = resize_directory(dir_path, target_size=target_size, dry_run=dry_run)
+        stats = resize_directory(dir_path, target_size=target_size, dry_run=dry_run, workers=workers)
         result["resized"] += stats["resized"]
         result["skipped"] += stats["skipped"]
         result["errors"] += stats["errors"]
@@ -214,6 +252,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Report only, do not modify files")
     p.add_argument("--clean", action="store_true",
                    help="Delete stage 1-6 outputs before resize")
+    p.add_argument("--workers", type=int, default=0,
+                   help="병렬 워커 수 (0=순차, -1=자동, N>=2=N개 프로세스)")
     return p
 
 
@@ -257,7 +297,7 @@ def main() -> None:
     total_resized, total_skipped, total_errors = 0, 0, 0
 
     for key, entry in entries:
-        result = resize_category(entry, target_size=args.size, dry_run=args.dry_run)
+        result = resize_category(entry, target_size=args.size, dry_run=args.dry_run, workers=args.workers)
         if result["skipped_category"]:
             print(f"  {key}: sentinel exists — skipped")
         else:
