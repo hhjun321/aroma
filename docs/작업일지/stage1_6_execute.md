@@ -88,7 +88,7 @@ else:
     # Resize
     def _do(args):
         key, entry = args
-        return key, resize_category(entry, target_size=TARGET_SIZE)
+        return key, resize_category(entry, target_size=TARGET_SIZE, workers=-1)
 
     with ThreadPoolExecutor(max_workers=CAT_THREADS) as ex:
         futs = {ex.submit(_do, t): t[0] for t in cat_tasks}
