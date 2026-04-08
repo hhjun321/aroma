@@ -221,8 +221,13 @@ def build_dataset_groups(
     report_path = aug_dir / "build_report.json"
 
     # ── 도메인별 비율 우선 적용 ──────────────────────────────────────────
-    # cat_dir 경로에서 도메인 추출: .../domain/category/ → domain
+    # cat_dir 경로에서 도메인 추출
+    # 경로 구조:
+    #   MVTec/VisA: .../domain/category/ → parent.name = domain
+    #   ISP: .../isp/unsupervised/category/ → parent.parent.name = domain
     domain = cat_path.parent.name
+    if domain == "unsupervised":  # ISP special case
+        domain = cat_path.parent.parent.name
     
     if augmentation_ratio_by_domain and domain in augmentation_ratio_by_domain:
         domain_ratios = augmentation_ratio_by_domain[domain]

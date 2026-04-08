@@ -562,17 +562,20 @@ PRUNING_THRESHOLD = 0.6
 LOCAL_TMP = Path("/content/tmp_stage6")
 
 # 도메인별 증강 비율 설정 로드
-CONFIG_PATH = Path("/content/drive/MyDrive/aroma/configs/benchmark_experiment.yaml")
+CONFIG_PATH = REPO / "configs" / "benchmark_experiment.yaml"
 augmentation_ratio_by_domain = None
 if CONFIG_PATH.exists():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-        augmentation_ratio_by_domain = config.get("augmentation_ratio_by_domain")
-    print("도메인별 증강 비율 설정:")
-    for domain, ratios in augmentation_ratio_by_domain.items():
-        print(f"  {domain}: full={ratios['full']}, pruned={ratios['pruned']}")
+        augmentation_ratio_by_domain = config.get("dataset", {}).get("augmentation_ratio_by_domain")
+    if augmentation_ratio_by_domain:
+        print("도메인별 증강 비율 설정:")
+        for domain, ratios in augmentation_ratio_by_domain.items():
+            print(f"  {domain}: full={ratios['full']}, pruned={ratios['pruned']}")
+    else:
+        print("⚠ Config에 augmentation_ratio_by_domain 없음")
 else:
-    print("Config 파일 없음, 기본 동작 사용")
+    print("⚠ Config 파일 없음, 기본 동작 사용")
 
 # cat_dir별 seed_dirs 수집
 cat_seed_dirs = defaultdict(list)
@@ -710,6 +713,34 @@ for key, info in SMOKE_CATS.items():
 
 ---
 
+## 셀 9.5: Stage 6 재실행 준비 (기존 augmented_dataset 삭제)
+
+> **목적:** 잘못된 비율로 생성된 augmented_dataset을 삭제하고 Stage 6 재실행 준비
+> **실행 시점:** Stage 6 결과가 도메인별 목표 비율과 맞지 않을 때만 실행
+
+```python
+import shutil
+
+print("기존 augmented_dataset 삭제 중...\n")
+
+for key, info in SMOKE_CATS.items():
+    aug_dir = info["cat_dir"] / "augmented_dataset"
+    if aug_dir.exists():
+        shutil.rmtree(str(aug_dir))
+        print(f"✓ {key}: augmented_dataset 삭제 완료")
+    else:
+        print(f"  {key}: augmented_dataset 없음 (스킵)")
+
+print("\n✓ 삭제 완료. 이제 셀 9를 다시 실행하세요.")
+```
+
+**다음 단계:**
+1. 위 셀 실행으로 기존 augmented_dataset 삭제
+2. **셀 9** 재실행 (Stage 6 - 도메인별 비율 적용)
+3. **셀 10** 실행 (검증)
+
+---
+
 ## 셀 10.5: 데이터셋 필터링 — 도메인별 목표 비율 적용
 
 > **목적:** Stage 6 결과물을 도메인별 목표 비율에 맞게 필터링  
@@ -738,10 +769,18 @@ def load_quality_scores(stage4_output: Path) -> Dict[str, float]:
             continue
         with open(score_file) as f:
             seed_scores = json.load(f)
-        for img_name, score_data in seed_scores.items():
-            if isinstance(score_data, dict) and "final_score" in score_data:
-                key = f"{seed_dir.name}/{img_name}"
-                scores[key] = score_data["final_score"]
+        
+        # quality_scores.json is a list of dicts: [{"filename": "...", "final_score": ...}, ...]
+        if isinstance(seed_scores, list):
+            for item in seed_scores:
+                if isinstance(item, dict) and "filename" in item and "final_score" in item:
+                    filename = item["filename"]
+                    scores[filename] = item["final_score"]
+        # Fallback: if it's a dict (old format)
+        elif isinstance(seed_scores, dict):
+            for img_name, score_data in seed_scores.items():
+                if isinstance(score_data, dict) and "final_score" in score_data:
+                    scores[img_name] = score_data["final_score"]
     return scores
 
 def filter_dataset_group(group_dir: Path, target_ratio: float, quality_scores: Dict[str, float]):
@@ -773,16 +812,8 @@ def filter_dataset_group(group_dir: Path, target_ratio: float, quality_scores: D
         scored_images = []
         for img_path in defect_images:
             img_name = img_path.name
-            possible_keys = [
-                f"{img_path.parent.parent.name}/{img_name}",
-                img_name,
-                img_path.stem,
-            ]
-            score = 0.5
-            for key in possible_keys:
-                if key in quality_scores:
-                    score = quality_scores[key]
-                    break
+            # Try to find score by filename (quality_scores uses just filename)
+            score = quality_scores.get(img_name, 0.5)  # Default to 0.5 if not found
             scored_images.append((img_path, score))
         
         scored_images.sort(key=lambda x: x[1], reverse=True)
@@ -851,11 +882,13 @@ def filter_category(cat_dir: Path, domain: str):
 # ── 3개 카테고리 필터링 실행 ──────────────────────────────────
 print("🚀 Starting dataset filtering...\n")
 
+# 카테고리 키에서 도메인 추출 (isp_ASM → isp, mvtec_bottle → mvtec)
 for key, info in SMOKE_CATS.items():
+    domain = key.split("_")[0]  # "isp_ASM" → "isp"
     print(f"\n{'='*50}")
-    print(f"{key} ({info['cat_dir'].parent.name})")
+    print(f"{key} (domain={domain})")
     print(f"{'='*50}")
-    filter_category(info["cat_dir"], info["cat_dir"].parent.name)
+    filter_category(info["cat_dir"], domain)
 
 print("\n" + "="*50)
 print("✓ All categories filtered!")
