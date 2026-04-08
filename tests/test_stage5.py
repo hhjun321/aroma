@@ -171,3 +171,91 @@ def test_sharpness_uses_pixel_count_scaling():
     # (정규화 없이는 large가 체계적으로 다른 점수를 받음)
     assert 0.0 <= score_small <= 1.0
     assert 0.0 <= score_large <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Batch processing tests
+# ---------------------------------------------------------------------------
+
+def test_run_quality_scoring_batch_empty():
+    """Empty seed_dirs list should return empty results."""
+    from stage5_quality_scoring import run_quality_scoring_batch
+    results = run_quality_scoring_batch([])
+    assert results == []
+
+
+def test_run_quality_scoring_batch_processes_multiple_seeds(tmp_path, sharp_image):
+    """Batch function should process multiple seed directories in parallel."""
+    from stage5_quality_scoring import run_quality_scoring_batch
+    
+    # Create 3 seed directories with defect images
+    seed_dirs = []
+    for i in range(3):
+        seed_dir = tmp_path / f"seed_{i:03d}"
+        defect_dir = seed_dir / "defect"
+        defect_dir.mkdir(parents=True)
+        
+        # Write 2 images per seed
+        for j in range(2):
+            img_path = defect_dir / f"img_{j:03d}.png"
+            cv2.imwrite(str(img_path), sharp_image)
+        
+        seed_dirs.append(str(seed_dir))
+    
+    # Run batch processing
+    results = run_quality_scoring_batch(
+        stage4_seed_dirs=seed_dirs,
+        workers=0,
+        parallel_seeds=2,
+    )
+    
+    # Should process all 3 seeds
+    assert len(results) == 3
+    
+    # Each result should have required fields
+    for result in results:
+        assert "seed_id" in result
+        assert "count" in result
+        assert "mean" in result
+        assert result["count"] == 2  # 2 images per seed
+        assert 0.0 <= result["mean"] <= 1.0
+    
+    # Check that quality_scores.json was created for each seed
+    for seed_dir in seed_dirs:
+        json_path = Path(seed_dir) / "quality_scores.json"
+        assert json_path.exists()
+
+
+def test_run_quality_scoring_batch_skips_already_processed(tmp_path, sharp_image):
+    """Batch function should skip seeds with existing quality_scores.json."""
+    from stage5_quality_scoring import run_quality_scoring_batch
+    
+    # Create 2 seed directories
+    seed1 = tmp_path / "seed_001"
+    seed2 = tmp_path / "seed_002"
+    
+    for seed_dir in [seed1, seed2]:
+        defect_dir = seed_dir / "defect"
+        defect_dir.mkdir(parents=True)
+        img_path = defect_dir / "img_000.png"
+        cv2.imwrite(str(img_path), sharp_image)
+    
+    # Pre-create quality_scores.json for seed1 (simulate already processed)
+    existing_scores = {
+        "weights": {"artifact": 0.5, "blur": 0.5},
+        "scores": [{"image_id": "img_000", "quality_score": 0.85}],
+        "stats": {"count": 1, "mean": 0.85}
+    }
+    (seed1 / "quality_scores.json").write_text(json.dumps(existing_scores))
+    
+    # Run batch processing
+    results = run_quality_scoring_batch(
+        stage4_seed_dirs=[str(seed1), str(seed2)],
+        workers=0,
+        parallel_seeds=1,
+    )
+    
+    # Should only process seed2 (seed1 was skipped)
+    assert len(results) == 1
+    assert results[0]["seed_id"] == "seed_002"
+

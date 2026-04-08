@@ -14,6 +14,7 @@ each seed directory is self-contained with both images and quality data.
 from __future__ import annotations
 
 import argparse
+from typing import List, Tuple
 
 from utils.io import validate_dir
 from utils.quality_scoring import score_defect_images
@@ -38,6 +39,88 @@ def run_quality_scoring(
         w_blur=w_blur,
         workers=workers,
     )
+
+
+def _quality_scoring_worker(args_tuple: tuple) -> dict | None:
+    """Pickle-safe worker for parallel batch processing.
+    
+    Args:
+        args_tuple: (stage4_seed_dir, w_artifact, w_blur, workers)
+    
+    Returns:
+        {"seed_id": str, "count": int, "mean": float} | None
+    """
+    from pathlib import Path
+    stage4_seed_dir, w_artifact, w_blur, workers = args_tuple
+    
+    # Skip if already processed
+    cache_path = Path(stage4_seed_dir) / "quality_scores.json"
+    if cache_path.exists():
+        return None
+    
+    result = score_defect_images(
+        stage4_seed_dir=stage4_seed_dir,
+        w_artifact=w_artifact,
+        w_blur=w_blur,
+        workers=workers,
+    )
+    
+    stats = result.get("stats", {})
+    seed_id = Path(stage4_seed_dir).name
+    return {
+        "seed_id": seed_id,
+        "count": stats.get("count", 0),
+        "mean": stats.get("mean", 0.0),
+    }
+
+
+def run_quality_scoring_batch(
+    stage4_seed_dirs: List[str],
+    w_artifact: float = 0.5,
+    w_blur: float = 0.5,
+    workers: int = 0,
+    parallel_seeds: int = 0,
+) -> List[dict]:
+    """Run quality scoring on multiple seed directories in parallel.
+    
+    Args:
+        stage4_seed_dirs: List of Stage 4 seed output directory paths.
+        w_artifact: Weight for artifact_score (default 0.5).
+        w_blur: Weight for blur_score (default 0.5).
+        workers: Image-level parallel workers within each seed (0=sequential, -1=auto).
+        parallel_seeds: Seed-level parallelism (0=sequential, -1=auto, N=N processes).
+                       This controls how many seeds are processed in parallel.
+    
+    Returns:
+        List of result dicts: [{"seed_id": str, "count": int, "mean": float}, ...]
+        None entries (already processed seeds) are filtered out.
+    
+    Note:
+        - parallel_seeds: controls seed-level parallelism (across directories)
+        - workers: controls image-level parallelism (within each seed's defect images)
+        - For best performance on large datasets, use parallel_seeds=-1 and workers=0 or 1
+          to avoid nested parallelism overhead.
+    """
+    if not stage4_seed_dirs:
+        return []
+    
+    from utils.parallel import resolve_workers, run_parallel
+    
+    num_parallel_seeds = resolve_workers(parallel_seeds)
+    tasks = [
+        (seed_dir, w_artifact, w_blur, workers)
+        for seed_dir in stage4_seed_dirs
+    ]
+    
+    results = run_parallel(
+        _quality_scoring_worker,
+        tasks,
+        num_parallel_seeds,
+        desc="Stage5 batch quality scoring",
+    )
+    
+    # Filter out None (already processed)
+    return [r for r in results if r is not None]
 
 
 def _build_parser() -> argparse.ArgumentParser:

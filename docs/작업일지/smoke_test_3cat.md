@@ -499,8 +499,10 @@ print("\n✓ Stage 4 완료")
 
 ## 셀 8: Stage 5 — 합성 품질 점수
 
+> Batch 병렬 처리: parallel_seeds로 시드 간 병렬 처리, workers로 시드 내 이미지 병렬 처리.
+
 ```python
-from stage5_quality_scoring import run_quality_scoring
+from stage5_quality_scoring import run_quality_scoring_batch
 
 for key, info in SMOKE_CATS.items():
     cat_dir    = info["cat_dir"]
@@ -513,18 +515,32 @@ for key, info in SMOKE_CATS.items():
     print(f"\n{'='*50}")
     print(f"Stage 5: {key}")
 
-    for d in sorted(stage4_dir.iterdir()):
-        if not d.is_dir():
-            continue
-        if (d / "quality_scores.json").exists():
-            print(f"  ⏭ {d.name}: 이미 완료")
-            continue
+    # Collect seed directories
+    seed_dirs = [
+        str(d) for d in sorted(stage4_dir.iterdir())
+        if d.is_dir()
+    ]
 
-        run_quality_scoring(
-            stage4_seed_dir = str(d),
-            workers         = -1,
-        )
-        print(f"  ✓ {d.name}")
+    if not seed_dirs:
+        print(f"  ⚠ {key}: 시드 없음")
+        continue
+
+    # Batch processing with seed-level parallelism
+    results = run_quality_scoring_batch(
+        stage4_seed_dirs = seed_dirs,
+        workers          = 0,   # No image-level parallelism (avoid nested overhead)
+        parallel_seeds   = -1,  # Auto seed-level parallelism
+    )
+
+    # Report results
+    completed = len([r for r in results if r])
+    skipped = len(seed_dirs) - completed
+    print(f"  ✓ {key}: {completed} seeds scored, {skipped} already completed")
+    
+    if results:
+        avg_count = sum(r["count"] for r in results) / len(results)
+        avg_quality = sum(r["mean"] for r in results) / len(results)
+        print(f"    평균: {avg_count:.0f} images/seed, quality={avg_quality:.3f}")
 
 print("\n✓ Stage 5 완료")
 ```
