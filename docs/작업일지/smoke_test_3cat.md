@@ -557,6 +557,8 @@ import shutil, time, yaml
 from stage6_dataset_builder import run_dataset_builder
 from collections import defaultdict
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 PRUNING_THRESHOLD = 0.6
 LOCAL_TMP = Path("/content/tmp_stage6")
@@ -577,6 +579,28 @@ if CONFIG_PATH.exists():
 else:
     print("⚠ Config 파일 없음, 기본 동작 사용")
 
+# 도메인별 증강 비율 명시적 매핑 (로컬 경로 도메인 추출 실패 대비)
+RATIO_MAP = {
+    "isp": {"full": 1.0, "pruned": 0.5},
+    "mvtec": {"full": 2.0, "pruned": 1.5},
+    "visa": {"full": 2.0, "pruned": 1.5},
+}
+
+# 병렬 디렉토리 복사 헬퍼
+def parallel_copytree(src_dst_pairs, max_workers=4):
+    """병렬로 여러 디렉토리 복사"""
+    def _copy_one(pair):
+        src, dst = pair
+        if Path(src).exists():
+            Path(dst).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+            return dst
+        return None
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_copy_one, src_dst_pairs))
+    return [r for r in results if r is not None]
+
 # cat_dir별 seed_dirs 수집
 cat_seed_dirs = defaultdict(list)
 for key, info in SMOKE_CATS.items():
@@ -594,6 +618,7 @@ for key, info in SMOKE_CATS.items():
 
     print(f"\n{'='*50}")
     print(f"Stage 6: {key} (domain={domain})")
+    print(f"  목표 비율: full={RATIO_MAP[domain]['full']}, pruned={RATIO_MAP[domain]['pruned']}")
     t0 = time.time()
 
     # ── 로컬 SSD에 cat_dir 구조 미러링 (경로 구조 보존) ──────────
@@ -607,47 +632,54 @@ for key, info in SMOKE_CATS.items():
 
     print(f"  로컬 캐시 복사 중... (경로: {relative_path})")
     
+    # 병렬로 모든 필요한 디렉토리 복사
+    copy_tasks = []
+    
     # 1) stage4_output 복사 (defect 이미지 + quality_scores.json)
     stage4_src = cat_dir / "stage4_output"
     if stage4_src.exists():
-        shutil.copytree(str(stage4_src), str(local_cat / "stage4_output"))
+        copy_tasks.append((stage4_src, local_cat / "stage4_output"))
 
     # 2) image_dir (train/good) 복사
     local_image_dir = local_cat / "train" / "good"
-    local_image_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(str(image_dir), str(local_image_dir), dirs_exist_ok=True)
+    copy_tasks.append((image_dir, local_image_dir))
 
     # 3) test/good 복사
     test_good_src = cat_dir / "test" / "good"
     if test_good_src.exists():
-        local_test_good = local_cat / "test" / "good"
-        local_test_good.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(str(test_good_src), str(local_test_good), dirs_exist_ok=True)
+        copy_tasks.append((test_good_src, local_cat / "test" / "good"))
 
-    # 4) seed_dirs (test defect) 복사 + 로컬 경로 매핑
+    # 4) seed_dirs (test defect) 복사
     local_seed_dirs = []
     for sd in cat_seed_dirs[str(cat_dir)]:
         sd_path = Path(sd)
         local_sd = local_cat / "test" / sd_path.name
         if sd_path.exists():
-            local_sd.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(str(sd_path), str(local_sd), dirs_exist_ok=True)
-        local_seed_dirs.append(str(local_sd))
-
+            copy_tasks.append((sd_path, local_sd))
+            local_seed_dirs.append(str(local_sd))
+    
+    # 병렬 복사 실행 (4개 스레드로 동시 복사)
+    parallel_copytree(copy_tasks, max_workers=4)
+    
     copy_sec = time.time() - t0
-    print(f"  로컬 캐시 완료 ({copy_sec:.1f}s)")
+    print(f"  로컬 캐시 완료 ({copy_sec:.1f}s, {len(copy_tasks)}개 디렉토리)")
 
-    # ── 로컬에서 데이터셋 구성 (병렬 복사 + 도메인별 비율 적용) ──────
+    # ── 로컬에서 데이터셋 구성 (병렬 복사 + 명시적 비율 전달) ──────
     t1 = time.time()
+    
+    # 도메인별 비율 명시적 전달 (로컬 경로에서 도메인 추출 실패 대비)
+    ratio_full = RATIO_MAP[domain]["full"]
+    ratio_pruned = RATIO_MAP[domain]["pruned"]
+    
     result = run_dataset_builder(
         cat_dir                      = str(local_cat),
         image_dir                    = str(local_image_dir),
         seed_dirs                    = local_seed_dirs,
         pruning_threshold            = PRUNING_THRESHOLD,
-        augmentation_ratio_full      = None,  # None=도메인별 또는 기본 동작
-        augmentation_ratio_pruned    = None,  # None=도메인별 또는 기본 동작
-        augmentation_ratio_by_domain = augmentation_ratio_by_domain,  # 도메인별 비율
-        workers                      = 8,     # I/O-bound 작업에 최적화 (ThreadPoolExecutor)
+        augmentation_ratio_full      = ratio_full,      # 명시적 전달!
+        augmentation_ratio_pruned    = ratio_pruned,    # 명시적 전달!
+        augmentation_ratio_by_domain = None,            # 이미 적용했으므로 None
+        workers                      = 8,               # I/O-bound 작업에 최적화
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")
