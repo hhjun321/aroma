@@ -4,6 +4,7 @@ Composites defect patches onto background images using cv2.seamlessClone
 (Poisson blending) guided by a placement_map.json produced by Stage 3.
 """
 import argparse
+import logging
 import warnings
 from pathlib import Path
 from typing import List, Optional
@@ -11,7 +12,9 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
-from utils.io import load_json, validate_dir, validate_file
+from utils.io import load_json, safe_imread, validate_dir, validate_file
+
+logger = logging.getLogger(__name__)
 
 
 def _transform_patch(patch: np.ndarray, scale: float, rotation: float) -> np.ndarray:
@@ -137,8 +140,10 @@ def _synthesize_image(
     image_id = bg_path.stem
     out_path = Path(output_dir_str)
 
-    bg = cv2.imread(str(bg_path))
-    if bg is None:
+    try:
+        bg = safe_imread(str(bg_path))
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(f"Failed to load background image {bg_path}: {e}")
         return []
 
     composited = bg.copy()
@@ -152,8 +157,10 @@ def _synthesize_image(
         scale: float = float(placement.get("scale", 1.0))
         rotation: float = float(placement.get("rotation", 0))
 
-        patch = cv2.imread(defect_path)
-        if patch is None:
+        try:
+            patch = safe_imread(defect_path)
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Failed to load defect patch {defect_path}: {e}")
             continue
 
         patch = _transform_patch(patch, scale, rotation)
@@ -200,8 +207,10 @@ def _synthesize_image(
 def _synthesize_single_image_worker(args_tuple):
     """Module-level worker for MPB synthesis (pickle-safe)."""
     image_path_str, placements, output_dir_str, fmt, use_fast_blend = args_tuple
-    image = cv2.imread(image_path_str)
-    if image is None:
+    try:
+        image = safe_imread(image_path_str)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(f"Worker failed to load image {image_path_str}: {e}")
         return None
     return _synthesize_image(image_path_str, placements, output_dir_str, fmt, use_fast_blend)
 

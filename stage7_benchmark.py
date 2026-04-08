@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import shutil
 import warnings
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -234,14 +237,19 @@ def _train_yolo(
             exist_ok=True,
             seed=seed,
         )
-    except Exception:
-        pass  # 학습 중 예외 → trainer.last 에서 복구 시도
+    except ImportError as e:
+        logger.error(f"YOLO import failed: {e}")
+        raise
+    except RuntimeError as e:
+        logger.error(f"YOLO training failed with runtime error: {e}")
+    except Exception as e:
+        logger.warning(f"YOLO training exception: {e}")
     finally:
         if _yaml_path:
             try:
                 os.unlink(_yaml_path)
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug(f"Failed to remove temp yaml {_yaml_path}: {e}")
 
     # 학습 성공/실패 무관 — trainer.last 에서 새 YOLO 인스턴스를 생성한다.
     # model.train() 이 정상 반환해도 내부 ckpt_path 등이 오염될 수 있으므로
@@ -255,14 +263,18 @@ def _train_yolo(
                 try:
                     from ultralytics import YOLO
                     return YOLO(str(last_path))
-                except Exception:
-                    pass
+                except ImportError as e:
+                    logger.error(f"Failed to load YOLO checkpoint: {e}")
+                except Exception as e:
+                    logger.warning(f"Unexpected error loading checkpoint {last_path}: {e}")
 
     # last.pt 미존재 (첫 epoch 전 실패) → 새 pretrained 모델 반환
     try:
         from ultralytics import YOLO
+        logger.warning("Training failed, returning pretrained model")
         return YOLO("yolo11n-cls.pt")
-    except Exception:
+    except ImportError as e:
+        logger.error(f"Failed to load pretrained YOLO: {e}")
         return model  # 최후 수단
 
 
@@ -648,7 +660,17 @@ def run_benchmark(
                 exp_time = time.time() - exp_start
                 metrics["_exp_time_sec"] = round(exp_time, 2)
 
+            except ImportError as e:
+                logger.error(f"{task} - {model_name} - {group}: Import error - {e}")
+                results[model_name][group] = {"error": "ImportError", "detail": str(e)}
+            except RuntimeError as e:
+                logger.error(f"{task} - {model_name} - {group}: Runtime error - {e}")
+                results[model_name][group] = {"error": "RuntimeError", "detail": str(e)}
+            except FileNotFoundError as e:
+                logger.error(f"{task} - {model_name} - {group}: File not found - {e}")
+                results[model_name][group] = {"error": "FileNotFoundError", "detail": str(e)}
             except Exception as e:
+                logger.error(f"{task} - {model_name} - {group}: Unexpected error - {type(e).__name__}: {e}")
                 results[model_name][group] = {"error": type(e).__name__, "detail": str(e)}
             
             finally:
