@@ -553,13 +553,26 @@ print("\n✓ Stage 5 완료")
 > ThreadPoolExecutor 병렬 복사 + tqdm 진행률 표시.
 
 ```python
-import shutil, time
+import shutil, time, yaml
 from stage6_dataset_builder import run_dataset_builder
 from collections import defaultdict
 from tqdm import tqdm
 
 PRUNING_THRESHOLD = 0.6
 LOCAL_TMP = Path("/content/tmp_stage6")
+
+# 도메인별 증강 비율 설정 로드
+CONFIG_PATH = Path("/content/drive/MyDrive/aroma/configs/benchmark_experiment.yaml")
+augmentation_ratio_by_domain = None
+if CONFIG_PATH.exists():
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+        augmentation_ratio_by_domain = config.get("augmentation_ratio_by_domain")
+    print("도메인별 증강 비율 설정:")
+    for domain, ratios in augmentation_ratio_by_domain.items():
+        print(f"  {domain}: full={ratios['full']}, pruned={ratios['pruned']}")
+else:
+    print("Config 파일 없음, 기본 동작 사용")
 
 # cat_dir별 seed_dirs 수집
 cat_seed_dirs = defaultdict(list)
@@ -616,22 +629,30 @@ for key, info in SMOKE_CATS.items():
     copy_sec = time.time() - t0
     print(f"  로컬 캐시 완료 ({copy_sec:.1f}s)")
 
-    # ── 로컬에서 데이터셋 구성 (병렬 복사 + 진행률 표시) ──────
+    # ── 로컬에서 데이터셋 구성 (병렬 복사 + 도메인별 비율 적용) ──────
     t1 = time.time()
     result = run_dataset_builder(
-        cat_dir                   = str(local_cat),
-        image_dir                 = str(local_image_dir),
-        seed_dirs                 = local_seed_dirs,
-        pruning_threshold         = PRUNING_THRESHOLD,
-        augmentation_ratio_full   = None,  # None=모든 defect 사용 (기본값)
-        augmentation_ratio_pruned = None,  # 예: 1.5 → good 209개면 defect 313개
-        workers                   = -1,    # Auto thread workers (I/O-bound)
+        cat_dir                      = str(local_cat),
+        image_dir                    = str(local_image_dir),
+        seed_dirs                    = local_seed_dirs,
+        pruning_threshold            = PRUNING_THRESHOLD,
+        augmentation_ratio_full      = None,  # None=도메인별 또는 기본 동작
+        augmentation_ratio_pruned    = None,  # None=도메인별 또는 기본 동작
+        augmentation_ratio_by_domain = augmentation_ratio_by_domain,  # 도메인별 비율
+        workers                      = -1,    # Auto thread workers (I/O-bound)
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")
+    print(f"    domain: {result.get('domain', 'unknown')}")
+    print(f"    applied ratio_full: {result.get('ratio_full', 'N/A')}")
+    print(f"    applied ratio_pruned: {result.get('ratio_pruned', 'N/A')}")
     print(f"    baseline good={result['baseline']['good_count']}")
     print(f"    aroma_full defect={result['aroma_full']['defect_count']}")
     print(f"    aroma_pruned defect={result['aroma_pruned']['defect_count']}")
+    # 예상 결과:
+    # - isp_ASM (500 good): full=500, pruned=250
+    # - mvtec_bottle (209 good): full=418, pruned=313
+    # - visa_candle (900 good): full=1800, pruned=1350
 
     # ── 결과를 Drive로 업로드 ─────────────────────────────────
     t2 = time.time()

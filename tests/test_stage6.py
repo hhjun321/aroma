@@ -491,3 +491,166 @@ def test_rerun_when_augmentation_ratio_differs(tmp_path):
     assert result["aroma_full"]["defect_count"] == 10  # 5 * 2.0
     assert result["augmentation_ratio_full"] == 2.0
 
+
+# ---------------------------------------------------------------------------
+# Domain-based augmentation ratio tests
+# ---------------------------------------------------------------------------
+
+def test_augmentation_ratio_by_domain_applies_domain_specific_ratios(tmp_path):
+    """도메인별 비율이 설정되면 도메인에 따라 다른 비율 적용."""
+    from utils.dataset_builder import build_dataset_groups
+    
+    # mvtec 도메인 시뮬레이션: tmp_path/mvtec/bottle 구조 생성
+    mvtec_dir = tmp_path / "mvtec"
+    mvtec_dir.mkdir()
+    bottle_dir = mvtec_dir / "bottle"
+    bottle_dir.mkdir()
+    
+    image_dir = _make_image_dir(bottle_dir, count=10)  # 10 good images
+    seed_dirs = _make_seed_dirs(bottle_dir, ["broken"])
+    
+    # 30개 defect 생성
+    scores = {f"{i:03d}": 0.8 for i in range(30)}
+    _make_stage4_seed(bottle_dir, "seed_001", list(scores.keys()), scores=scores)
+    
+    # 도메인별 비율 설정
+    ratio_by_domain = {
+        "isp": {"full": 1.0, "pruned": 0.5},
+        "mvtec": {"full": 2.0, "pruned": 1.5},  # mvtec 적용됨
+        "visa": {"full": 2.0, "pruned": 1.5},
+    }
+    
+    result = build_dataset_groups(
+        str(bottle_dir), str(image_dir), seed_dirs,
+        augmentation_ratio_by_domain=ratio_by_domain
+    )
+    
+    # mvtec 도메인의 비율 (2.0, 1.5) 적용
+    assert result["domain"] == "mvtec"
+    assert result["augmentation_ratio_full"] == 2.0
+    assert result["augmentation_ratio_pruned"] == 1.5
+    assert result["aroma_full"]["defect_count"] == 20  # 10 * 2.0
+    assert result["aroma_pruned"]["defect_count"] == 15  # 10 * 1.5
+
+
+def test_augmentation_ratio_by_domain_isp_applies_lower_ratio(tmp_path):
+    """ISP 도메인은 낮은 비율 적용 (classification task)."""
+    from utils.dataset_builder import build_dataset_groups
+    
+    # isp 도메인 시뮬레이션
+    isp_dir = tmp_path / "isp"
+    isp_dir.mkdir()
+    asm_dir = isp_dir / "ASM"
+    asm_dir.mkdir()
+    
+    image_dir = _make_image_dir(asm_dir, count=10)
+    seed_dirs = _make_seed_dirs(asm_dir, ["area"])
+    
+    scores = {f"{i:03d}": 0.8 for i in range(30)}
+    _make_stage4_seed(asm_dir, "seed_001", list(scores.keys()), scores=scores)
+    
+    ratio_by_domain = {
+        "isp": {"full": 1.0, "pruned": 0.5},  # ISP: 낮은 비율
+        "mvtec": {"full": 2.0, "pruned": 1.5},
+    }
+    
+    result = build_dataset_groups(
+        str(asm_dir), str(image_dir), seed_dirs,
+        augmentation_ratio_by_domain=ratio_by_domain
+    )
+    
+    assert result["domain"] == "isp"
+    assert result["augmentation_ratio_full"] == 1.0
+    assert result["augmentation_ratio_pruned"] == 0.5
+    assert result["aroma_full"]["defect_count"] == 10  # 10 * 1.0
+    assert result["aroma_pruned"]["defect_count"] == 5  # 10 * 0.5
+
+
+def test_augmentation_ratio_by_domain_fallback_to_global(tmp_path):
+    """도메인별 설정 없으면 전역 비율 fallback."""
+    from utils.dataset_builder import build_dataset_groups
+    
+    # unknown 도메인
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    cat_dir = unknown_dir / "category"
+    cat_dir.mkdir()
+    
+    image_dir = _make_image_dir(cat_dir, count=10)
+    seed_dirs = _make_seed_dirs(cat_dir, ["defect"])
+    
+    scores = {f"{i:03d}": 0.8 for i in range(30)}
+    _make_stage4_seed(cat_dir, "seed_001", list(scores.keys()), scores=scores)
+    
+    ratio_by_domain = {
+        "isp": {"full": 1.0, "pruned": 0.5},
+        # "unknown" 도메인은 설정 없음
+    }
+    
+    result = build_dataset_groups(
+        str(cat_dir), str(image_dir), seed_dirs,
+        augmentation_ratio_full=1.5,  # Fallback
+        augmentation_ratio_pruned=1.0,
+        augmentation_ratio_by_domain=ratio_by_domain
+    )
+    
+    assert result["domain"] == "unknown"
+    assert result["augmentation_ratio_full"] == 1.5  # Fallback 적용
+    assert result["augmentation_ratio_pruned"] == 1.0
+    assert result["aroma_full"]["defect_count"] == 15  # 10 * 1.5
+
+
+def test_augmentation_ratio_by_domain_override_with_explicit_params(tmp_path):
+    """도메인별 설정이 있어도 명시적 파라미터로 override 가능."""
+    from utils.dataset_builder import build_dataset_groups
+    
+    mvtec_dir = tmp_path / "mvtec"
+    mvtec_dir.mkdir()
+    bottle_dir = mvtec_dir / "bottle"
+    bottle_dir.mkdir()
+    
+    image_dir = _make_image_dir(bottle_dir, count=10)
+    seed_dirs = _make_seed_dirs(bottle_dir, ["broken"])
+    
+    scores = {f"{i:03d}": 0.8 for i in range(30)}
+    _make_stage4_seed(bottle_dir, "seed_001", list(scores.keys()), scores=scores)
+    
+    ratio_by_domain = {
+        "mvtec": {"full": 2.0, "pruned": 1.5},
+    }
+    
+    # 명시적 파라미터가 우선되지 않음 (도메인별 설정이 우선)
+    result = build_dataset_groups(
+        str(bottle_dir), str(image_dir), seed_dirs,
+        augmentation_ratio_full=3.0,  # 무시됨
+        augmentation_ratio_by_domain=ratio_by_domain
+    )
+    
+    # 도메인별 설정이 우선 적용
+    assert result["augmentation_ratio_full"] == 2.0
+    assert result["aroma_full"]["defect_count"] == 20
+
+
+def test_domain_extraction_from_cat_dir_path(tmp_path):
+    """cat_dir 경로에서 도메인 추출 검증."""
+    from utils.dataset_builder import build_dataset_groups
+    
+    # 다양한 도메인 구조 테스트
+    for domain_name in ["isp", "mvtec", "visa"]:
+        domain_dir = tmp_path / domain_name
+        domain_dir.mkdir()
+        cat_dir = domain_dir / "test_cat"
+        cat_dir.mkdir()
+        
+        image_dir = _make_image_dir(cat_dir, count=5)
+        seed_dirs = _make_seed_dirs(cat_dir, ["defect"])
+        _make_stage4_seed(cat_dir, "seed_001", ["000"], scores={"000": 0.8})
+        
+        result = build_dataset_groups(
+            str(cat_dir), str(image_dir), seed_dirs
+        )
+        
+        assert result["domain"] == domain_name, \
+            f"Expected domain '{domain_name}', got '{result['domain']}'"
+
+

@@ -8,6 +8,7 @@ Stage 4 synthesis outputs and Stage 5 quality scores.
 from __future__ import annotations
 
 import argparse
+import yaml
 
 from utils.dataset_builder import build_dataset_groups
 from utils.io import validate_dir
@@ -20,6 +21,7 @@ def run_dataset_builder(
     pruning_threshold: float = 0.6,
     augmentation_ratio_full: float | None = None,
     augmentation_ratio_pruned: float | None = None,
+    augmentation_ratio_by_domain: dict | None = None,
     workers: int = 0,
 ) -> dict:
     """build_dataset_groups() 의 직접 래퍼.
@@ -37,6 +39,7 @@ def run_dataset_builder(
         pruning_threshold=pruning_threshold,
         augmentation_ratio_full=augmentation_ratio_full,
         augmentation_ratio_pruned=augmentation_ratio_pruned,
+        augmentation_ratio_by_domain=augmentation_ratio_by_domain,
         workers=workers,
     )
 
@@ -57,6 +60,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="aroma_full 원본 대비 합성 defect 비율 (None=모두 사용).")
     p.add_argument("--augmentation_ratio_pruned", type=float, default=None,
                    help="aroma_pruned 원본 대비 합성 defect 비율 (None=모두 사용).")
+    p.add_argument("--config", type=str, default=None,
+                   help="benchmark_experiment.yaml 경로 (도메인별 비율 로드용).")
     p.add_argument("--workers", type=int, default=0,
                    help="병렬 워커 수 (0=순차, -1=자동, N>=2=N 프로세스).")
     return p
@@ -64,6 +69,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    
+    # ── Config 파일에서 도메인별 비율 로드 ────────────────────────────────
+    augmentation_ratio_by_domain = None
+    if args.config:
+        from pathlib import Path
+        config_path = Path(args.config)
+        if config_path.exists():
+            with open(config_path, encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+            augmentation_ratio_by_domain = config.get("dataset", {}).get(
+                "augmentation_ratio_by_domain"
+            )
+    
     result = run_dataset_builder(
         cat_dir=args.cat_dir,
         image_dir=args.image_dir,
@@ -71,8 +89,12 @@ def main() -> None:
         pruning_threshold=args.pruning_threshold,
         augmentation_ratio_full=args.augmentation_ratio_full,
         augmentation_ratio_pruned=args.augmentation_ratio_pruned,
+        augmentation_ratio_by_domain=augmentation_ratio_by_domain,
         workers=args.workers,
     )
+    print(f"Domain: {result.get('domain', 'unknown')}")
+    print(f"Applied ratio_full: {result.get('augmentation_ratio_full')}")
+    print(f"Applied ratio_pruned: {result.get('augmentation_ratio_pruned')}")
     print(f"baseline   good={result['baseline']['good_count']}")
     print(f"aroma_full defect={result['aroma_full']['defect_count']}")
     print(f"aroma_pruned defect={result['aroma_pruned']['defect_count']}")

@@ -190,6 +190,7 @@ def build_dataset_groups(
     pruning_threshold: float = 0.6,
     augmentation_ratio_full: float | None = None,
     augmentation_ratio_pruned: float | None = None,
+    augmentation_ratio_by_domain: dict | None = None,
     workers: int = 0,
 ) -> dict:
     """3개 dataset group 을 구성하고 build_report.json 을 저장한다.
@@ -203,6 +204,9 @@ def build_dataset_groups(
         augmentation_ratio_full: aroma_full의 원본 대비 합성 defect 비율
             (None이면 모든 defect 사용). 예: 2.0 → good 209개면 defect 418개.
         augmentation_ratio_pruned: aroma_pruned의 원본 대비 합성 defect 비율.
+        augmentation_ratio_by_domain: 도메인별 비율 설정 (dict).
+            예: {"isp": {"full": 1.0, "pruned": 0.5}, "mvtec": {...}}
+            이 값이 설정되면 도메인 추출 후 우선 적용됨.
         workers: 병렬 워커 수 (0=순차).
 
     Returns:
@@ -216,6 +220,18 @@ def build_dataset_groups(
     aug_dir = cat_path / "augmented_dataset"
     report_path = aug_dir / "build_report.json"
 
+    # ── 도메인별 비율 우선 적용 ──────────────────────────────────────────
+    # cat_dir 경로에서 도메인 추출: .../domain/category/ → domain
+    domain = cat_path.parent.name
+    
+    if augmentation_ratio_by_domain and domain in augmentation_ratio_by_domain:
+        domain_ratios = augmentation_ratio_by_domain[domain]
+        ratio_full = domain_ratios.get("full", augmentation_ratio_full)
+        ratio_pruned = domain_ratios.get("pruned", augmentation_ratio_pruned)
+    else:
+        ratio_full = augmentation_ratio_full
+        ratio_pruned = augmentation_ratio_pruned
+
     # Skip 조건 확인
     # stage4_output 이 존재하고 이전 실행에서 실제 defect 가 수집됐을 때만 skip.
     # stage4 가 미실행인 채로 캐시된 경우(defect_count=0) stage4 완료 후 재실행 가능하도록 skip 하지 않음.
@@ -224,10 +240,10 @@ def build_dataset_groups(
         cached = json.loads(report_path.read_text())
         threshold_match = abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6
         ratio_full_match = (
-            cached.get("augmentation_ratio_full") == augmentation_ratio_full
+            cached.get("augmentation_ratio_full") == ratio_full
         )
         ratio_pruned_match = (
-            cached.get("augmentation_ratio_pruned") == augmentation_ratio_pruned
+            cached.get("augmentation_ratio_pruned") == ratio_pruned
         )
         cached_has_defects = cached.get("aroma_full", {}).get("defect_count", 0) > 0
         stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
@@ -281,7 +297,7 @@ def build_dataset_groups(
     full_defect_pairs = _collect_defect_paths(
         cat_dir,
         pruning_threshold=None,
-        augmentation_ratio=augmentation_ratio_full,
+        augmentation_ratio=ratio_full,
         good_count=good_count,
     )
     if not full_defect_pairs:
@@ -318,7 +334,7 @@ def build_dataset_groups(
     pruned_defect_pairs = _collect_defect_paths(
         cat_dir,
         pruning_threshold=pruning_threshold,
-        augmentation_ratio=augmentation_ratio_pruned,
+        augmentation_ratio=ratio_pruned,
         good_count=good_count,
     )
     if pruned_defect_pairs:
@@ -337,8 +353,9 @@ def build_dataset_groups(
 
     report = {
         "pruning_threshold": pruning_threshold,
-        "augmentation_ratio_full": augmentation_ratio_full,
-        "augmentation_ratio_pruned": augmentation_ratio_pruned,
+        "augmentation_ratio_full": ratio_full,
+        "augmentation_ratio_pruned": ratio_pruned,
+        "domain": domain,  # 도메인 정보 저장
         "stage4_status": stage4_status,
         "stage4_seeds_total": stage4_seeds_total,
         "stage4_seeds_with_defects": stage4_seeds_with_defects,

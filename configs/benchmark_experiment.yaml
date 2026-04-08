@@ -3,8 +3,24 @@ dataset:
   image_size: 512
   num_workers: 4
   pruning_threshold: 0.6
-  augmentation_ratio_full: null      # aroma_full 원본 대비 합성 defect 비율 (null=모두 사용)
-  augmentation_ratio_pruned: null    # aroma_pruned 원본 대비 합성 defect 비율 (null=모두 사용)
+  
+  # 도메인별 증강 비율 (domain → {full, pruned})
+  # Classification(ISP)은 적게, Segmentation(MVTec/VisA)은 더 많이
+  augmentation_ratio_by_domain:
+    isp:
+      full: 1.0      # ISP: 1:1 균형 (classification task)
+      pruned: 0.5    # pruned는 더 보수적
+    mvtec:
+      full: 2.0      # MVTec: 2:1 (segmentation, 더 많은 데이터 필요)
+      pruned: 1.5
+    visa:
+      full: 2.0      # VisA: 2:1 (segmentation)
+      pruned: 1.5
+  
+  # Fallback 기본값 (도메인 매칭 실패 시 또는 override 용도)
+  augmentation_ratio_full: null      # null=모두 사용
+  augmentation_ratio_pruned: null    # null=모두 사용
+  
   task_by_domain:
     isp: classification
     mvtec: segmentation
