@@ -585,6 +585,7 @@ for key, info in SMOKE_CATS.items():
 for key, info in SMOKE_CATS.items():
     cat_dir   = info["cat_dir"]
     image_dir = Path(info["image_dir"])
+    domain    = info["domain"]  # 도메인 정보 추출
     sentinel  = cat_dir / "augmented_dataset" / "build_report.json"
 
     if sentinel.exists():
@@ -592,15 +593,19 @@ for key, info in SMOKE_CATS.items():
         continue
 
     print(f"\n{'='*50}")
-    print(f"Stage 6: {key}")
+    print(f"Stage 6: {key} (domain={domain})")
     t0 = time.time()
 
-    # ── 로컬 SSD에 cat_dir 구조 미러링 ───────────────────────
-    local_cat = LOCAL_TMP / cat_dir.name
+    # ── 로컬 SSD에 cat_dir 구조 미러링 (경로 구조 보존) ──────────
+    # Drive: /content/drive/.../Aroma/isp/unsupervised/ASM
+    # Local: /content/tmp_stage6/isp/unsupervised/ASM (구조 동일)
+    # 이유: utils/dataset_builder.py의 도메인 추출 로직이 경로 구조에 의존
+    relative_path = cat_dir.relative_to(cat_dir.parents[3])  # "isp/unsupervised/ASM"
+    local_cat = LOCAL_TMP / relative_path
     if local_cat.exists():
         shutil.rmtree(str(local_cat))
 
-    print(f"  로컬 캐시 복사 중...")
+    print(f"  로컬 캐시 복사 중... (경로: {relative_path})")
     
     # 1) stage4_output 복사 (defect 이미지 + quality_scores.json)
     stage4_src = cat_dir / "stage4_output"
@@ -642,13 +647,13 @@ for key, info in SMOKE_CATS.items():
         augmentation_ratio_full      = None,  # None=도메인별 또는 기본 동작
         augmentation_ratio_pruned    = None,  # None=도메인별 또는 기본 동작
         augmentation_ratio_by_domain = augmentation_ratio_by_domain,  # 도메인별 비율
-        workers                      = -1,    # Auto thread workers (I/O-bound)
+        workers                      = 8,     # I/O-bound 작업에 최적화 (ThreadPoolExecutor)
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")
-    print(f"    domain: {result.get('domain', 'unknown')}")
-    print(f"    applied ratio_full: {result.get('ratio_full', 'N/A')}")
-    print(f"    applied ratio_pruned: {result.get('ratio_pruned', 'N/A')}")
+    print(f"    추출된 domain: {result.get('domain', 'unknown')}")
+    print(f"    applied ratio_full: {result.get('augmentation_ratio_full', 'N/A')}")
+    print(f"    applied ratio_pruned: {result.get('augmentation_ratio_pruned', 'N/A')}")
     print(f"    baseline good={result['baseline']['good_count']}")
     print(f"    aroma_full defect={result['aroma_full']['defect_count']}")
     print(f"    aroma_pruned defect={result['aroma_pruned']['defect_count']}")
