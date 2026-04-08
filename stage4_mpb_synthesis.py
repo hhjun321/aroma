@@ -5,7 +5,6 @@ Composites defect patches onto background images using cv2.seamlessClone
 """
 import argparse
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
 
@@ -114,10 +113,13 @@ def _blend_patch_fast(
     alpha = np.ones((rh, rw), dtype=np.float32)
     alpha = cv2.GaussianBlur(alpha, (ksize, ksize), 0)[..., np.newaxis]
 
-    result = bg.copy().astype(np.float32)
-    roi = result[top:top + rh, left:left + rw]
-    roi[:] = patch[:rh, :rw].astype(np.float32) * alpha + roi * (1.0 - alpha)
-    return result.astype(np.uint8)
+    # Optimize: only convert ROI to float32, not entire image
+    result = bg.copy()
+    roi_bg = result[top:top + rh, left:left + rw].astype(np.float32)
+    roi_patch = patch[:rh, :rw].astype(np.float32)
+    blended = roi_patch * alpha + roi_bg * (1.0 - alpha)
+    result[top:top + rh, left:left + rw] = blended.astype(np.uint8)
+    return result
 
 
 def _synthesize_image(
@@ -232,14 +234,24 @@ def _synthesize_image_multi_seed_worker(args_tuple):
     ih, iw = bg.shape[:2]
     png_params = [cv2.IMWRITE_PNG_COMPRESSION, png_compression]
 
+    # Defect patch cache: avoid re-reading same files
+    patch_cache = {}
+
     for seed_id, placements in seed_entries:
         composited = bg.copy()
         yolo_boxes: List[str] = []
 
         for placement in placements:
-            patch = cv2.imread(placement["defect_path"])
+            defect_path = placement["defect_path"]
+
+            # Cache defect patches
+            if defect_path not in patch_cache:
+                patch_cache[defect_path] = cv2.imread(defect_path)
+
+            patch = patch_cache[defect_path]
             if patch is None:
                 continue
+
             patch = _transform_patch(
                 patch,
                 float(placement.get("scale", 1.0)),
@@ -293,7 +305,7 @@ def run_synthesis_batch(
         output_root:         Root output directory; outputs go to output_root/<seed_id>/.
         format:              'cls' or 'yolo'.
         use_fast_blend:      Use Gaussian soft-mask instead of seamlessClone.
-        workers:             Thread workers (0=sequential, -1=auto, N=N threads).
+        workers:             Process workers (0=sequential, -1=auto, N=N processes).
         png_compression:     PNG compression level 0-9 (0=none, 1=fastest, 9=smallest).
                              Default 3. Use 1 for large images (e.g. VisA ~2MB).
         max_background_dim:  If set, downscale background so max(H,W) <= this value
@@ -314,7 +326,7 @@ def run_synthesis_batch(
             stacklevel=2,
         )
 
-    from utils.parallel import resolve_workers
+    from utils.parallel import resolve_workers, run_parallel
 
     # Build {image_id: [(seed_id, placements), ...]}
     image_seed_map: dict = {}
@@ -338,12 +350,12 @@ def run_synthesis_batch(
     ]
 
     num_workers = resolve_workers(workers)
-    if num_workers <= 1:
-        for t in tasks:
-            _synthesize_image_multi_seed_worker(t)
-    else:
-        with ThreadPoolExecutor(max_workers=num_workers) as ex:
-            list(ex.map(_synthesize_image_multi_seed_worker, tasks))
+    run_parallel(
+        _synthesize_image_multi_seed_worker,
+        tasks,
+        num_workers,
+        desc=f"Stage4 batch synthesis (workers={num_workers})",
+    )
 
 
 def run_synthesis(

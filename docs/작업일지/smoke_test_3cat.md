@@ -364,9 +364,11 @@ print("\n✓ Stage 3 완료")
 ```python
 import shutil, time
 from stage4_mpb_synthesis import run_synthesis_batch
+from tqdm import tqdm
 
 USE_FAST_BLEND = True
 LOCAL_TMP = Path("/content/tmp_stage4")  # Colab 로컬 SSD
+MAX_CANDLE_SEEDS = 10  # candle smoke test: 10 seeds만 처리 (100개 전체는 ~90K 이미지)
 
 for key, info in SMOKE_CATS.items():
     cat_dir    = info["cat_dir"]
@@ -396,6 +398,11 @@ for key, info in SMOKE_CATS.items():
         else:
             seed_pm_pairs.append((d.name, str(pm)))
 
+    # candle smoke test: 첫 10개 seed만 처리
+    if key == "visa_candle" and len(seed_pm_pairs) > MAX_CANDLE_SEEDS:
+        print(f"  ℹ candle smoke test: {len(seed_pm_pairs)} seeds → {MAX_CANDLE_SEEDS}로 제한")
+        seed_pm_pairs = seed_pm_pairs[:MAX_CANDLE_SEEDS]
+
     if not seed_pm_pairs:
         print(f"  ⏭ {key}: 모두 완료 (skip {skip})")
         continue
@@ -413,11 +420,14 @@ for key, info in SMOKE_CATS.items():
     # 1) 배경 이미지 복사
     if local_image_dir.exists():
         shutil.rmtree(local_image_dir)
+    print(f"  배경 이미지 복사 중...", end=" ", flush=True)
     shutil.copytree(str(image_dir), str(local_image_dir))
+    print("완료")
 
     # 2) Stage 2 output (defect variants) — 필요한 seed만 복사
     local_stage2.mkdir(parents=True, exist_ok=True)
-    for seed_id, _ in seed_pm_pairs:
+    print(f"  Stage 2 variants 복사 중... ({len(seed_pm_pairs)} seeds)")
+    for seed_id, _ in tqdm(seed_pm_pairs, desc="    복사", leave=False):
         src = stage2_dir / seed_id
         dst = local_stage2 / seed_id
         if src.exists() and not dst.exists():
@@ -465,7 +475,8 @@ for key, info in SMOKE_CATS.items():
     # ── 결과를 Drive로 복사 ───────────────────────────────────
     t2 = time.time()
     drive_stage4 = cat_dir / "stage4_output"
-    for seed_id, _ in local_pm_pairs:
+    print(f"  Drive 업로드 중... ({len(local_pm_pairs)} seeds)")
+    for seed_id, _ in tqdm(local_pm_pairs, desc="    업로드", leave=False):
         src = local_stage4 / seed_id
         dst = drive_stage4 / seed_id
         if src.exists():
