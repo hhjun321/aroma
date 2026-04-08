@@ -117,6 +117,8 @@ def _copy_images(src_dir: Path, dst_dir: Path, num_workers: int,
     Google Drive 같은 I/O-bound 환경에서는 ThreadPoolExecutor 가 효율적.
     """
     from concurrent.futures import ThreadPoolExecutor
+    from tqdm import tqdm
+    
     imgs = (
         sorted(src_dir.glob("*.png"))
         + sorted(src_dir.glob("*.jpg"))
@@ -126,12 +128,17 @@ def _copy_images(src_dir: Path, dst_dir: Path, num_workers: int,
         return 0
     dst_dir.mkdir(parents=True, exist_ok=True)
     tasks = [(str(s), str(dst_dir / s.name)) for s in imgs]
+    
+    # Progress tracking
+    progress_desc = f"  {desc}" if desc else "  Copying images"
+    
     if num_workers <= 1:
-        for t in tasks:
+        for t in tqdm(tasks, desc=progress_desc, leave=False):
             _copy_worker(t)
     else:
         with ThreadPoolExecutor(max_workers=num_workers) as ex:
-            list(ex.map(_copy_worker, tasks))
+            list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks), 
+                     desc=progress_desc, leave=False))
     return len(imgs)
 
 
@@ -235,16 +242,18 @@ def build_dataset_groups(
             stacklevel=2,
         )
     if full_defect_pairs:
+        from tqdm import tqdm
         full_defect_dst = aug_dir / "aroma_full" / "train" / "defect"
         full_defect_dst.mkdir(parents=True, exist_ok=True)
         tasks = [(src, str(full_defect_dst / dst_name))
                  for src, dst_name in full_defect_pairs]
         if num_workers <= 1:
-            for t in tasks:
+            for t in tqdm(tasks, desc="  aroma_full/train/defect", leave=False):
                 _copy_worker(t)
         else:
             with ThreadPoolExecutor(max_workers=num_workers) as ex:
-                list(ex.map(_copy_worker, tasks))
+                list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
+                         desc="  aroma_full/train/defect", leave=False))
 
     # ── aroma_pruned/train/ ───────────────────────────────────────────────
     _copy_images(Path(image_dir),
@@ -254,16 +263,18 @@ def build_dataset_groups(
     pruned_defect_pairs = _collect_defect_paths(cat_dir,
                                                  pruning_threshold=pruning_threshold)
     if pruned_defect_pairs:
+        from tqdm import tqdm
         pruned_defect_dst = aug_dir / "aroma_pruned" / "train" / "defect"
         pruned_defect_dst.mkdir(parents=True, exist_ok=True)
         tasks = [(src, str(pruned_defect_dst / dst_name))
                  for src, dst_name in pruned_defect_pairs]
         if num_workers <= 1:
-            for t in tasks:
+            for t in tqdm(tasks, desc="  aroma_pruned/train/defect", leave=False):
                 _copy_worker(t)
         else:
             with ThreadPoolExecutor(max_workers=num_workers) as ex:
-                list(ex.map(_copy_worker, tasks))
+                list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
+                         desc="  aroma_pruned/train/defect", leave=False))
 
     report = {
         "pruning_threshold": pruning_threshold,

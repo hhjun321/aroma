@@ -550,11 +550,13 @@ print("\n✓ Stage 5 완료")
 ## 셀 9: Stage 6 — 증강 데이터셋 구성 (로컬 SSD 캐시)
 
 > 순수 파일 복사 Stage (~9,590 I/O ops). 로컬 SSD에서 구성 후 Drive로 일괄 업로드.
+> ThreadPoolExecutor 병렬 복사 + tqdm 진행률 표시.
 
 ```python
 import shutil, time
 from stage6_dataset_builder import run_dataset_builder
 from collections import defaultdict
+from tqdm import tqdm
 
 PRUNING_THRESHOLD = 0.6
 LOCAL_TMP = Path("/content/tmp_stage6")
@@ -582,6 +584,8 @@ for key, info in SMOKE_CATS.items():
     if local_cat.exists():
         shutil.rmtree(str(local_cat))
 
+    print(f"  로컬 캐시 복사 중...")
+    
     # 1) stage4_output 복사 (defect 이미지 + quality_scores.json)
     stage4_src = cat_dir / "stage4_output"
     if stage4_src.exists():
@@ -612,14 +616,14 @@ for key, info in SMOKE_CATS.items():
     copy_sec = time.time() - t0
     print(f"  로컬 캐시 완료 ({copy_sec:.1f}s)")
 
-    # ── 로컬에서 데이터셋 구성 ────────────────────────────────
+    # ── 로컬에서 데이터셋 구성 (병렬 복사 + 진행률 표시) ──────
     t1 = time.time()
     result = run_dataset_builder(
         cat_dir           = str(local_cat),
         image_dir         = str(local_image_dir),
         seed_dirs         = local_seed_dirs,
         pruning_threshold = PRUNING_THRESHOLD,
-        workers           = 8,
+        workers           = -1,  # Auto thread workers (I/O-bound)
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")
@@ -629,6 +633,7 @@ for key, info in SMOKE_CATS.items():
 
     # ── 결과를 Drive로 업로드 ─────────────────────────────────
     t2 = time.time()
+    print(f"  Drive 업로드 중...")
     local_aug = local_cat / "augmented_dataset"
     drive_aug = cat_dir / "augmented_dataset"
     if drive_aug.exists():
