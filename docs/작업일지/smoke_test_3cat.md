@@ -619,11 +619,13 @@ for key, info in SMOKE_CATS.items():
     # ── 로컬에서 데이터셋 구성 (병렬 복사 + 진행률 표시) ──────
     t1 = time.time()
     result = run_dataset_builder(
-        cat_dir           = str(local_cat),
-        image_dir         = str(local_image_dir),
-        seed_dirs         = local_seed_dirs,
-        pruning_threshold = PRUNING_THRESHOLD,
-        workers           = -1,  # Auto thread workers (I/O-bound)
+        cat_dir                   = str(local_cat),
+        image_dir                 = str(local_image_dir),
+        seed_dirs                 = local_seed_dirs,
+        pruning_threshold         = PRUNING_THRESHOLD,
+        augmentation_ratio_full   = None,  # None=모든 defect 사용 (기본값)
+        augmentation_ratio_pruned = None,  # 예: 1.5 → good 209개면 defect 313개
+        workers                   = -1,    # Auto thread workers (I/O-bound)
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")

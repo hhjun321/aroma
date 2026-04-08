@@ -36,8 +36,17 @@ def _copy_worker(args_tuple: tuple) -> str | None:
 def _collect_defect_paths(
     cat_dir: str,
     pruning_threshold: float | None = None,
+    augmentation_ratio: float | None = None,
+    good_count: int = 0,
 ) -> list[tuple[str, str]]:
     """stage4_output/{seed_id}/defect/*.png 수집 (단일 깊이 *).
+
+    Args:
+        cat_dir: 카테고리 루트 디렉터리.
+        pruning_threshold: quality_score 최솟값 (None이면 품질 필터링 없음).
+        augmentation_ratio: 원본 대비 합성 defect 비율 (None이면 모든 이미지 사용).
+            예: 2.0 → 원본 good 209개면 합성 defect 418개 선택.
+        good_count: 원본 good 이미지 개수 (augmentation_ratio 계산에 사용).
 
     Returns:
         List of (src_path_str, dst_filename) where
@@ -47,7 +56,8 @@ def _collect_defect_paths(
     if not stage4_dir.exists():
         return []
 
-    result = []
+    # ── 1단계: 모든 defect 이미지 수집 (quality_score 포함) ──────────────
+    candidates = []  # List of (src_path_str, dst_filename, quality_score)
     for seed_dir in sorted(stage4_dir.iterdir()):
         if not seed_dir.is_dir():
             continue
@@ -59,7 +69,9 @@ def _collect_defect_paths(
         if not img_paths:
             continue
 
-        if pruning_threshold is not None:
+        # quality_scores.json 로드 (pruning_threshold 또는 augmentation_ratio 사용 시 필요)
+        quality_map = {}
+        if pruning_threshold is not None or augmentation_ratio is not None:
             quality_file = seed_dir / "quality_scores.json"
             if not quality_file.exists():
                 warnings.warn(
@@ -72,14 +84,39 @@ def _collect_defect_paths(
                 s["image_id"]: s["quality_score"]
                 for s in quality_data.get("scores", [])
             }
-            for p in img_paths:
-                if quality_map.get(p.stem, 0.0) >= pruning_threshold:
-                    result.append((str(p), f"{seed_dir.name}_{p.name}"))
-        else:
-            for p in img_paths:
-                result.append((str(p), f"{seed_dir.name}_{p.name}"))
 
-    return result
+        for p in img_paths:
+            quality = quality_map.get(p.stem, 0.0) if quality_map else 1.0
+            candidates.append((str(p), f"{seed_dir.name}_{p.name}", quality))
+
+    if not candidates:
+        return []
+
+    # ── 2단계: pruning_threshold 필터링 ──────────────────────────────────
+    if pruning_threshold is not None:
+        candidates = [
+            (src, dst, q) for src, dst, q in candidates
+            if q >= pruning_threshold
+        ]
+
+    # ── 3단계: augmentation_ratio 기반 샘플링 ────────────────────────────
+    if augmentation_ratio is not None and good_count > 0:
+        target_count = int(good_count * augmentation_ratio)
+        
+        # quality_score 기준 내림차순 정렬 후 상위 K개 선택
+        candidates = sorted(candidates, key=lambda x: x[2], reverse=True)
+        
+        if len(candidates) > target_count:
+            candidates = candidates[:target_count]
+        elif len(candidates) < target_count:
+            warnings.warn(
+                f"증강 비율 {augmentation_ratio}×{good_count}={target_count}개 요청, "
+                f"가용 defect {len(candidates)}개만 사용 (카테고리: {Path(cat_dir).name})",
+                stacklevel=3,
+            )
+
+    # ── 4단계: 최종 결과 반환 ───────────────────────────────────────────
+    return [(src, dst) for src, dst, _ in candidates]
 
 
 def _check_stage4_status(cat_dir: str) -> tuple[str, int, int]:
@@ -151,6 +188,8 @@ def build_dataset_groups(
     image_dir: str,
     seed_dirs: list[str],
     pruning_threshold: float = 0.6,
+    augmentation_ratio_full: float | None = None,
+    augmentation_ratio_pruned: float | None = None,
     workers: int = 0,
 ) -> dict:
     """3개 dataset group 을 구성하고 build_report.json 을 저장한다.
@@ -161,13 +200,16 @@ def build_dataset_groups(
         seed_dirs: dataset_config.json 에서 추출한 seed_dir 경로 목록.
             baseline/test/{defect_type}/ 구성에 사용.
         pruning_threshold: aroma_pruned 의 quality_score 최솟값.
+        augmentation_ratio_full: aroma_full의 원본 대비 합성 defect 비율
+            (None이면 모든 defect 사용). 예: 2.0 → good 209개면 defect 418개.
+        augmentation_ratio_pruned: aroma_pruned의 원본 대비 합성 defect 비율.
         workers: 병렬 워커 수 (0=순차).
 
     Returns:
         build_report dict. build_report.json 으로도 저장.
 
     Skip:
-        build_report.json 이 존재하고 저장된 pruning_threshold 와 일치하면
+        build_report.json 이 존재하고 저장된 파라미터들이 일치하면
         재생성 없이 로드하여 반환. 불일치 시 전체 재생성.
     """
     cat_path = Path(cat_dir)
@@ -181,9 +223,17 @@ def build_dataset_groups(
     if report_path.exists():
         cached = json.loads(report_path.read_text())
         threshold_match = abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6
+        ratio_full_match = (
+            cached.get("augmentation_ratio_full") == augmentation_ratio_full
+        )
+        ratio_pruned_match = (
+            cached.get("augmentation_ratio_pruned") == augmentation_ratio_pruned
+        )
         cached_has_defects = cached.get("aroma_full", {}).get("defect_count", 0) > 0
         stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
-        if threshold_match and (cached_has_defects or not stage4_now_exists):
+        
+        if (threshold_match and ratio_full_match and ratio_pruned_match and
+            (cached_has_defects or not stage4_now_exists)):
             return cached
 
     from concurrent.futures import ThreadPoolExecutor
@@ -228,7 +278,12 @@ def build_dataset_groups(
                  aug_dir / "aroma_full" / "train" / "good",
                  num_workers, desc="aroma_full/train/good")
 
-    full_defect_pairs = _collect_defect_paths(cat_dir, pruning_threshold=None)
+    full_defect_pairs = _collect_defect_paths(
+        cat_dir,
+        pruning_threshold=None,
+        augmentation_ratio=augmentation_ratio_full,
+        good_count=good_count,
+    )
     if not full_defect_pairs:
         # CASDA validate_yolo_dataset 패턴 — 학습 전 데이터 무결성 사전 검증
         detail = (
@@ -260,8 +315,12 @@ def build_dataset_groups(
                  aug_dir / "aroma_pruned" / "train" / "good",
                  num_workers, desc="aroma_pruned/train/good")
 
-    pruned_defect_pairs = _collect_defect_paths(cat_dir,
-                                                 pruning_threshold=pruning_threshold)
+    pruned_defect_pairs = _collect_defect_paths(
+        cat_dir,
+        pruning_threshold=pruning_threshold,
+        augmentation_ratio=augmentation_ratio_pruned,
+        good_count=good_count,
+    )
     if pruned_defect_pairs:
         from tqdm import tqdm
         pruned_defect_dst = aug_dir / "aroma_pruned" / "train" / "defect"
@@ -278,6 +337,8 @@ def build_dataset_groups(
 
     report = {
         "pruning_threshold": pruning_threshold,
+        "augmentation_ratio_full": augmentation_ratio_full,
+        "augmentation_ratio_pruned": augmentation_ratio_pruned,
         "stage4_status": stage4_status,
         "stage4_seeds_total": stage4_seeds_total,
         "stage4_seeds_with_defects": stage4_seeds_with_defects,

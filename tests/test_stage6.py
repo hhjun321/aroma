@@ -282,3 +282,212 @@ def test_stage4_status_partial_in_report(tmp_path):
     assert result["stage4_status"] == "partial"
     assert result["stage4_seeds_total"] == 2
     assert result["stage4_seeds_with_defects"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Augmentation ratio tests
+# ---------------------------------------------------------------------------
+
+def test_augmentation_ratio_full_limits_defects(tmp_path):
+    """augmentation_ratio_full이 설정되면 good_count * ratio 개수만큼만 선택."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=10)  # 10 good images
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    # 30개 defect 생성 (모두 quality_score=0.8)
+    scores = {f"{i:03d}": 0.8 for i in range(30)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    # augmentation_ratio_full=1.5 → 10 * 1.5 = 15개 선택
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        augmentation_ratio_full=1.5
+    )
+
+    defect_dir = tmp_path / "augmented_dataset" / "aroma_full" / "train" / "defect"
+    assert defect_dir.exists()
+    assert len(list(defect_dir.glob("*.png"))) == 15
+    assert result["aroma_full"]["defect_count"] == 15
+
+
+def test_augmentation_ratio_pruned_limits_defects(tmp_path):
+    """augmentation_ratio_pruned이 설정되면 threshold 적용 후 ratio만큼 선택."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=10)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    # 20개 defect 생성: 10개는 quality=0.7, 10개는 quality=0.5
+    scores = {f"{i:03d}": 0.7 if i < 10 else 0.5 for i in range(20)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    # pruning_threshold=0.6, augmentation_ratio_pruned=0.5 → 10 * 0.5 = 5개 선택
+    # threshold 적용 후 10개 중 상위 5개 선택
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        pruning_threshold=0.6,
+        augmentation_ratio_pruned=0.5
+    )
+
+    defect_dir = tmp_path / "augmented_dataset" / "aroma_pruned" / "train" / "defect"
+    assert defect_dir.exists()
+    assert len(list(defect_dir.glob("*.png"))) == 5
+    assert result["aroma_pruned"]["defect_count"] == 5
+
+
+def test_augmentation_ratio_selects_highest_quality(tmp_path):
+    """augmentation_ratio 적용 시 quality_score가 높은 순으로 선택."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=5)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    # 10개 defect 생성 (quality: 0.1~1.0)
+    scores = {f"{i:03d}": 0.1 * (i + 1) for i in range(10)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    # augmentation_ratio_full=1.0 → 5 * 1.0 = 5개 선택 (상위 5개: 009~005)
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        augmentation_ratio_full=1.0
+    )
+
+    defect_dir = tmp_path / "augmented_dataset" / "aroma_full" / "train" / "defect"
+    kept_files = sorted(defect_dir.glob("*.png"))
+    assert len(kept_files) == 5
+    
+    # 상위 5개: 009 (1.0), 008 (0.9), 007 (0.8), 006 (0.7), 005 (0.6)
+    expected_ids = ["009", "008", "007", "006", "005"]
+    for exp_id in expected_ids:
+        assert any(exp_id in f.name for f in kept_files), \
+            f"Expected high-quality image {exp_id} to be selected"
+
+
+def test_augmentation_ratio_warning_when_insufficient(tmp_path):
+    """요청 개수가 가용 개수보다 많으면 warning 발생."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=10)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    # 5개 defect만 생성
+    scores = {f"{i:03d}": 0.8 for i in range(5)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    # augmentation_ratio_full=2.0 → 10 * 2.0 = 20개 요청, 5개만 가능
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        result = build_dataset_groups(
+            str(tmp_path), str(image_dir), seed_dirs,
+            augmentation_ratio_full=2.0
+        )
+        assert any(
+            issubclass(warning.category, UserWarning)
+            and "가용 defect" in str(warning.message)
+            for warning in w
+        )
+
+    # 가용한 5개 모두 사용
+    assert result["aroma_full"]["defect_count"] == 5
+
+
+def test_augmentation_ratio_none_uses_all_defects(tmp_path):
+    """augmentation_ratio=None이면 모든 defect 사용 (기존 동작)."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=5)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    scores = {f"{i:03d}": 0.8 for i in range(20)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        augmentation_ratio_full=None  # 명시적 None
+    )
+
+    # 20개 모두 사용
+    assert result["aroma_full"]["defect_count"] == 20
+
+
+def test_augmentation_ratio_cached_in_report(tmp_path):
+    """build_report.json에 augmentation_ratio 저장 및 캐시 검증."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=5)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    scores = {f"{i:03d}": 0.8 for i in range(10)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        augmentation_ratio_full=2.0,
+        augmentation_ratio_pruned=1.5
+    )
+
+    # build_report.json 확인
+    report_path = tmp_path / "augmented_dataset" / "build_report.json"
+    assert report_path.exists()
+    report = json.loads(report_path.read_text())
+    assert report["augmentation_ratio_full"] == 2.0
+    assert report["augmentation_ratio_pruned"] == 1.5
+
+
+def test_skip_when_augmentation_ratio_matches(tmp_path):
+    """캐시된 augmentation_ratio와 일치하면 skip."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=5)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+
+    cached = {
+        "pruning_threshold": 0.6,
+        "augmentation_ratio_full": 1.5,
+        "augmentation_ratio_pruned": None,
+        "baseline":     {"good_count": 5, "defect_count": 0},
+        "aroma_full":   {"good_count": 5, "defect_count": 7},
+        "aroma_pruned": {"good_count": 5, "defect_count": 3},
+    }
+    aug_dir = tmp_path / "augmented_dataset"
+    aug_dir.mkdir(parents=True, exist_ok=True)
+    (aug_dir / "build_report.json").write_text(json.dumps(cached))
+
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        pruning_threshold=0.6,
+        augmentation_ratio_full=1.5,
+        augmentation_ratio_pruned=None
+    )
+    
+    # 캐시 반환
+    assert result == cached
+
+
+def test_rerun_when_augmentation_ratio_differs(tmp_path):
+    """캐시된 augmentation_ratio와 다르면 재실행."""
+    from utils.dataset_builder import build_dataset_groups
+    image_dir = _make_image_dir(tmp_path, count=5)
+    seed_dirs = _make_seed_dirs(tmp_path, ["scratch"])
+    
+    scores = {f"{i:03d}": 0.8 for i in range(10)}
+    _make_stage4_seed(tmp_path, "seed_001", list(scores.keys()), scores=scores)
+
+    # 이전 실행: ratio=1.0
+    cached = {
+        "pruning_threshold": 0.6,
+        "augmentation_ratio_full": 1.0,
+        "augmentation_ratio_pruned": None,
+        "baseline":     {"good_count": 5, "defect_count": 0},
+        "aroma_full":   {"good_count": 5, "defect_count": 5},
+        "aroma_pruned": {"good_count": 5, "defect_count": 10},
+    }
+    aug_dir = tmp_path / "augmented_dataset"
+    aug_dir.mkdir(parents=True, exist_ok=True)
+    (aug_dir / "build_report.json").write_text(json.dumps(cached))
+
+    # 새 실행: ratio=2.0 → 재실행
+    result = build_dataset_groups(
+        str(tmp_path), str(image_dir), seed_dirs,
+        augmentation_ratio_full=2.0,  # 변경됨
+        augmentation_ratio_pruned=None
+    )
+    
+    # defect_count가 갱신됨
+    assert result["aroma_full"]["defect_count"] == 10  # 5 * 2.0
+    assert result["augmentation_ratio_full"] == 2.0
+

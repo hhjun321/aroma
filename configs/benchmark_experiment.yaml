@@ -3,6 +3,8 @@ dataset:
   image_size: 512
   num_workers: 4
   pruning_threshold: 0.6
+  augmentation_ratio_full: null      # aroma_full 원본 대비 합성 defect 비율 (null=모두 사용)
+  augmentation_ratio_pruned: null    # aroma_pruned 원본 대비 합성 defect 비율 (null=모두 사용)
   task_by_domain:
     isp: classification
     mvtec: segmentation

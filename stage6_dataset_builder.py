@@ -18,6 +18,8 @@ def run_dataset_builder(
     image_dir: str,
     seed_dirs: list[str],
     pruning_threshold: float = 0.6,
+    augmentation_ratio_full: float | None = None,
+    augmentation_ratio_pruned: float | None = None,
     workers: int = 0,
 ) -> dict:
     """build_dataset_groups() 의 직접 래퍼.
@@ -33,6 +35,8 @@ def run_dataset_builder(
         image_dir=image_dir,
         seed_dirs=seed_dirs,
         pruning_threshold=pruning_threshold,
+        augmentation_ratio_full=augmentation_ratio_full,
+        augmentation_ratio_pruned=augmentation_ratio_pruned,
         workers=workers,
     )
 
@@ -49,6 +53,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="dataset_config.json 의 seed_dir 경로 목록 (공백 구분).")
     p.add_argument("--pruning_threshold", type=float, default=0.6,
                    help="aroma_pruned quality_score 최솟값 (기본 0.6).")
+    p.add_argument("--augmentation_ratio_full", type=float, default=None,
+                   help="aroma_full 원본 대비 합성 defect 비율 (None=모두 사용).")
+    p.add_argument("--augmentation_ratio_pruned", type=float, default=None,
+                   help="aroma_pruned 원본 대비 합성 defect 비율 (None=모두 사용).")
     p.add_argument("--workers", type=int, default=0,
                    help="병렬 워커 수 (0=순차, -1=자동, N>=2=N 프로세스).")
     return p
@@ -61,6 +69,8 @@ def main() -> None:
         image_dir=args.image_dir,
         seed_dirs=args.seed_dirs,
         pruning_threshold=args.pruning_threshold,
+        augmentation_ratio_full=args.augmentation_ratio_full,
+        augmentation_ratio_pruned=args.augmentation_ratio_pruned,
         workers=args.workers,
     )
     print(f"baseline   good={result['baseline']['good_count']}")
