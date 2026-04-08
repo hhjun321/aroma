@@ -562,16 +562,27 @@ def run_benchmark(
     all_models = models or list(config["models"].keys())
 
     results: dict = {}
+    
+    # Progress tracking
+    from tqdm import tqdm
+    import time
+    total_experiments = len(all_models) * len(all_groups)
+    pbar = tqdm(total=total_experiments, desc="Stage7 benchmark", leave=True)
 
     for model_name in all_models:
         results[model_name] = {}
 
         for group in all_groups:
+            exp_start = time.time()
+            exp_desc = f"{model_name}/{group}"
+            pbar.set_description(f"Stage7: {exp_desc}")
+            
             if resume and _should_skip(out_dir, model_name, group):
                 meta = json.loads(
                     (out_dir / model_name / group / "experiment_meta.json").read_text()
                 )
                 results[model_name][group] = meta
+                pbar.update(1)
                 continue
 
             train_good_dir, train_defect_dir = build_train_paths(cat_dir, group)
@@ -579,6 +590,7 @@ def run_benchmark(
             # group 학습 데이터 존재 확인 — Stage 6 미완료 시 skip
             if not train_good_dir.exists():
                 results[model_name][group] = None
+                pbar.update(1)
                 continue
 
             # aroma 그룹: defect 이미지 0건이면 skip (CASDA validate 패턴)
@@ -631,10 +643,18 @@ def run_benchmark(
 
                 _save_meta(out_dir, model_name, group, metrics)
                 results[model_name][group] = metrics
+                
+                # Timing info
+                exp_time = time.time() - exp_start
+                metrics["_exp_time_sec"] = round(exp_time, 2)
 
             except Exception as e:
                 results[model_name][group] = {"error": type(e).__name__, "detail": str(e)}
-
+            
+            finally:
+                pbar.update(1)
+    
+    pbar.close()
     return results
 
 
