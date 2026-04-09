@@ -219,6 +219,7 @@ def _train_yolo(
             verbose=False,
             exist_ok=True,
             seed=seed,
+            val=False,  # 학습 중 validation 비활성화 (대량 test set OOM 방지)
         )
     except ImportError as e:
         logger.error(f"YOLO import failed: {e}")
@@ -434,10 +435,12 @@ def _evaluate_yolo(
         # fine-tuned: ultralytics predict → probs
         # ImageFolder sorts classes alphabetically: defect(0) < good(1)
         # stream=True: generator로 반환, 메모리 누적 방지 (대량 test set 대응)
+        # batch 크기를 줄여 OOM 방지 (ASM test set 1,949 images)
+        eval_batch = min(config["dataset"]["eval_batch_size"], 16)
         results = model.predict(
             image_paths,
             imgsz=config["dataset"]["image_size"],
-            batch=config["dataset"]["eval_batch_size"],
+            batch=eval_batch,
             verbose=False,
             stream=True,
         )
@@ -630,6 +633,13 @@ def run_benchmark(
                     # 학습 후에만 test/ 심볼릭 링크를 생성한다.
                     # (CASDA: inject → train → clean 순서 패턴 참조)
                     test_dir = _ensure_test_dir(cat_dir, group)
+                    
+                    # 평가 전 추가 메모리 정리 (대량 test set OOM 방지)
+                    import torch
+                    import gc
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    
                     y_true, y_score = _evaluate_yolo(model, test_dir, group, config)
 
                 elif model_name == "efficientdet_d0":
