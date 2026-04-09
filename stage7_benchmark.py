@@ -232,18 +232,35 @@ def _train_yolo(
     # model.train() 이 정상 반환해도 내부 ckpt_path 등이 오염될 수 있으므로
     # 항상 체크포인트에서 깨끗한 인스턴스를 만든다.
     trainer = getattr(model, "trainer", None)
+    last_path = None
+    
     if trainer is not None:
         last = getattr(trainer, "last", None)
         if last is not None:
             last_path = Path(str(last))
-            if last_path.exists():
-                try:
-                    from ultralytics import YOLO
-                    return YOLO(str(last_path))
-                except ImportError as e:
-                    logger.error(f"Failed to load YOLO checkpoint: {e}")
-                except Exception as e:
-                    logger.warning(f"Unexpected error loading checkpoint {last_path}: {e}")
+    
+    # 메모리 정리: 학습 완료 후 trainer 캐시 및 GPU 메모리 해제
+    # (대량 test set validation OOM 방지)
+    import gc
+    if trainer is not None:
+        # Trainer 내부 참조 정리
+        trainer.model = None
+        trainer.ema = None
+    del model, trainer
+    
+    # PyTorch GPU 메모리 캐시 해제
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    # 깨끗한 상태에서 체크포인트 재로드
+    if last_path is not None and last_path.exists():
+        try:
+            from ultralytics import YOLO
+            return YOLO(str(last_path))
+        except ImportError as e:
+            logger.error(f"Failed to load YOLO checkpoint: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error loading checkpoint {last_path}: {e}")
 
     # last.pt 미존재 (첫 epoch 전 실패) → 새 pretrained 모델 반환
     try:
@@ -416,11 +433,13 @@ def _evaluate_yolo(
     else:
         # fine-tuned: ultralytics predict → probs
         # ImageFolder sorts classes alphabetically: defect(0) < good(1)
+        # stream=True: generator로 반환, 메모리 누적 방지 (대량 test set 대응)
         results = model.predict(
             image_paths,
             imgsz=config["dataset"]["image_size"],
             batch=config["dataset"]["eval_batch_size"],
             verbose=False,
+            stream=True,
         )
         y_score = [float(r.probs.data.cpu()[0]) for r in results]  # P(defect)
 
