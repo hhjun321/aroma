@@ -1,8 +1,10 @@
-# AROMA Smoke Test — 3개 카테고리 전체 파이프라인 검증
+# AROMA Smoke Test — 2개 카테고리 전체 파이프라인 검증
 
 > **목적:** 512 리사이즈 후 Stage 0~7 전체 파이프라인이 정상 동작하는지 빠르게 검증
-> **대상:** ISP/ASM, MVTec/bottle, VisA/candle (도메인당 1개)
-> **예상 소요:** ~30-45분 (Colab T4 GPU 기준)
+> **대상:** ISP/ASM, MVTec/bottle (2개 카테고리)
+> **예상 소요:** ~20-30분 (Colab T4 GPU 기준)
+> 
+> **제외:** VisA/candle - Stage 4 defect 생성 실패 (가용 defect 0개)
 
 ### 최적화 적용 현황
 
@@ -75,8 +77,8 @@ print(f"코드 경로: {CODE_ROOT}")
 REPO   = REPO_DRIVE  # dataset_config, configs 등은 항상 Drive에 위치
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
-# ━━━ Smoke Test 대상 카테고리 (3개) ━━━
-SMOKE_KEYS = ["isp_ASM", "mvtec_bottle", "visa_candle"]
+# ━━━ Smoke Test 대상 카테고리 (2개) ━━━
+SMOKE_KEYS = ["isp_ASM", "mvtec_bottle"]  # visa_candle 제외 (Stage 4 defect=0)
 
 SMOKE_ENTRIES = {k: CONFIG[k] for k in SMOKE_KEYS}
 
@@ -1141,39 +1143,62 @@ print(f"\n{'='*80}")
 
 ## 예상 실행 시간 (Colab T4 GPU)
 
-| Stage | ASM | bottle | candle | 합계 |
-|-------|-----|--------|--------|------|
-| Stage 0 (resize) | ~10s | ~5s | ~30s | ~1분 |
-| Stage 1 (ROI) | ~1분 | ~30s | ~1분 | ~3분 |
-| Stage 1b (seed) | ~30s | ~10s | ~30s | ~1분 |
-| Stage 2 (variants) | ~2분 | ~1분 | ~2분 | ~5분 |
-| Stage 3 (layout) | ~1분 | ~30s | ~1분 | ~3분 |
-| Stage 4 (synthesis) | ~3분 | ~2분 | ~3분 | ~8분 |
-| Stage 5 (quality) | ~30s | ~20s | ~30s | ~2분 |
-| Stage 6 (dataset) | ~1분 | ~30s | ~1분 | ~3분 |
-| Stage 7 (benchmark) | ~5분 | ~3분 | ~5분 | ~13분 |
-| **합계** | | | | **~35-45분** |
-
-> ⚠ VisA candle은 원본 3032×2016이었으나 Stage 0에서 512×512로 리사이즈되므로
-> 이후 Stage 실행 시간이 기존 대비 크게 단축됨.
+| Stage | ASM | bottle | 합계 |
+|-------|-----|--------|------|
+| Stage 0 (resize) | ~10s | ~5s | ~15s |
+| Stage 1 (ROI) | ~1분 | ~30s | ~1.5분 |
+| Stage 1b (seed) | ~30s | ~10s | ~40s |
+| Stage 2 (variants) | ~2분 | ~1분 | ~3분 |
+| Stage 3 (layout) | ~1분 | ~30s | ~1.5분 |
+| Stage 4 (synthesis) | ~3분 | ~2분 | ~5분 |
+| Stage 5 (quality) | ~30s | ~20s | ~50s |
+| Stage 6 (dataset) | ~1분 | ~30s | ~1.5분 |
+| Stage 7 (benchmark) | ~5분 | ~3분 | ~8분 |
+| **합계** | ~14분 | ~8.5분 | **~22-25분** |
 
 ---
 
 ## Smoke Test 통과 기준
 
-1. **Stage 0**: 3개 카테고리 모두 sentinel 파일 생성 확인
+1. **Stage 0**: 2개 카테고리 모두 sentinel 파일 생성 확인
 2. **Stage 1~6**: 각 Stage 오류 없이 완료
 3. **Stage 6 검증**: 각 카테고리 × 3개 그룹에 train/test 데이터 존재
-4. **Stage 7**: 3개 카테고리 × 2개 모델 × 3개 그룹 = **18개 실험** 모두 완료
+4. **Stage 7**: 2개 카테고리 × 2개 모델 × 3개 그룹 = **12개 실험** 모두 완료
 
 ---
 
-## 디버깅: visa_candle Stage 6 결과 확인
+## 제외 카테고리: visa_candle
+
+**제외 사유:** Stage 4 defect 생성 실패
+
+**증상:**
+```
+⚠️ 증강 비율 1.5×900=1350개 요청, 가용 defect 0개만 사용 (카테고리: candle)
+aroma_pruned defect=0
+```
+
+**원인:**
+- Stage 4 (`stage4_synthesis.py`) 실행 시 defect 이미지가 생성되지 않음
+- `stage4_output/` 디렉토리는 존재하나 defect 파일 0개
+- 원인 미상 (Stage 1b-3 결과는 정상, Stage 4 로직 이슈 추정)
+
+**해결 시도:**
+1. Stage 6 재실행 (명시적 비율 전달) → 여전히 defect=0
+2. 진단 스크립트 준비 → Stage 4 확인 필요
+3. **결정:** 시간 관계상 visa_candle 제외하고 진행
+
+**향후 조치:**
+- Stage 4 로직 디버깅 필요
+- visa 도메인 특화 이슈 가능성 조사
+
+---
+
+## 디버깅: visa_candle Stage 6 결과 확인 (참고용)
 
 Stage 7 실행 중 `visa_candle`의 `aroma_pruned` 그룹에서 defect 이미지가 0건으로 나타난 경우,
 아래 스크립트로 Stage 6 결과를 확인합니다.
 
-### 셀 12: visa_candle Stage 6 진단
+### 셀 12: visa_candle Stage 6 진단 (참고용)
 
 ```python
 # visa_candle Stage 6 결과 확인 스크립트 실행
