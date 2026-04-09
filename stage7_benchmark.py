@@ -197,33 +197,16 @@ def _train_yolo(
     if group == "baseline":
         return model
 
-    import os
-    import tempfile
     import torch
     torch.manual_seed(seed)
 
     data_dir = train_good_dir.parent.parent  # augmented_dataset/{group}/
 
-    # ultralytics ClassificationTrainer 는 val/ · test/ 디렉터리가 없으면
-    # testset = None 을 반환 → _build_train_pipeline 에서 ImageFolder(root=None)
-    # → TypeError: expected str, bytes or os.PathLike object, not NoneType.
-    #
-    # 또한, test/ 심볼릭 링크가 이전 실행에서 남아있으면 ultralytics 가
-    # test/(2클래스)를 val로 사용 → 모델(2클래스) vs test(2클래스) 불일치 없이
-    # 동작하지만, val split 에서 good 샘플만 skip 되어 무의미한 검증이 됨.
-    #
-    # CASDA prepare_yolo_dataset 패턴 참조:
-    # 항상 명시적 YAML 을 생성하여 val=train 으로 지정, ultralytics 의
-    # 자동 디렉터리 탐색을 우회한다.
-    train_abs = str((data_dir / "train").resolve())
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, dir=tempfile.gettempdir()
-    )
-    yaml.dump({"train": train_abs, "val": train_abs}, tmp)
-    tmp.close()
-    _yaml_path = tmp.name
-
-    data_arg = _yaml_path
+    # Ultralytics YOLO11 classification task:
+    # YAML 파일이 아닌 디렉토리 경로를 직접 받아야 함.
+    # 디렉토리 구조: data_dir/train/{good,defect}/
+    # Ultralytics는 train/ 디렉토리만 있으면 자동으로 학습 진행.
+    data_arg = str(data_dir.resolve())
     model_cfg = config["models"].get("yolo11", {})
 
     try:
@@ -244,12 +227,6 @@ def _train_yolo(
         logger.error(f"YOLO training failed with runtime error: {e}")
     except Exception as e:
         logger.warning(f"YOLO training exception: {e}")
-    finally:
-        if _yaml_path:
-            try:
-                os.unlink(_yaml_path)
-            except OSError as e:
-                logger.debug(f"Failed to remove temp yaml {_yaml_path}: {e}")
 
     # 학습 성공/실패 무관 — trainer.last 에서 새 YOLO 인스턴스를 생성한다.
     # model.train() 이 정상 반환해도 내부 ckpt_path 등이 오염될 수 있으므로
@@ -661,16 +638,16 @@ def run_benchmark(
                 metrics["_exp_time_sec"] = round(exp_time, 2)
 
             except ImportError as e:
-                logger.error(f"{task} - {model_name} - {group}: Import error - {e}")
+                logger.error(f"{exp_desc}: Import error - {e}")
                 results[model_name][group] = {"error": "ImportError", "detail": str(e)}
             except RuntimeError as e:
-                logger.error(f"{task} - {model_name} - {group}: Runtime error - {e}")
+                logger.error(f"{exp_desc}: Runtime error - {e}")
                 results[model_name][group] = {"error": "RuntimeError", "detail": str(e)}
             except FileNotFoundError as e:
-                logger.error(f"{task} - {model_name} - {group}: File not found - {e}")
+                logger.error(f"{exp_desc}: File not found - {e}")
                 results[model_name][group] = {"error": "FileNotFoundError", "detail": str(e)}
             except Exception as e:
-                logger.error(f"{task} - {model_name} - {group}: Unexpected error - {type(e).__name__}: {e}")
+                logger.error(f"{exp_desc}: Unexpected error - {type(e).__name__}: {e}")
                 results[model_name][group] = {"error": type(e).__name__, "detail": str(e)}
             
             finally:
