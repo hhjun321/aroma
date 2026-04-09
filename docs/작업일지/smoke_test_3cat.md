@@ -1137,4 +1137,55 @@ print(f"\n{'='*80}")
 2. **Stage 1~6**: 각 Stage 오류 없이 완료
 3. **Stage 6 검증**: 각 카테고리 × 3개 그룹에 train/test 데이터 존재
 4. **Stage 7**: 3개 카테고리 × 2개 모델 × 3개 그룹 = **18개 실험** 모두 완료
+
+---
+
+## 디버깅: visa_candle Stage 6 결과 확인
+
+Stage 7 실행 중 `visa_candle`의 `aroma_pruned` 그룹에서 defect 이미지가 0건으로 나타난 경우,
+아래 스크립트로 Stage 6 결과를 확인합니다.
+
+### 셀 12: visa_candle Stage 6 진단
+
+```python
+# visa_candle Stage 6 결과 확인 스크립트 실행
+exec(open(REPO / "docs/작업일지/check_visa_candle_stage6.py").read())
+```
+
+**확인 내용:**
+1. `build_report.json`에서 증강 비율 적용 여부 확인
+2. `aroma_pruned/train/defect/` 실제 파일 개수 확인
+3. Stage 4 `quality_scores.json`에서 고품질 이미지 개수 확인
+4. 문제 진단 및 권장사항 출력
+
+**예상 출력:**
+```
+======================================================================
+visa_candle Stage 6 결과 확인
+======================================================================
+
+=== build_report.json ===
+Domain: visa
+Augmentation ratio full: 2.0
+Augmentation ratio pruned: 1.5
+
+### Aroma Pruned ###
+Good count: 900
+Defect count: 0  ← 문제!
+Target defect count: 1350
+Applied ratio: N/A  ← 비율 미적용!
+
+======================================================================
+4. 진단 및 권장사항
+======================================================================
+
+### 발견된 문제 ###
+  🔴 aroma_pruned defect count = 0
+  🔴 aroma_pruned applied ratio = N/A (비율 미적용)
+
+### 권장사항 ###
+  1. Stage 6 재실행 권장:
+     - 명시적 비율 전달 확인 (ratio_full=2.0, ratio_pruned=1.5)
+     - 로컬 캐시 → Drive 업로드 확인
+```
 5. **결과**: AUROC ≥ 0.5 (random baseline 이상) — 합성 데이터가 학습에 기여하는지 확인
