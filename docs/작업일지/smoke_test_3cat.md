@@ -1167,11 +1167,9 @@ print(f"예상 시간: ~10분\n")
 results = run_benchmark(
     config_path=str(config_path),
     cat_dir=str(asm_cat),
-    model_names=["yolo11"],
-    group_names=["aroma_full"],
+    models=["yolo11"],
+    groups=["aroma_full"],
     output_dir=str(REPO / "outputs" / "benchmark_results"),
-    use_local_ssd=True,
-    local_tmp_base="/content/tmp_stage7",
     resume=True,
 )
 
