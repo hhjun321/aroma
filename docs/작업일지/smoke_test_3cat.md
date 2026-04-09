@@ -1092,6 +1092,127 @@ print("✓ Stage 7 완료")
 
 ---
 
+## 셀 11.5: ASM YOLO OOM 수정 테스트 (Phase 1 — 선택사항)
+
+> **목적:** ASM YOLO CUDA OOM 수정(`stream=True` + 메모리 해제) 단일 실험 검증  
+> **대상:** isp_ASM + yolo11 + aroma_full (1개 실험만)  
+> **소요 시간:** ~10분  
+> **실행 조건:** 셀 11에서 ASM YOLO OOM 발생 시에만 실행
+
+### 사용 시나리오
+
+셀 11 실행 중 다음 에러 발생 시:
+```
+ERROR:stage7_benchmark:yolo11/aroma_full: Runtime error - CUDA out of memory.
+Tried to allocate 5.71 GiB...
+```
+
+### Step 1: Git Pull + 런타임 재시작
+
+```python
+# Git pull로 최신 수정 적용
+!cd /content/drive/MyDrive/project/aroma && git pull
+!cd /content/drive/MyDrive/project/aroma && git log --oneline -3
+
+# 예상 출력:
+# dd4e42b fix: YOLO CUDA OOM 해결 - stream=True + 메모리 해제
+# eff2d50 docs: visa_candle 제외 - 2개 카테고리로 smoke test 진행
+# e2296e4 docs: 셀 9.5 개선 - 선택적 카테고리 삭제 옵션 추가
+```
+
+**중요:** Git pull 후 반드시 **런타임 재시작** 필요!
+- Colab 메뉴: `런타임` → `런타임 다시 시작`
+
+### Step 2: 환경 재설정 (런타임 재시작 후)
+
+```python
+# 셀 0 재실행 (Drive 마운트 + 패키지 설치)
+from google.colab import drive
+drive.mount("/content/drive")
+!pip install -q ultralytics effdet timm
+
+# 셀 1 재실행 (경로 설정)
+import sys
+from pathlib import Path
+
+REPO = Path("/content/drive/MyDrive/project/aroma")
+sys.path.insert(0, str(REPO))
+
+DATA_BASE = Path("/content/drive/MyDrive/data/Aroma")
+```
+
+### Step 3: ASM YOLO aroma_full 단일 실험
+
+```python
+import yaml
+from stage7_benchmark import run_benchmark
+
+# Config 로드
+config_path = REPO / "configs" / "benchmark_experiment.yaml"
+with open(config_path) as f:
+    config = yaml.safe_load(f)
+
+# ASM 카테고리 경로
+asm_cat = DATA_BASE / "isp" / "unsupervised" / "ASM"
+
+print("="*60)
+print("Phase 1: ASM YOLO aroma_full 단일 실험 테스트")
+print("="*60)
+print(f"카테고리: {asm_cat}")
+print(f"모델: yolo11")
+print(f"그룹: aroma_full")
+print(f"예상 시간: ~10분\n")
+
+# 단일 실험 실행
+results = run_benchmark(
+    config_path=str(config_path),
+    cat_dir=str(asm_cat),
+    model_names=["yolo11"],
+    group_names=["aroma_full"],
+    output_dir=str(REPO / "outputs" / "benchmark_results"),
+    use_local_ssd=True,
+    local_tmp_base="/content/tmp_stage7",
+    resume=True,
+)
+
+# 결과 확인
+print("\n" + "="*60)
+print("테스트 결과:")
+print("="*60)
+
+for model, groups in results.items():
+    for group, val in groups.items():
+        if isinstance(val, dict) and "error" in val:
+            print(f"❌ {model}/{group}")
+            print(f"   에러: {val['error']}")
+            print(f"   상세: {val.get('detail', 'N/A')[:200]}")
+            print("\n⚠️ 수정 실패 - Phase 2 또는 Phase 3 진행 필요")
+        elif isinstance(val, dict):
+            auroc = val.get("image_auroc", "N/A")
+            if auroc != "N/A":
+                print(f"✅ {model}/{group}: AUROC={auroc:.4f}")
+                print("\n✓ 수정 성공! 셀 11 재실행 가능")
+            else:
+                print(f"✅ {model}/{group}: {auroc}")
+        else:
+            print(f"? {model}/{group}: {val}")
+```
+
+### Step 4: 성공 시 전체 Smoke Test 재실행
+
+Phase 1 테스트 성공 시:
+1. **셀 11 재실행** (전체 Stage 7)
+2. **셀 12 실행** (결과 요약)
+
+### 실패 시 대안
+
+Phase 1 실패 (여전히 OOM) 시 선택지:
+- **Phase 2:** ASM 전체 YOLO 실험 (baseline, aroma_full, aroma_pruned)
+- **Phase 3:** Chunk 분할 평가 (코드 추가 수정 필요)
+- **환경 변수:** `os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"`
+
+---
+
 ## 셀 12: 결과 요약
 
 ```python
