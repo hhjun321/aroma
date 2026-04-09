@@ -755,6 +755,8 @@ for key, info in SMOKE_CATS.items():
 > **목적:** 잘못된 비율로 생성된 augmented_dataset을 삭제하고 Stage 6 재실행 준비
 > **실행 시점:** Stage 6 결과가 도메인별 목표 비율과 맞지 않을 때만 실행
 
+### 옵션 A: 전체 카테고리 삭제
+
 ```python
 import shutil
 
@@ -771,9 +773,35 @@ for key, info in SMOKE_CATS.items():
 print("\n✓ 삭제 완료. 이제 셀 9를 다시 실행하세요.")
 ```
 
+### 옵션 B: 특정 카테고리만 삭제 (visa_candle)
+
+```python
+import shutil
+
+# 삭제할 카테고리 선택
+TARGETS = ["visa_candle"]  # 필요에 따라 추가: ["visa_candle", "isp_ASM"]
+
+print(f"선택된 카테고리만 augmented_dataset 삭제 중: {TARGETS}\n")
+
+for key, info in SMOKE_CATS.items():
+    if key not in TARGETS:
+        print(f"  ⏭ {key}: 건너뜀")
+        continue
+    
+    aug_dir = info["cat_dir"] / "augmented_dataset"
+    if aug_dir.exists():
+        shutil.rmtree(str(aug_dir))
+        print(f"✓ {key}: augmented_dataset 삭제 완료")
+    else:
+        print(f"  {key}: augmented_dataset 없음 (이미 삭제됨)")
+
+print("\n✓ 삭제 완료. 이제 셀 9를 다시 실행하세요.")
+```
+
 **다음 단계:**
 1. 위 셀 실행으로 기존 augmented_dataset 삭제
 2. **셀 9** 재실행 (Stage 6 - 도메인별 비율 적용)
+   - 삭제한 카테고리만 재실행됨 (나머지는 스킵)
 3. **셀 10** 실행 (검증)
 
 ---
