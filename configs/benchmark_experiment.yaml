@@ -1,5 +1,6 @@
 dataset:
   eval_batch_size: 32
+  eval_chunk_size: 64   # YOLO predict 청크 크기 (대량 test set OOM 방지)
   image_size: 512
   num_workers: 4
   pruning_threshold: 0.6

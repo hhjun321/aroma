@@ -197,7 +197,10 @@ def _train_yolo(
     if group == "baseline":
         return model
 
+    import os
     import torch
+    # 메모리 단편화 방지: 비연속 블록도 할당 가능하게 함
+    os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
     torch.manual_seed(seed)
 
     data_dir = train_good_dir.parent.parent  # augmented_dataset/{group}/
@@ -219,7 +222,9 @@ def _train_yolo(
             verbose=False,
             exist_ok=True,
             seed=seed,
-            val=False,  # 학습 중 validation 비활성화 (대량 test set OOM 방지)
+            val=False,    # 학습 중 validation 비활성화 (대량 test set OOM 방지)
+            cache=False,  # 이미지 GPU/RAM 캐싱 비활성화 (OOM 방지)
+            workers=2,    # DataLoader 워커 수 제한 (메모리 절약)
         )
     except ImportError as e:
         logger.error(f"YOLO import failed: {e}")
@@ -434,17 +439,31 @@ def _evaluate_yolo(
     else:
         # fine-tuned: ultralytics predict → probs
         # ImageFolder sorts classes alphabetically: defect(0) < good(1)
-        # stream=True: generator로 반환, 메모리 누적 방지 (대량 test set 대응)
-        # batch 크기를 줄여 OOM 방지 (ASM test set 1,949 images)
-        eval_batch = min(config["dataset"]["eval_batch_size"], 16)
-        results = model.predict(
-            image_paths,
-            imgsz=config["dataset"]["image_size"],
-            batch=eval_batch,
-            verbose=False,
-            stream=True,
-        )
-        y_score = [float(r.probs.data.cpu()[0]) for r in results]  # P(defect)
+        #
+        # 청크 분할 평가: image_paths 전체를 한 번에 전달하면 ultralytics 내부에서
+        # 전체 이미지를 GPU에 사전 로드 (1,949장 × 512×512 FP32 ≈ 6 GB).
+        # 훈련 후 남은 VRAM이 부족해 OOM 발생 → 청크 단위로 나눠 호출한다.
+        import torch as _torch
+        import gc as _gc
+
+        eval_batch = min(config["dataset"]["eval_batch_size"], 8)
+        chunk_size = config["dataset"].get("eval_chunk_size", 64)
+        imgsz = config["dataset"]["image_size"]
+
+        y_score = []
+        for i in range(0, len(image_paths), chunk_size):
+            chunk = image_paths[i : i + chunk_size]
+            chunk_results = list(model.predict(
+                chunk,
+                imgsz=imgsz,
+                batch=min(eval_batch, len(chunk)),
+                verbose=False,
+                stream=True,
+            ))
+            y_score.extend([float(r.probs.data.cpu()[0]) for r in chunk_results])
+            del chunk_results
+            _torch.cuda.empty_cache()
+            _gc.collect()
 
     return y_true, y_score
 

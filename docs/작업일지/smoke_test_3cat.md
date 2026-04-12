@@ -1092,9 +1092,9 @@ print("✓ Stage 7 완료")
 
 ---
 
-## 셀 11.5: ASM YOLO OOM 수정 테스트 (Phase 1 — 선택사항)
+## 셀 11.5: ASM YOLO OOM 수정 테스트 (Phase 3 적용 — 선택사항)
 
-> **목적:** ASM YOLO CUDA OOM 수정(`stream=True` + 메모리 해제) 단일 실험 검증  
+> **목적:** ASM YOLO CUDA OOM 수정(청크 분할 평가 + `PYTORCH_ALLOC_CONF` + `cache=False`) 단일 실험 검증  
 > **대상:** isp_ASM + yolo11 + aroma_full (1개 실험만)  
 > **소요 시간:** ~10분  
 > **실행 조건:** 셀 11에서 ASM YOLO OOM 발생 시에만 실행
@@ -1115,8 +1115,8 @@ Tried to allocate 5.71 GiB...
 !cd /content/drive/MyDrive/project/aroma && git log --oneline -3
 
 # 예상 출력:
-# dd4e42b fix: YOLO CUDA OOM 해결 - stream=True + 메모리 해제
-# eff2d50 docs: visa_candle 제외 - 2개 카테고리로 smoke test 진행
+# (latest) fix: YOLO OOM - 청크 분할 평가 + PYTORCH_ALLOC_CONF + cache=False
+# a026ae2 fix: YOLO OOM 추가 대응 - validation 비활성화, batch 크기 축소, 평가 전 메모리 정리
 # e2296e4 docs: 셀 9.5 개선 - 선택적 카테고리 삭제 옵션 추가
 ```
 
@@ -1204,10 +1204,10 @@ Phase 1 테스트 성공 시:
 
 ### 실패 시 대안
 
-Phase 1 실패 (여전히 OOM) 시 선택지:
-- **Phase 2:** ASM 전체 YOLO 실험 (baseline, aroma_full, aroma_pruned)
-- **Phase 3:** Chunk 분할 평가 (코드 추가 수정 필요)
-- **환경 변수:** `os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"`
+Phase 3 (청크 분할) 포함 수정 후에도 OOM 시:
+- train_batch_size를 16 → 4 로 줄이기 (`configs/benchmark_experiment.yaml`)
+- eval_chunk_size를 64 → 32 로 줄이기
+- image_size를 512 → 256 으로 줄이기 (성능 하락 감수)
 
 ---
 
