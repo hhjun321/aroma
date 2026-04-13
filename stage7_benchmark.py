@@ -226,8 +226,9 @@ def _train_yolo(
             seed=seed,
             val=False,    # 학습 중 validation 비활성화 (대량 test set OOM 방지)
             cache=False,  # 이미지 GPU/RAM 캐싱 비활성화 (OOM 방지)
-            workers=2,    # DataLoader 워커 수 제한 (메모리 절약)
             amp=True,     # Mixed Precision Training (FP16/FP32 자동 전환, VRAM 절약)
+            # workers: ultralytics 기본값 사용 (min(8, cpu_count))
+            # workers=2 는 데이터 로딩 병목 유발 → OOM은 cache=False+청크평가로 충분히 해결
         )
     except ImportError as e:
         logger.error(f"YOLO import failed: {e}")
@@ -473,7 +474,9 @@ def _evaluate_yolo(
             y_score.extend([float(r.probs.data.cpu()[0]) for r in chunk_results])
             del chunk_results
             _torch.cuda.empty_cache()
-            _gc.collect()
+            # gc.collect() 는 청크마다 호출하지 않음:
+            # 1,949장 ÷ 64 = 31회 호출 → 힙 전체 순회 오버헤드 누적
+            # del + empty_cache 로 충분히 단편화 방지 가능
 
     return y_true, y_score
 
