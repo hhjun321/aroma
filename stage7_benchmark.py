@@ -114,6 +114,84 @@ def _ensure_test_dir(cat_dir: str, group: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Results summary (benchmark_results.json + benchmark_comparison.csv)
+# ---------------------------------------------------------------------------
+
+def _save_results_summary(
+    output_root: Path,
+    cat_name: str,
+    results: dict,
+) -> None:
+    """카테고리 실험 결과를 누적 요약 파일 2종에 저장한다.
+
+    benchmark_results.json    : 전체 실험 flat 리스트 (카테고리 누적, 중복 시 최신 우선)
+    benchmark_comparison.csv  : 성능 비교 테이블 (Excel / Google Sheets 열람 가능)
+
+    여러 카테고리에 걸쳐 run_benchmark 를 순차 실행하면
+    두 파일에 결과가 자동으로 누적된다.
+    """
+    import csv
+
+    # ── flat record 변환 ──
+    new_records: list[dict] = []
+    for model_name, groups in results.items():
+        for group, val in (groups or {}).items():
+            if val is None:
+                continue
+            record: dict = {"category": cat_name, "model": model_name, "group": group}
+            if isinstance(val, dict):
+                record.update({
+                    "image_auroc":        val.get("image_auroc"),
+                    "image_f1":           val.get("image_f1"),
+                    "pixel_auroc":        val.get("pixel_auroc"),
+                    "total_time_seconds": val.get("total_time_seconds"),
+                    "timestamp":          val.get("timestamp"),
+                    "training_pipeline":  val.get("training_pipeline"),
+                    "use_amp":            val.get("use_amp"),
+                    "error":              val.get("error"),
+                })
+            new_records.append(record)
+
+    if not new_records:
+        return
+
+    # ── benchmark_results.json 누적 저장 ──
+    # (category, model, group) 키로 중복 제거 → 최신 결과 우선
+    json_path = output_root / "benchmark_results.json"
+    existing: list[dict] = []
+    if json_path.exists():
+        try:
+            existing = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
+
+    _key = lambda r: (r.get("category"), r.get("model"), r.get("group"))
+    new_keys = {_key(r) for r in new_records}
+    merged = [r for r in existing if _key(r) not in new_keys] + new_records
+
+    json_path.write_text(
+        json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info(f"  [요약] {json_path.name}  ({len(merged)}건 누적)")
+
+    # ── benchmark_comparison.csv 덮어쓰기 ──
+    # JSON 이 단일 소스 — CSV 는 항상 JSON 전체를 재렌더링
+    csv_path = output_root / "benchmark_comparison.csv"
+    _fields = [
+        "category", "model", "group",
+        "image_auroc", "image_f1", "pixel_auroc",
+        "total_time_seconds", "timestamp",
+        "training_pipeline", "use_amp", "error",
+    ]
+    with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+        # utf-8-sig: Excel / Google Sheets 에서 한글 깨짐 없이 열림
+        writer = csv.DictWriter(f, fieldnames=_fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(merged)
+    logger.info(f"  [요약] {csv_path.name}  ({len(merged)}행)")
+
+
+# ---------------------------------------------------------------------------
 # Resume
 # ---------------------------------------------------------------------------
 
@@ -793,6 +871,10 @@ def run_benchmark(
         f"소요: {total_time:.1f}s ({total_time / 60:.1f}min)\n"
         f"{'='*60}"
     )
+
+    # ── 누적 요약 저장 (CASDA reporter 패턴) ──
+    _save_results_summary(output_root, cat_name, results)
+
     return results
 
 
