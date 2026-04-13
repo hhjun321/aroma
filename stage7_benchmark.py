@@ -199,6 +199,53 @@ def _should_skip(output_dir: Path, model: str, group: str) -> bool:
     return (output_dir / model / group / "experiment_meta.json").exists()
 
 
+def _reset_category(output_root: Path, out_dir: Path, cat_name: str) -> None:
+    """카테고리 실험 결과를 완전 초기화한다.
+
+    - out_dir 삭제   : experiment_meta.json 제거 → _should_skip() 이 False 를 반환하게 됨
+    - benchmark_results.json 에서 해당 카테고리 레코드 제거
+    - benchmark_comparison.csv 재생성 (제거 후 남은 레코드 기준)
+    """
+    import shutil
+    import csv
+
+    # 1. 카테고리 출력 디렉터리 삭제 (experiment_meta.json 포함)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+        logger.info(f"[reset] {out_dir} 삭제 완료")
+
+    # 2. benchmark_results.json 에서 해당 카테고리 레코드 제거
+    json_path = output_root / "benchmark_results.json"
+    if not json_path.exists():
+        return
+
+    try:
+        existing: list[dict] = json.loads(json_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
+    filtered = [r for r in existing if r.get("category") != cat_name]
+    removed = len(existing) - len(filtered)
+    json_path.write_text(
+        json.dumps(filtered, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info(f"[reset] benchmark_results.json 에서 {cat_name} 레코드 {removed}건 제거")
+
+    # 3. CSV 재생성 (JSON 이 단일 소스)
+    csv_path = output_root / "benchmark_comparison.csv"
+    _fields = [
+        "category", "model", "group",
+        "image_auroc", "image_f1", "pixel_auroc",
+        "total_time_seconds", "timestamp",
+        "training_pipeline", "use_amp", "error",
+    ]
+    with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=_fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(filtered)
+    logger.info(f"[reset] benchmark_comparison.csv 재생성 완료 ({len(filtered)}행)")
+
+
 def _save_meta(output_dir: Path, model: str, group: str, metrics: dict) -> None:
     meta_dir = output_dir / model / group
     meta_dir.mkdir(parents=True, exist_ok=True)
@@ -640,6 +687,7 @@ def run_benchmark(
     models: Optional[list[str]] = None,
     resume: bool = True,
     output_dir: Optional[str] = None,
+    reset: bool = False,
 ) -> dict:
     """cat_dir 에 대해 model × group 전체 실험을 수행한다.
 
@@ -650,6 +698,9 @@ def run_benchmark(
         models:      실행할 모델 (None=전체).
         resume:      True=이미 완료된 실험 skip.
         output_dir:  결과 저장 루트 (None=yaml의 output_dir 사용).
+        reset:       True=카테고리 결과를 초기화한 뒤 처음부터 재실행
+                     (out_dir 삭제 + benchmark_results.json/csv 에서 해당 카테고리 레코드 제거).
+                     resume=True 와 함께 쓰면 reset 이 먼저 적용된다.
     """
     from utils.ad_metrics import extract_metrics
 
@@ -667,6 +718,11 @@ def run_benchmark(
     output_root = Path(output_dir) if output_dir else Path(config["experiment"]["output_dir"])
     cat_name = Path(cat_dir).name
     out_dir = output_root / cat_name
+
+    # ── 카테고리 초기화 (reset=True 시 처음부터 재실행) ──
+    if reset:
+        output_root.mkdir(parents=True, exist_ok=True)
+        _reset_category(output_root, out_dir, cat_name)
 
     # ── 파일 로그 설정 (CASDA 패턴) ──
     # 동일 핸들러 중복 추가 방지: FileHandler 가 없을 때만 등록
@@ -862,7 +918,9 @@ def run_benchmark(
                 if _t.cuda.is_available():
                     _t.cuda.empty_cache()
                 pbar.update(1)
-    
+                # 실험 1건 완료마다 누적 저장 (중간 에러 시 복구 가능)
+                _save_results_summary(output_root, cat_name, results)
+
     pbar.close()
     total_time = time.time() - benchmark_start
     logger.info(
