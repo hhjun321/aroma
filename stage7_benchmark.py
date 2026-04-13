@@ -417,14 +417,14 @@ def _train_effdet(
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(weight=class_weight.to(device))
     # Mixed Precision Training: FP16 forward/backward → FP32 weight update
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
 
     model.train()
     for _ in range(epochs):
         for imgs, labels in loader:
             imgs, labels = imgs.to(device), labels.to(device)
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast('cuda', enabled=use_amp):
                 loss = criterion(model(imgs), labels)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -492,7 +492,7 @@ def _yolo_feature_distance(
 
     def _extract(paths: list[str]) -> torch.Tensor:
         feats = []
-        with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_amp):
+        with torch.no_grad(), torch.amp.autocast('cuda', enabled=use_amp):
             for p in paths:
                 img = transform(Image.open(p).convert("RGB")).unsqueeze(0).to(device)
                 nn_model(img)
@@ -599,7 +599,7 @@ def _evaluate_effdet(
 
     # no_grad: 추론 시 gradient 계산 비활성화 (메모리 절약 + 속도 향상)
     # autocast: FP16 추론으로 VRAM 절약 (결과는 FP32로 자동 처리)
-    with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_amp):
+    with torch.no_grad(), torch.amp.autocast('cuda', enabled=use_amp):
         if group == "baseline":
             good_train_dir = test_dir.parent.parent / "baseline" / "train" / "good"
             good_ds = datasets.ImageFolder(
