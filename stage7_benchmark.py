@@ -461,7 +461,17 @@ def _train_effdet(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_amp = device.type == "cuda"
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    # 백본 freeze: pretrained feature 추출 능력 보존 (Catastrophic Forgetting 방지)
+    # 전체 파라미터 업데이트 시 합성 데이터 패턴으로 ImageNet 특징이 파괴됨
+    # (baseline AUROC=0.93 → aroma_full AUROC=0.51 실증됨)
+    for param in model.backbone.parameters():
+        param.requires_grad = False
+
+    # 헤드만 학습 (2-class linear layer)
+    optimizer = optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()), lr=lr
+    )
     criterion = nn.CrossEntropyLoss(weight=class_weight.to(device))
     # Mixed Precision Training: FP16 forward/backward → FP32 weight update
     scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
