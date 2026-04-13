@@ -13,7 +13,9 @@ import argparse
 import json
 import logging
 import shutil
+import traceback
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -572,9 +574,37 @@ def run_benchmark(
 
     config = load_config(config_path)
     seed = config["experiment"]["seed"]
+
+    # ── 시드 전체 고정 (CASDA 패턴: PyTorch + NumPy + CUDA 동시 설정) ──
+    import torch as _t_seed
+    import numpy as _np_seed
+    _t_seed.manual_seed(seed)
+    _np_seed.random.seed(seed)
+    if _t_seed.cuda.is_available():
+        _t_seed.cuda.manual_seed_all(seed)
+
     output_root = Path(output_dir) if output_dir else Path(config["experiment"]["output_dir"])
     cat_name = Path(cat_dir).name
     out_dir = output_root / cat_name
+
+    # ── 파일 로그 설정 (CASDA 패턴) ──
+    # 동일 핸들러 중복 추가 방지: FileHandler 가 없을 때만 등록
+    output_root.mkdir(parents=True, exist_ok=True)
+    _log_path = output_root / "benchmark.log"
+    if not any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == str(_log_path)
+        for h in logger.handlers
+    ):
+        _fh = logging.FileHandler(str(_log_path), encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        _fh.setLevel(logging.INFO)
+        logger.addHandler(_fh)
+        logger.setLevel(logging.INFO)
+
+    # ── config 스냅샷 저장 (CASDA 패턴: 실험 재현성) ──
+    (output_root / "benchmark_config.yaml").write_text(
+        yaml.dump(config, allow_unicode=True, default_flow_style=False), encoding="utf-8"
+    )
 
     # Stage 6 완료 여부 사전 검증
     aug_dir = Path(cat_dir) / "augmented_dataset"
@@ -603,20 +633,31 @@ def run_benchmark(
     all_models = models or list(config["models"].keys())
 
     results: dict = {}
-    
-    # Progress tracking
+
+    # ── Progress tracking (CASDA 패턴: Run X/Y 카운터 + 전체 타이머) ──
     from tqdm import tqdm
     import time
     total_experiments = len(all_models) * len(all_groups)
     pbar = tqdm(total=total_experiments, desc="Stage7 benchmark", leave=True)
+    run_idx = 0
+    benchmark_start = time.time()
+
+    logger.info(
+        f"\n{'='*60}\n"
+        f"Stage7 벤치마크 시작 | cat={cat_name} | seed={seed}\n"
+        f"models={all_models} | groups={all_groups} | 총 {total_experiments}실험\n"
+        f"{'='*60}"
+    )
 
     for model_name in all_models:
         results[model_name] = {}
 
         for group in all_groups:
+            run_idx += 1
             exp_start = time.time()
             exp_desc = f"{model_name}/{group}"
-            pbar.set_description(f"Stage7: {exp_desc}")
+            pbar.set_description(f"[{run_idx}/{total_experiments}] {exp_desc}")
+            logger.info(f"\n{'='*60}\nRun {run_idx}/{total_experiments}: {exp_desc}\n{'='*60}")
             
             if resume and _should_skip(out_dir, model_name, group):
                 meta = json.loads(
@@ -689,24 +730,43 @@ def run_benchmark(
                 if not use_pixel:
                     metrics["pixel_auroc"] = None
 
+                # ── 메타데이터 보강 (CASDA 패턴) ──
+                # total_time_seconds, timestamp, use_amp, training_pipeline 을
+                # _save_meta 전에 추가해야 JSON 파일에 포함됨
+                import torch as _t_meta
+                exp_time = time.time() - exp_start
+                metrics["total_time_seconds"] = round(exp_time, 2)
+                metrics["timestamp"] = datetime.now().isoformat()
+                metrics["use_amp"] = _t_meta.cuda.is_available()
+                metrics["training_pipeline"] = (
+                    "ultralytics" if model_name == "yolo11" else "pytorch_manual"
+                )
+                logger.info(
+                    f"  ✓ {exp_desc}: "
+                    f"image_auroc={metrics.get('image_auroc', 'N/A')} | "
+                    f"{exp_time:.1f}s"
+                )
+
                 _save_meta(out_dir, model_name, group, metrics)
                 results[model_name][group] = metrics
-                
-                # Timing info
-                exp_time = time.time() - exp_start
-                metrics["_exp_time_sec"] = round(exp_time, 2)
 
             except ImportError as e:
                 logger.error(f"{exp_desc}: Import error - {e}")
+                logger.debug(traceback.format_exc())
                 results[model_name][group] = {"error": "ImportError", "detail": str(e)}
             except RuntimeError as e:
+                # CASDA 패턴: RuntimeError(OOM 포함)는 traceback 전체를 기록
                 logger.error(f"{exp_desc}: Runtime error - {e}")
+                logger.error(traceback.format_exc())
                 results[model_name][group] = {"error": "RuntimeError", "detail": str(e)}
             except FileNotFoundError as e:
                 logger.error(f"{exp_desc}: File not found - {e}")
+                logger.debug(traceback.format_exc())
                 results[model_name][group] = {"error": "FileNotFoundError", "detail": str(e)}
             except Exception as e:
+                # CASDA 패턴: 예상치 못한 예외는 traceback 전체를 ERROR 레벨로 기록
                 logger.error(f"{exp_desc}: Unexpected error - {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
                 results[model_name][group] = {"error": type(e).__name__, "detail": str(e)}
 
             finally:
@@ -723,6 +783,13 @@ def run_benchmark(
                 pbar.update(1)
     
     pbar.close()
+    total_time = time.time() - benchmark_start
+    logger.info(
+        f"\n{'='*60}\n"
+        f"Stage7 완료 — {total_experiments}실험 | "
+        f"소요: {total_time:.1f}s ({total_time / 60:.1f}min)\n"
+        f"{'='*60}"
+    )
     return results
 
 
