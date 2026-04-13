@@ -225,6 +225,7 @@ def _train_yolo(
             val=False,    # 학습 중 validation 비활성화 (대량 test set OOM 방지)
             cache=False,  # 이미지 GPU/RAM 캐싱 비활성화 (OOM 방지)
             workers=2,    # DataLoader 워커 수 제한 (메모리 절약)
+            amp=True,     # Mixed Precision Training (FP16/FP32 자동 전환, VRAM 절약)
         )
     except ImportError as e:
         logger.error(f"YOLO import failed: {e}")
@@ -330,17 +331,23 @@ def _train_effdet(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = device.type == "cuda"
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(weight=class_weight.to(device))
+    # Mixed Precision Training: FP16 forward/backward → FP32 weight update
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     model.train()
     for _ in range(epochs):
         for imgs, labels in loader:
             imgs, labels = imgs.to(device), labels.to(device)
             optimizer.zero_grad()
-            criterion(model(imgs), labels).backward()
-            optimizer.step()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                loss = criterion(model(imgs), labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +393,7 @@ def _yolo_feature_distance(
     ])
 
     device = next(nn_model.parameters()).device
+    use_amp = device.type == "cuda"
     nn_model.eval()
 
     # YOLO11 ClassificationModel: model.model = Sequential[..., Classify]
@@ -396,14 +404,14 @@ def _yolo_feature_distance(
         f = out
         if f.dim() == 4:
             f = F.adaptive_avg_pool2d(f, 1)
-        captured["feat"] = f.flatten(1).detach().cpu()
+        captured["feat"] = f.flatten(1).detach().float().cpu()  # AMP → FP32으로 명시 변환
 
     layers = list(nn_model.model.children())
     handle = layers[-2].register_forward_hook(_hook)
 
     def _extract(paths: list[str]) -> torch.Tensor:
         feats = []
-        with torch.no_grad():
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_amp):
             for p in paths:
                 img = transform(Image.open(p).convert("RGB")).unsqueeze(0).to(device)
                 nn_model(img)
@@ -501,11 +509,14 @@ def _evaluate_effdet(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = device.type == "cuda"
     model.to(device).eval()
 
     y_true, y_score = [], []
 
-    with torch.no_grad():
+    # no_grad: 추론 시 gradient 계산 비활성화 (메모리 절약 + 속도 향상)
+    # autocast: FP16 추론으로 VRAM 절약 (결과는 FP32로 자동 처리)
+    with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_amp):
         if group == "baseline":
             good_train_dir = test_dir.parent.parent / "baseline" / "train" / "good"
             good_ds = datasets.ImageFolder(
@@ -516,19 +527,19 @@ def _evaluate_effdet(
                                      shuffle=False,
                                      num_workers=config["dataset"]["num_workers"])
             good_feats = torch.cat(
-                [model.extract_features(imgs.to(device)).cpu() for imgs, _ in good_loader]
+                [model.extract_features(imgs.to(device)).float().cpu() for imgs, _ in good_loader]
             )
             mean_feat = good_feats.mean(0, keepdim=True)
 
             for imgs, labels in loader:
-                f = model.extract_features(imgs.to(device)).cpu()
+                f = model.extract_features(imgs.to(device)).float().cpu()
                 scores = 1.0 - F.cosine_similarity(f, mean_feat)
                 y_true.extend([0 if l == good_label else 1 for l in labels.tolist()])
                 y_score.extend(scores.tolist())
         else:
             # defect(d) < good(g) 알파벳순 → defect=0 → P(defect) = softmax[:,0]
             for imgs, labels in loader:
-                probs = F.softmax(model(imgs.to(device)), dim=1)[:, 0]
+                probs = F.softmax(model(imgs.to(device)).float(), dim=1)[:, 0]
                 y_true.extend([0 if l == good_label else 1 for l in labels.tolist()])
                 y_score.extend(probs.cpu().tolist())
 
@@ -697,8 +708,18 @@ def run_benchmark(
             except Exception as e:
                 logger.error(f"{exp_desc}: Unexpected error - {type(e).__name__}: {e}")
                 results[model_name][group] = {"error": type(e).__name__, "detail": str(e)}
-            
+
             finally:
+                # 실험별 메모리 정리: model 참조 해제 → GC → GPU 캐시 반환
+                import gc as _gc
+                import torch as _t
+                try:
+                    del model
+                except NameError:
+                    pass
+                _gc.collect()
+                if _t.cuda.is_available():
+                    _t.cuda.empty_cache()
                 pbar.update(1)
     
     pbar.close()
