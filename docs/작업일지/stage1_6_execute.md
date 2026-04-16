@@ -597,7 +597,14 @@ LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 # 병렬 설정
 NUM_IO_THREADS = 8  # 카테고리 내부 파일 복사 스레드 수 (I/O-bound → Thread 유리)
 CAT_THREADS    = 2  # 카테고리 단위 동시 처리 수 (Drive 동시 쓰기 안정성 고려)
-PRUNING_THRESHOLD = 0.6  # aroma_pruned quality 임계값
+PRUNING_THRESHOLD = 0.6  # aroma_pruned quality 임계값 (global fallback)
+PRUNING_THRESHOLD_BY_DOMAIN = {  # 도메인별 override (visa candle=0.493 대응)
+    "isp": 0.6,
+    "mvtec": 0.6,
+    "visa": 0.4,
+}
+SPLIT_RATIO = 0.8   # good 이미지 train/test 비율 (None=원본 분할 유지)
+SPLIT_SEED  = 42    # 결정적 분할 시드
 
 # cat_dir 단위로 묶기 (카테고리당 여러 seed_dir 가능)
 cat_map: dict[str, str] = {}
@@ -628,11 +635,14 @@ else:
     def _run_stage6(args):
         cat_dir, image_dir, seed_dirs = args
         run_dataset_builder(
-            cat_dir           = cat_dir,
-            image_dir         = image_dir,
-            seed_dirs         = seed_dirs,
-            pruning_threshold = PRUNING_THRESHOLD,
-            workers           = NUM_IO_THREADS,
+            cat_dir                    = cat_dir,
+            image_dir                  = image_dir,
+            seed_dirs                  = seed_dirs,
+            pruning_threshold          = PRUNING_THRESHOLD,
+            pruning_threshold_by_domain= PRUNING_THRESHOLD_BY_DOMAIN,
+            split_ratio                = SPLIT_RATIO,
+            split_seed                 = SPLIT_SEED,
+            workers                    = NUM_IO_THREADS,
         )
         return Path(cat_dir).name
 

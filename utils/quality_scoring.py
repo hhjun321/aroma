@@ -19,69 +19,117 @@ import numpy as np
 # Internal metric functions
 # ---------------------------------------------------------------------------
 
-def _score_artifacts(gray: np.ndarray) -> float:
+def _score_artifacts(gray: np.ndarray, mask: np.ndarray | None = None) -> float:
     """Gradient 기반 합성 아티팩트 감지.
 
     Sobel gradient magnitude의 3σ 이상치 비율(edge_score) +
-    Laplacian energy / gradient mean 비율(hf_score).
+    Laplacian energy / (gradient mean + std) 비율(hf_score).
     가중치: 0.6 * edge_score + 0.4 * hf_score.
     Returns: 1.0 = 아티팩트 없음 (higher = better).
+
+    Args:
+        gray: 그레이스케일 이미지.
+        mask: Stage 4에서 저장한 이진 ROI 마스크 (uint8, 255=결함 영역).
+              제공 시 dilate 후 해당 픽셀에서만 통계 산출 (배경 편향 제거).
+              None=전체 이미지 사용 (기존 동작).
+
+    Note (Option A): hf_ratio 분모를 mean_mag → mean_mag + std_mag 로 변경.
+    매끄러운 배경(candle 등) 에서 mean_mag 가 작아 hf_ratio 가 과대평가되던
+    문제를 텍스처 분산(std_mag)을 분모에 포함해 완화.
     """
     gray_f = gray.astype(np.float32)
 
-    # Sobel gradient magnitude
+    # Sobel/Laplacian은 전체 이미지에서 계산 (공간 연산이므로 컨텍스트 필요)
     gx = cv2.Sobel(gray_f, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(gray_f, cv2.CV_32F, 0, 1, ksize=3)
     mag = np.sqrt(gx ** 2 + gy ** 2)
+    lap = cv2.Laplacian(gray_f, cv2.CV_32F)
 
-    mean_mag = float(np.mean(mag))
-    std_mag = float(np.std(mag))
+    # Option B: ROI 마스크가 있으면 결함 영역만으로 통계 산출
+    if mask is not None:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+        roi = cv2.dilate(mask, kernel) > 127
+        if np.any(roi):
+            mag_vals = mag[roi]
+            lap_vals = np.abs(lap[roi])
+        else:
+            mag_vals = mag.flatten()
+            lap_vals = np.abs(lap).flatten()
+    else:
+        mag_vals = mag.flatten()
+        lap_vals = np.abs(lap).flatten()
+
+    mean_mag = float(np.mean(mag_vals))
+    std_mag  = float(np.std(mag_vals))
     if mean_mag < 1e-6:
         return 1.0  # 균일 이미지 — 아티팩트 없음
 
     # edge_score: 3σ 이상치 픽셀 비율 (낮을수록 좋음 → 1 - ratio)
     threshold = mean_mag + 3.0 * std_mag
-    outlier_ratio = float(np.mean(mag > threshold))
+    outlier_ratio = float(np.mean(mag_vals > threshold))
     edge_score = 1.0 - min(outlier_ratio * 10.0, 1.0)  # 10% 이상이면 최악
 
-    # hf_score: Laplacian energy / gradient mean (높은 비율은 고주파 아티팩트)
-    lap = cv2.Laplacian(gray_f, cv2.CV_32F)
-    lap_energy = float(np.mean(np.abs(lap)))
-    hf_ratio = lap_energy / (mean_mag + 1e-6)
+    # hf_score: Laplacian energy / (gradient mean + std)
+    # Option A: 분모에 std_mag 추가 → 매끄러운 배경에서 hf_ratio 과대평가 완화
+    lap_energy = float(np.mean(lap_vals))
+    hf_ratio = lap_energy / (mean_mag + std_mag + 1e-6)
     hf_score = 1.0 - min(hf_ratio / 5.0, 1.0)  # 5.0 이상이면 최악
 
     return float(np.clip(0.6 * edge_score + 0.4 * hf_score, 0.0, 1.0))
 
 
-def _score_sharpness(gray: np.ndarray) -> float:
+def _score_sharpness(gray: np.ndarray, mask: np.ndarray | None = None) -> float:
     """Laplacian variance + gradient contrast 기반 선명도.
 
     Laplacian variance(lap_score) + P90/P50 gradient contrast ratio(edge_sharpness).
     가중치: 0.5 * lap_score + 0.5 * edge_sharpness.
     Returns: 1.0 = 완전 선명 (higher = better).
 
+    Args:
+        gray: 그레이스케일 이미지.
+        mask: Stage 4에서 저장한 이진 ROI 마스크 (uint8, 255=결함 영역).
+              제공 시 dilate 후 해당 픽셀에서만 통계 산출.
+              None=전체 이미지 사용 (기존 동작).
+
     NOTE: lap_var 정규화는 해상도 비례 스케일링을 적용한다.
     기준 해상도 256×256 (ISP-AD ASM) 에서 경험적 상수 1000.0 을 사용하며,
-    고해상도 이미지는 픽셀 수에 비례하여 기준값을 자동 상향한다.
-    이로써 pruning_threshold 가 해상도에 무관하게 동일한 의미를 갖는다.
+    ROI 마스크 사용 시에는 ROI 픽셀 수를 기준으로 스케일링한다.
     """
     gray_f = gray.astype(np.float32)
 
-    # Laplacian variance — 선명한 이미지일수록 높음
+    # Laplacian/Sobel은 전체 이미지에서 계산
     lap = cv2.Laplacian(gray_f, cv2.CV_32F)
-    lap_var = float(np.var(lap))
+    gx = cv2.Sobel(gray_f, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray_f, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.sqrt(gx ** 2 + gy ** 2)
+
+    # Option B: ROI 마스크가 있으면 결함 영역만으로 통계 산출
+    if mask is not None:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+        roi = cv2.dilate(mask, kernel) > 127
+        if np.any(roi):
+            lap_vals = lap[roi]
+            mag_vals = mag[roi].flatten()
+            num_pixels = int(np.sum(roi))
+        else:
+            lap_vals = lap
+            mag_vals = mag.flatten()
+            num_pixels = gray.shape[0] * gray.shape[1]
+    else:
+        lap_vals = lap
+        mag_vals = mag.flatten()
+        num_pixels = gray.shape[0] * gray.shape[1]
+
+    # Laplacian variance — 선명한 이미지일수록 높음
+    lap_var = float(np.var(lap_vals))
     # 해상도 비례 정규화: 기준 해상도(256×256) 대비 픽셀 비율로 스케일링
     _REF_PIXELS = 256 * 256
-    num_pixels = gray.shape[0] * gray.shape[1]
     scale = num_pixels / _REF_PIXELS
     lap_score = float(np.clip(lap_var / (1000.0 * scale), 0.0, 1.0))
 
     # Gradient contrast: P90 / P50 비율
-    gx = cv2.Sobel(gray_f, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(gray_f, cv2.CV_32F, 0, 1, ksize=3)
-    mag = np.sqrt(gx ** 2 + gy ** 2).flatten()
-    p50 = float(np.percentile(mag, 50))
-    p90 = float(np.percentile(mag, 90))
+    p50 = float(np.percentile(mag_vals, 50))
+    p90 = float(np.percentile(mag_vals, 90))
     if p50 < 1e-6:
         edge_sharpness = 0.0
     else:
@@ -100,17 +148,26 @@ def _score_single_worker(args_tuple: tuple) -> dict | None:
 
     args: (img_path_str,)
     Returns: {"image_id": str, "artifact": float, "blur": float} | None
+
+    Stage 4가 저장한 {stem}_mask.png 가 같은 디렉터리에 있으면 로드해
+    ROI 기반 스코어링을 수행한다 (Option B). 없으면 전체 이미지 사용.
     """
     (img_path_str,) = args_tuple
     img = cv2.imread(img_path_str)
     if img is None:
         return None
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    image_id = Path(img_path_str).stem
+
+    # ROI 마스크 로드 (Stage 4 에서 저장한 {image_id}_mask.png)
+    img_p = Path(img_path_str)
+    mask_path = img_p.with_name(img_p.stem + "_mask.png")
+    mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE) if mask_path.exists() else None
+
+    image_id = img_p.stem
     return {
         "image_id": image_id,
-        "artifact": _score_artifacts(gray),
-        "blur": _score_sharpness(gray),
+        "artifact": _score_artifacts(gray, mask),
+        "blur": _score_sharpness(gray, mask),
     }
 
 
@@ -186,7 +243,11 @@ def score_defect_images(
         return json.loads(cache_path.read_text())
 
     defect_dir = seed_dir / "defect"
-    img_paths = sorted(defect_dir.glob("*.png")) if defect_dir.exists() else []
+    # *_mask.png 는 Stage 4 ROI 마스크 파일 — 스코어링 대상에서 제외
+    img_paths = (
+        sorted(p for p in defect_dir.glob("*.png") if not p.stem.endswith("_mask"))
+        if defect_dir.exists() else []
+    )
 
     # count == 0: 빈 stats 반환, 파일 미생성
     if not img_paths:

@@ -36,10 +36,11 @@ def _blend_patch(
     patch: np.ndarray,
     x: int,
     y: int,
-) -> np.ndarray:
+) -> tuple:
     """Blend patch into bg at position (x, y) using Poisson blending.
 
-    Returns the composited image (same shape as bg).
+    Returns (composited, roi_mask) where roi_mask is a binary uint8 mask
+    (same H×W as bg) marking the blended region.
     Falls back to direct copy if seamlessClone cannot be applied.
     """
     ph, pw = patch.shape[:2]
@@ -66,21 +67,22 @@ def _blend_patch(
     cy = max(ph // 2 + 1, min(ih - ph // 2 - 1, cy))
 
     # Full white mask — blend entire patch
-    mask = 255 * np.ones((ph, pw), dtype=np.uint8)
+    blend_mask = 255 * np.ones((ph, pw), dtype=np.uint8)
+
+    # Compute ROI rectangle (clamped top-left + patch size)
+    top = max(0, min(ih - ph, cy - ph // 2))
+    left = max(0, min(iw - pw, cx - pw // 2))
+    roi_mask = np.zeros((ih, iw), dtype=np.uint8)
+    roi_mask[top:top + ph, left:left + pw] = 255
 
     try:
-        result = cv2.seamlessClone(patch, bg, mask, (cx, cy), cv2.NORMAL_CLONE)
+        result = cv2.seamlessClone(patch, bg, blend_mask, (cx, cy), cv2.NORMAL_CLONE)
     except cv2.error:
         # Fallback: direct alpha composite using the patch region
         result = bg.copy()
-        # Compute top-left corner from clamped center
-        top = cy - ph // 2
-        left = cx - pw // 2
-        top = max(0, min(ih - ph, top))
-        left = max(0, min(iw - pw, left))
         result[top:top + ph, left:left + pw] = patch
 
-    return result
+    return result, roi_mask
 
 
 def _blend_patch_fast(
@@ -88,11 +90,12 @@ def _blend_patch_fast(
     patch: np.ndarray,
     x: int,
     y: int,
-) -> np.ndarray:
+) -> tuple:
     """Blend patch into bg at (x, y) using Gaussian soft-mask alpha compositing.
 
     ~10-30× faster than seamlessClone (no Poisson iteration).
-    Returns the composited image (same shape as bg).
+    Returns (composited, roi_mask) where roi_mask is a binary uint8 mask
+    (same H×W as bg) marking the blended region.
     """
     ph, pw = patch.shape[:2]
     ih, iw = bg.shape[:2]
@@ -110,7 +113,7 @@ def _blend_patch_fast(
     rh = min(ph, ih - top)
     rw = min(pw, iw - left)
     if rh <= 0 or rw <= 0:
-        return bg
+        return bg, np.zeros((ih, iw), dtype=np.uint8)
 
     ksize = max(3, (min(rh, rw) // 6) | 1)
     alpha = np.ones((rh, rw), dtype=np.float32)
@@ -122,7 +125,11 @@ def _blend_patch_fast(
     roi_patch = patch[:rh, :rw].astype(np.float32)
     blended = roi_patch * alpha + roi_bg * (1.0 - alpha)
     result[top:top + rh, left:left + rw] = blended.astype(np.uint8)
-    return result
+
+    # ROI mask: rectangle where synthesis occurred
+    roi_mask = np.zeros((ih, iw), dtype=np.uint8)
+    roi_mask[top:top + rh, left:left + rw] = 255
+    return result, roi_mask
 
 
 def _synthesize_image(
@@ -149,6 +156,7 @@ def _synthesize_image(
     composited = bg.copy()
     ih, iw = bg.shape[:2]
     yolo_boxes: List[str] = []
+    cumulative_mask = np.zeros((ih, iw), dtype=np.uint8)
 
     for placement in placements:
         defect_path = placement["defect_path"]
@@ -166,7 +174,8 @@ def _synthesize_image(
         patch = _transform_patch(patch, scale, rotation)
         ph, pw = patch.shape[:2]
         blend_fn = _blend_patch_fast if use_fast_blend else _blend_patch
-        composited = blend_fn(composited, patch, x, y)
+        composited, roi_mask = blend_fn(composited, patch, x, y)
+        cumulative_mask = np.bitwise_or(cumulative_mask, roi_mask)
 
         if fmt == "yolo":
             cx = x + pw // 2
@@ -187,6 +196,8 @@ def _synthesize_image(
         cls_dir.mkdir(parents=True, exist_ok=True)
         out_img = str(cls_dir / f"{image_id}.png")
         cv2.imwrite(out_img, composited)
+        if np.any(cumulative_mask):
+            cv2.imwrite(str(cls_dir / f"{image_id}_mask.png"), cumulative_mask)
         written.append(out_img)
     elif fmt == "yolo":
         images_dir = out_path / "images"
@@ -249,6 +260,7 @@ def _synthesize_image_multi_seed_worker(args_tuple):
     for seed_id, placements in seed_entries:
         composited = bg.copy()
         yolo_boxes: List[str] = []
+        cumulative_mask = np.zeros((ih, iw), dtype=np.uint8)
 
         for placement in placements:
             defect_path = placement["defect_path"]
@@ -269,7 +281,8 @@ def _synthesize_image_multi_seed_worker(args_tuple):
             ph, pw = patch.shape[:2]
             x, y = int(placement.get("x", 0)), int(placement.get("y", 0))
             blend_fn = _blend_patch_fast if use_fast_blend else _blend_patch
-            composited = blend_fn(composited, patch, x, y)
+            composited, roi_mask = blend_fn(composited, patch, x, y)
+            cumulative_mask = np.bitwise_or(cumulative_mask, roi_mask)
 
             if fmt == "yolo":
                 cx = max(pw // 2 + 1, min(iw - pw // 2 - 1, x + pw // 2))
@@ -285,6 +298,8 @@ def _synthesize_image_multi_seed_worker(args_tuple):
             d = seed_out / "defect"
             d.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(d / f"{image_id}.png"), composited, png_params)
+            if np.any(cumulative_mask):
+                cv2.imwrite(str(d / f"{image_id}_mask.png"), cumulative_mask, png_params)
         elif fmt == "yolo":
             (seed_out / "images").mkdir(parents=True, exist_ok=True)
             (seed_out / "labels").mkdir(parents=True, exist_ok=True)

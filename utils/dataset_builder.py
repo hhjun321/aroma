@@ -179,6 +179,66 @@ def _copy_images(src_dir: Path, dst_dir: Path, num_workers: int,
     return len(imgs)
 
 
+def _copy_file_list(paths: list[Path], dst_dir: Path, num_workers: int,
+                    desc: str = "") -> int:
+    """특정 파일 경로 목록을 dst_dir 로 복사. 복사 파일 수 반환."""
+    from concurrent.futures import ThreadPoolExecutor
+    from tqdm import tqdm
+
+    if not paths:
+        return 0
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    tasks = [(str(p), str(dst_dir / p.name)) for p in paths]
+
+    progress_desc = f"  {desc}" if desc else "  Copying files"
+    if num_workers <= 1:
+        for t in tqdm(tasks, desc=progress_desc, leave=False):
+            _copy_worker(t)
+    else:
+        with ThreadPoolExecutor(max_workers=num_workers) as ex:
+            list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
+                     desc=progress_desc, leave=False))
+    return len(paths)
+
+
+def _split_good_images(
+    image_dir: Path,
+    cat_test_good_dir: Path,
+    split_ratio: float,
+    split_seed: int,
+) -> tuple[list[Path], list[Path]]:
+    """train/good + test/good 전체를 pooling 후 결정적 분할.
+
+    train/good 이미지와 test/good 이미지를 합산해 동일 비율로 분할한다.
+    모든 카테고리·도메인에 걸쳐 동일한 split_ratio 를 보장하기 위해 사용한다.
+
+    Args:
+        image_dir:        원본 train/good 디렉터리.
+        cat_test_good_dir: 원본 test/good 디렉터리 (없으면 train/good 만 사용).
+        split_ratio:      train 비율 (0~1). 예: 0.8 → 80% train, 20% test.
+        split_seed:       결정적 셔플 시드.
+
+    Returns:
+        (train_paths, test_paths) — 두 리스트는 상호 배타적 (no leakage).
+    """
+    import random
+
+    _exts = ("*.png", "*.jpg", "*.jpeg")
+    all_good: list[Path] = []
+    for src in [image_dir, cat_test_good_dir]:
+        if src.exists():
+            for ext in _exts:
+                all_good.extend(src.glob(ext))
+
+    # 파일명 기준 정렬 → 시드 기반 셔플 (결정적)
+    all_good = sorted(set(all_good), key=lambda p: p.name)
+    rng = random.Random(split_seed)
+    rng.shuffle(all_good)
+
+    n_train = max(1, int(len(all_good) * split_ratio))
+    return all_good[:n_train], all_good[n_train:]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -191,6 +251,9 @@ def build_dataset_groups(
     augmentation_ratio_full: float | None = None,
     augmentation_ratio_pruned: float | None = None,
     augmentation_ratio_by_domain: dict | None = None,
+    pruning_threshold_by_domain: dict | None = None,
+    split_ratio: float | None = None,
+    split_seed: int = 42,
     workers: int = 0,
 ) -> dict:
     """3개 dataset group 을 구성하고 build_report.json 을 저장한다.
@@ -207,6 +270,17 @@ def build_dataset_groups(
         augmentation_ratio_by_domain: 도메인별 비율 설정 (dict).
             예: {"isp": {"full": 1.0, "pruned": 0.5}, "mvtec": {...}}
             이 값이 설정되면 도메인 추출 후 우선 적용됨.
+        pruning_threshold_by_domain: 도메인별 pruning_threshold override (dict).
+            예: {"isp": 0.6, "mvtec": 0.6, "visa": 0.4}
+            설정 시 해당 도메인에 global pruning_threshold 대신 사용됨.
+            VisA candle quality=0.493: artifact_score hf_ratio 상수(5.0)가
+            매끄러운 표면 텍스처에 맞지 않아 발생하는 캘리브레이션 문제 대응.
+        split_ratio: train/test good 이미지 분할 비율 (0~1).
+            None=원본 데이터셋 분할 사용 (기본 동작).
+            설정 시 train/good + test/good 전체를 pooling 후
+            결정적으로 분할 → 모든 카테고리·도메인에 동일 비율 보장.
+            예: 0.8 → 전체 good 의 80% 를 train, 20% 를 test 에 사용.
+        split_seed: split_ratio 사용 시 결정적 셔플 시드 (기본 42).
         workers: 병렬 워커 수 (0=순차).
 
     Returns:
@@ -237,24 +311,40 @@ def build_dataset_groups(
         ratio_full = augmentation_ratio_full
         ratio_pruned = augmentation_ratio_pruned
 
+    # 도메인별 pruning_threshold override
+    if pruning_threshold_by_domain and domain in pruning_threshold_by_domain:
+        effective_threshold = pruning_threshold_by_domain[domain]
+    else:
+        effective_threshold = pruning_threshold
+
     # Skip 조건 확인
     # stage4_output 이 존재하고 이전 실행에서 실제 defect 가 수집됐을 때만 skip.
     # stage4 가 미실행인 채로 캐시된 경우(defect_count=0) stage4 완료 후 재실행 가능하도록 skip 하지 않음.
     stage4_dir = cat_path / "stage4_output"
     if report_path.exists():
         cached = json.loads(report_path.read_text())
-        threshold_match = abs(cached.get("pruning_threshold", -1) - pruning_threshold) < 1e-6
+        threshold_match = abs(
+            cached.get("effective_pruning_threshold",
+                        cached.get("pruning_threshold", -1))
+            - effective_threshold
+        ) < 1e-6
         ratio_full_match = (
             cached.get("augmentation_ratio_full") == ratio_full
         )
         ratio_pruned_match = (
             cached.get("augmentation_ratio_pruned") == ratio_pruned
         )
+        split_ratio_match = cached.get("split_ratio") == split_ratio
+        split_seed_match = (
+            split_ratio is None  # split_ratio=None 이면 seed 무관
+            or cached.get("split_seed", 42) == split_seed
+        )
         cached_has_defects = cached.get("aroma_full", {}).get("defect_count", 0) > 0
         stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
-        
+
         if (threshold_match and ratio_full_match and ratio_pruned_match and
-            (cached_has_defects or not stage4_now_exists)):
+                split_ratio_match and split_seed_match and
+                (cached_has_defects or not stage4_now_exists)):
             return cached
 
     from concurrent.futures import ThreadPoolExecutor
@@ -272,18 +362,37 @@ def build_dataset_groups(
             stacklevel=2,
         )
 
-    # ── baseline/train/good/ ───────────────────────────────────────────────
-    baseline_good = aug_dir / "baseline" / "train" / "good"
-    good_count = _copy_images(Path(image_dir), baseline_good, num_workers,
-                               desc="baseline/train/good")
-
-    # ── baseline/test/ ────────────────────────────────────────────────────
-    # test/good/ (image_dir 기준: {cat}/train/good → {cat}/test/good)
+    # ── good 이미지 train/test 분할 ───────────────────────────────────────
+    # split_ratio 가 설정된 경우: train/good + test/good 를 pooling 후 결정적 분할
+    #   → 모든 카테고리·도메인에 동일한 비율 보장, test 가 train 에 포함되지 않음
+    # split_ratio=None: 원본 데이터셋 분할 그대로 사용 (기존 동작)
     test_good_src = Path(image_dir).parents[1] / "test" / "good"
-    if test_good_src.exists():
-        _copy_images(test_good_src,
-                     aug_dir / "baseline" / "test" / "good",
-                     num_workers, desc="baseline/test/good")
+
+    if split_ratio is not None:
+        train_good_paths, test_good_paths = _split_good_images(
+            image_dir=Path(image_dir),
+            cat_test_good_dir=test_good_src,
+            split_ratio=split_ratio,
+            split_seed=split_seed,
+        )
+        good_count = _copy_file_list(
+            train_good_paths, aug_dir / "baseline" / "train" / "good",
+            num_workers, desc="baseline/train/good (split)"
+        )
+        _copy_file_list(
+            test_good_paths, aug_dir / "baseline" / "test" / "good",
+            num_workers, desc="baseline/test/good (split)"
+        )
+    else:
+        # 원본 분할 사용
+        good_count = _copy_images(
+            Path(image_dir), aug_dir / "baseline" / "train" / "good",
+            num_workers, desc="baseline/train/good"
+        )
+        if test_good_src.exists():
+            _copy_images(test_good_src,
+                         aug_dir / "baseline" / "test" / "good",
+                         num_workers, desc="baseline/test/good")
 
     # test/{defect_type}/ — 원본 test 디렉터리 전체 스캔 (모든 defect 유형 포함)
     # 공정한 벤치마크를 위해 seed로 사용된 유형만이 아닌 전체 defect 유형을 포함한다.
@@ -306,9 +415,16 @@ def build_dataset_groups(
                              num_workers, desc=f"baseline/test/{defect_type}")
 
     # ── aroma_full/train/ ─────────────────────────────────────────────────
-    _copy_images(Path(image_dir),
-                 aug_dir / "aroma_full" / "train" / "good",
-                 num_workers, desc="aroma_full/train/good")
+    # good train 이미지는 baseline 과 동일한 분할을 사용 → 공정한 비교 보장
+    if split_ratio is not None:
+        _copy_file_list(
+            train_good_paths, aug_dir / "aroma_full" / "train" / "good",
+            num_workers, desc="aroma_full/train/good (split)"
+        )
+    else:
+        _copy_images(Path(image_dir),
+                     aug_dir / "aroma_full" / "train" / "good",
+                     num_workers, desc="aroma_full/train/good")
 
     full_defect_pairs = _collect_defect_paths(
         cat_dir,
@@ -343,13 +459,19 @@ def build_dataset_groups(
                          desc="  aroma_full/train/defect", leave=False))
 
     # ── aroma_pruned/train/ ───────────────────────────────────────────────
-    _copy_images(Path(image_dir),
-                 aug_dir / "aroma_pruned" / "train" / "good",
-                 num_workers, desc="aroma_pruned/train/good")
+    if split_ratio is not None:
+        _copy_file_list(
+            train_good_paths, aug_dir / "aroma_pruned" / "train" / "good",
+            num_workers, desc="aroma_pruned/train/good (split)"
+        )
+    else:
+        _copy_images(Path(image_dir),
+                     aug_dir / "aroma_pruned" / "train" / "good",
+                     num_workers, desc="aroma_pruned/train/good")
 
     pruned_defect_pairs = _collect_defect_paths(
         cat_dir,
-        pruning_threshold=pruning_threshold,
+        pruning_threshold=effective_threshold,
         augmentation_ratio=ratio_pruned,
         good_count=good_count,
     )
@@ -369,9 +491,12 @@ def build_dataset_groups(
 
     report = {
         "pruning_threshold": pruning_threshold,
+        "effective_pruning_threshold": effective_threshold,
         "augmentation_ratio_full": ratio_full,
         "augmentation_ratio_pruned": ratio_pruned,
-        "domain": domain,  # 도메인 정보 저장
+        "split_ratio": split_ratio,
+        "split_seed": split_seed if split_ratio is not None else None,
+        "domain": domain,
         "stage4_status": stage4_status,
         "stage4_seeds_total": stage4_seeds_total,
         "stage4_seeds_with_defects": stage4_seeds_with_defects,

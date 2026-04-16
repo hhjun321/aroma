@@ -22,6 +22,9 @@ def run_dataset_builder(
     augmentation_ratio_full: float | None = None,
     augmentation_ratio_pruned: float | None = None,
     augmentation_ratio_by_domain: dict | None = None,
+    pruning_threshold_by_domain: dict | None = None,
+    split_ratio: float | None = None,
+    split_seed: int = 42,
     workers: int = 0,
 ) -> dict:
     """build_dataset_groups() 의 직접 래퍼.
@@ -40,6 +43,9 @@ def run_dataset_builder(
         augmentation_ratio_full=augmentation_ratio_full,
         augmentation_ratio_pruned=augmentation_ratio_pruned,
         augmentation_ratio_by_domain=augmentation_ratio_by_domain,
+        pruning_threshold_by_domain=pruning_threshold_by_domain,
+        split_ratio=split_ratio,
+        split_seed=split_seed,
         workers=workers,
     )
 
@@ -60,8 +66,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="aroma_full 원본 대비 합성 defect 비율 (None=모두 사용).")
     p.add_argument("--augmentation_ratio_pruned", type=float, default=None,
                    help="aroma_pruned 원본 대비 합성 defect 비율 (None=모두 사용).")
+    p.add_argument("--split_ratio", type=float, default=None,
+                   help="good 이미지 train/test 분할 비율 (0~1). "
+                        "None=원본 데이터셋 분할 사용. "
+                        "예: 0.8 → 전체 good 80%% train, 20%% test.")
+    p.add_argument("--split_seed", type=int, default=42,
+                   help="split_ratio 사용 시 결정적 셔플 시드 (기본 42).")
     p.add_argument("--config", type=str, default=None,
-                   help="benchmark_experiment.yaml 경로 (도메인별 비율 로드용).")
+                   help="benchmark_experiment.yaml 경로 (비율·분할 설정 로드용).")
     p.add_argument("--workers", type=int, default=0,
                    help="병렬 워커 수 (0=순차, -1=자동, N>=2=N 프로세스).")
     return p
@@ -69,19 +81,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
-    
-    # ── Config 파일에서 도메인별 비율 로드 ────────────────────────────────
+
+    # ── Config 파일에서 dataset 설정 로드 ─────────────────────────────────
     augmentation_ratio_by_domain = None
+    pruning_threshold_by_domain = None
+    split_ratio = args.split_ratio
+    split_seed = args.split_seed
     if args.config:
         from pathlib import Path
         config_path = Path(args.config)
         if config_path.exists():
             with open(config_path, encoding="utf-8") as f:
                 config = yaml.safe_load(f)
-            augmentation_ratio_by_domain = config.get("dataset", {}).get(
-                "augmentation_ratio_by_domain"
-            )
-    
+            ds = config.get("dataset", {})
+            augmentation_ratio_by_domain = ds.get("augmentation_ratio_by_domain")
+            pruning_threshold_by_domain = ds.get("pruning_threshold_by_domain")
+            # CLI 인자가 없을 때만 config 값 사용 (CLI 우선)
+            if split_ratio is None:
+                split_ratio = ds.get("split_ratio")
+            if split_seed == 42:
+                split_seed = ds.get("split_seed", 42)
+
     result = run_dataset_builder(
         cat_dir=args.cat_dir,
         image_dir=args.image_dir,
@@ -90,11 +110,16 @@ def main() -> None:
         augmentation_ratio_full=args.augmentation_ratio_full,
         augmentation_ratio_pruned=args.augmentation_ratio_pruned,
         augmentation_ratio_by_domain=augmentation_ratio_by_domain,
+        pruning_threshold_by_domain=pruning_threshold_by_domain,
+        split_ratio=split_ratio,
+        split_seed=split_seed,
         workers=args.workers,
     )
     print(f"Domain: {result.get('domain', 'unknown')}")
     print(f"Applied ratio_full: {result.get('augmentation_ratio_full')}")
     print(f"Applied ratio_pruned: {result.get('augmentation_ratio_pruned')}")
+    print(f"effective_pruning_threshold: {result.get('effective_pruning_threshold')}")
+    print(f"split_ratio: {result.get('split_ratio')}  split_seed: {result.get('split_seed')}")
     print(f"baseline   good={result['baseline']['good_count']}")
     print(f"aroma_full defect={result['aroma_full']['defect_count']}")
     print(f"aroma_pruned defect={result['aroma_pruned']['defect_count']}")
