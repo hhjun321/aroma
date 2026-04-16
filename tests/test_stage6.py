@@ -406,6 +406,59 @@ def test_augmentation_ratio_none_uses_all_defects(tmp_path):
     assert result["aroma_full"]["defect_count"] == 20
 
 
+def test_testset_includes_all_defect_types(tmp_path):
+    """baseline/test/ 에 seed_dirs 에 없는 defect 유형도 포함되어야 한다.
+
+    수정 전: seed_dirs(broken_large만) → test/broken_large/ 만 생성
+    수정 후: test/ 전체 스캔 → test/broken_large/ + test/broken_small/ + test/contamination/ 모두 생성
+    """
+    from utils.dataset_builder import build_dataset_groups
+
+    image_dir = _make_image_dir(tmp_path, count=3)
+    # seed_dirs 에는 broken_large 만 등록
+    seed_dirs = _make_seed_dirs(tmp_path, ["broken_large"])
+
+    # test/ 에 broken_small, contamination 도 직접 추가 (seed_dirs 미등록)
+    for extra_type in ["broken_small", "contamination"]:
+        extra_dir = tmp_path / "test" / extra_type
+        extra_dir.mkdir(parents=True, exist_ok=True)
+        _make_png(extra_dir / "001.png")
+
+    build_dataset_groups(str(tmp_path), str(image_dir), seed_dirs)
+
+    baseline_test = tmp_path / "augmented_dataset" / "baseline" / "test"
+    present = {d.name for d in baseline_test.iterdir() if d.is_dir()}
+    assert "broken_large" in present, "seed_dirs 에 있는 유형은 포함돼야 함"
+    assert "broken_small" in present, "seed_dirs 미등록 유형도 포함돼야 함"
+    assert "contamination" in present, "seed_dirs 미등록 유형도 포함돼야 함"
+    assert "good" in present, "good 이미지도 포함돼야 함"
+
+
+def test_testset_fallback_to_seed_dirs_when_no_cat_test(tmp_path):
+    """원본 test 디렉터리가 없으면 seed_dirs 폴백으로 테스트셋을 구성한다."""
+    from utils.dataset_builder import build_dataset_groups
+
+    # image_dir 을 test/ 없이 구성 (train/good 만)
+    image_dir = tmp_path / "cat" / "train" / "good"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    _make_png(image_dir / "000.png")
+
+    # seed_dirs 는 별도 경로 (cat/test/ 아님)
+    sd = tmp_path / "seeds" / "scratch"
+    sd.mkdir(parents=True, exist_ok=True)
+    _make_png(sd / "001.png")
+    seed_dirs = [str(sd)]
+
+    cat_dir = tmp_path / "cat"
+    # cat/test/ 가 존재하지 않으므로 폴백 동작
+    assert not (cat_dir / "test").exists()
+
+    build_dataset_groups(str(cat_dir), str(image_dir), seed_dirs)
+
+    baseline_test = cat_dir / "augmented_dataset" / "baseline" / "test"
+    assert (baseline_test / "scratch").exists(), "폴백: seed_dirs 기반으로 test/scratch/ 생성돼야 함"
+
+
 def test_augmentation_ratio_cached_in_report(tmp_path):
     """build_report.json에 augmentation_ratio 저장 및 캐시 검증."""
     from utils.dataset_builder import build_dataset_groups

@@ -285,14 +285,25 @@ def build_dataset_groups(
                      aug_dir / "baseline" / "test" / "good",
                      num_workers, desc="baseline/test/good")
 
-    # test/{defect_type}/ (seed_dirs 에서 추출)
-    for sd in seed_dirs:
-        defect_type = Path(sd).name
-        src = Path(sd)
-        if src.exists():
-            _copy_images(src,
-                         aug_dir / "baseline" / "test" / defect_type,
-                         num_workers, desc=f"baseline/test/{defect_type}")
+    # test/{defect_type}/ — 원본 test 디렉터리 전체 스캔 (모든 defect 유형 포함)
+    # 공정한 벤치마크를 위해 seed로 사용된 유형만이 아닌 전체 defect 유형을 포함한다.
+    # seed_dirs는 원본 test 구조가 없을 때(이전 버전 호환) 폴백으로 사용.
+    cat_test_dir = Path(image_dir).parents[1] / "test"
+    if cat_test_dir.exists():
+        for defect_dir in sorted(cat_test_dir.iterdir()):
+            if defect_dir.is_dir() and defect_dir.name != "good":
+                _copy_images(defect_dir,
+                             aug_dir / "baseline" / "test" / defect_dir.name,
+                             num_workers, desc=f"baseline/test/{defect_dir.name}")
+    else:
+        # 폴백: 원본 데이터셋 구조가 없을 때 seed_dirs 기반으로 구성
+        for sd in seed_dirs:
+            defect_type = Path(sd).name
+            src = Path(sd)
+            if src.exists():
+                _copy_images(src,
+                             aug_dir / "baseline" / "test" / defect_type,
+                             num_workers, desc=f"baseline/test/{defect_type}")
 
     # ── aroma_full/train/ ─────────────────────────────────────────────────
     _copy_images(Path(image_dir),
