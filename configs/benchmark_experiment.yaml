@@ -62,7 +62,8 @@ category_filter:
 
 experiment:
   name: aroma_benchmark_v1
-  output_dir: outputs/benchmark_results
+  output_dir: outputs/benchmark_results   # 실험 아티팩트 (로컬 가능)
+  # results_dir: /content/drive/MyDrive/data/Aroma/benchmark_results  # Google Drive 경로 설정 시 활성화
   seed: 42
 
 models:

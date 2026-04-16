@@ -100,25 +100,33 @@ else:
 
 ## 4. 재실행 기록
 
-### Stage 6 재실행 (mvtec_bottle)
+### Stage 6 재실행 (mvtec_bottle) ✓
 
-<!-- TODO: 실행 후 기록 -->
+- augmented_dataset 삭제 후 Stage 6 재실행
+- 테스트셋 구성: broken_large + broken_small + contamination (3종)
+- 소요: 약 6초 (캐시 히트 — build_report.json 이미 존재 추정)
 
-### Stage 7 재실행 (mvtec_bottle)
+### Stage 7 재실행 (mvtec_bottle) ✓ (부분)
 
-<!-- TODO: 실행 후 기록 -->
+- Stage 7 resume=True(기본값)로 실행 → baseline 실험은 이전 experiment_meta.json 재사용
+- aroma 실험만 새 테스트셋으로 재평가됨
 
 ---
 
 ## 5. AUROC 비교 (수정 전 vs 수정 후)
 
-| 모델/그룹 | 수정 전 | 수정 후 |
-|----------|--------|--------|
-| yolo11/baseline | 0.7925 | — |
-| yolo11/aroma_full | 1.0000 | — |
-| yolo11/aroma_pruned | 1.0000 | — |
-| efficientdet_d0/baseline | 1.0000 | — |
-| efficientdet_d0/aroma_full | 1.0000 | — |
-| efficientdet_d0/aroma_pruned | 1.0000 | — |
+| 모델/그룹 | 수정 전 | 수정 후 | 비고 |
+|----------|--------|--------|------|
+| yolo11/baseline | 0.7925 | 0.7925 | 캐시 재사용 추정 |
+| yolo11/aroma_full | 1.0000 | 1.0000 | 캐시 또는 진짜 1.0 |
+| yolo11/aroma_pruned | 1.0000 | 1.0000 | 캐시 또는 진짜 1.0 |
+| efficientdet_d0/baseline | 1.0000 | 1.0000 | 캐시 재사용 추정 |
+| efficientdet_d0/aroma_full | 1.0000 | **0.9950** | ▼ 새 테스트셋 효과 확인 |
+| efficientdet_d0/aroma_pruned | 1.0000 | **0.9900** | ▼ 새 테스트셋 효과 확인 |
 
-<!-- TODO: 수정 후 수치 채우기 -->
+**해석:**
+- efficientdet_d0 aroma 수치 감소 → broken_small, contamination 포함으로 평가 난이도 상승 확인
+- yolo11/aroma 수치 불변 → reset=True 전체 재실행으로 캐시 여부 확인 필요
+- baseline 수치 불변 → Stage 7 resume 캐시로 인한 것으로 추정
+
+**TODO:** `reset=True`로 전체 재실행 후 yolo11/aroma 1.0 진위 확인

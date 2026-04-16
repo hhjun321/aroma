@@ -118,7 +118,7 @@ def _ensure_test_dir(cat_dir: str, group: str) -> Path:
 # ---------------------------------------------------------------------------
 
 def _save_results_summary(
-    output_root: Path,
+    results_root: Path,
     cat_name: str,
     results: dict,
 ) -> None:
@@ -129,6 +129,9 @@ def _save_results_summary(
 
     여러 카테고리에 걸쳐 run_benchmark 를 순차 실행하면
     두 파일에 결과가 자동으로 누적된다.
+
+    results_root 는 run_benchmark 의 results_dir 인자(또는 yaml results_dir)로
+    Google Drive 경로를 지정하면 세션 종료 후에도 결과가 보존된다.
     """
     import csv
 
@@ -157,7 +160,8 @@ def _save_results_summary(
 
     # ── benchmark_results.json 누적 저장 ──
     # (category, model, group) 키로 중복 제거 → 최신 결과 우선
-    json_path = output_root / "benchmark_results.json"
+    results_root.mkdir(parents=True, exist_ok=True)
+    json_path = results_root / "benchmark_results.json"
     existing: list[dict] = []
     if json_path.exists():
         try:
@@ -176,7 +180,7 @@ def _save_results_summary(
 
     # ── benchmark_comparison.csv 덮어쓰기 ──
     # JSON 이 단일 소스 — CSV 는 항상 JSON 전체를 재렌더링
-    csv_path = output_root / "benchmark_comparison.csv"
+    csv_path = results_root / "benchmark_comparison.csv"
     _fields = [
         "category", "model", "group",
         "image_auroc", "image_f1", "pixel_auroc",
@@ -199,12 +203,17 @@ def _should_skip(output_dir: Path, model: str, group: str) -> bool:
     return (output_dir / model / group / "experiment_meta.json").exists()
 
 
-def _reset_category(output_root: Path, out_dir: Path, cat_name: str) -> None:
+def _reset_category(out_dir: Path, results_root: Path, cat_name: str) -> None:
     """카테고리 실험 결과를 완전 초기화한다.
 
-    - out_dir 삭제   : experiment_meta.json 제거 → _should_skip() 이 False 를 반환하게 됨
+    - out_dir 삭제      : experiment_meta.json 제거 → _should_skip() 이 False 를 반환하게 됨
     - benchmark_results.json 에서 해당 카테고리 레코드 제거
     - benchmark_comparison.csv 재생성 (제거 후 남은 레코드 기준)
+
+    Args:
+        out_dir:      per-category 실험 출력 디렉터리 (output_root / cat_name).
+        results_root: benchmark_results.json / benchmark_comparison.csv 저장 경로.
+        cat_name:     카테고리 이름 (JSON 레코드 필터링 키).
     """
     import shutil
     import csv
@@ -215,7 +224,7 @@ def _reset_category(output_root: Path, out_dir: Path, cat_name: str) -> None:
         logger.info(f"[reset] {out_dir} 삭제 완료")
 
     # 2. benchmark_results.json 에서 해당 카테고리 레코드 제거
-    json_path = output_root / "benchmark_results.json"
+    json_path = results_root / "benchmark_results.json"
     if not json_path.exists():
         return
 
@@ -232,7 +241,7 @@ def _reset_category(output_root: Path, out_dir: Path, cat_name: str) -> None:
     logger.info(f"[reset] benchmark_results.json 에서 {cat_name} 레코드 {removed}건 제거")
 
     # 3. CSV 재생성 (JSON 이 단일 소스)
-    csv_path = output_root / "benchmark_comparison.csv"
+    csv_path = results_root / "benchmark_comparison.csv"
     _fields = [
         "category", "model", "group",
         "image_auroc", "image_f1", "pixel_auroc",
@@ -698,6 +707,7 @@ def run_benchmark(
     resume: bool = True,
     output_dir: Optional[str] = None,
     reset: bool = False,
+    results_dir: Optional[str] = None,
 ) -> dict:
     """cat_dir 에 대해 model × group 전체 실험을 수행한다.
 
@@ -707,10 +717,15 @@ def run_benchmark(
         groups:      실행할 그룹 (None=전체).
         models:      실행할 모델 (None=전체).
         resume:      True=이미 완료된 실험 skip.
-        output_dir:  결과 저장 루트 (None=yaml의 output_dir 사용).
+        output_dir:  실험 아티팩트 저장 루트 (None=yaml의 output_dir 사용).
+                     experiment_meta.json, 로그 등 로컬에 있어도 무방한 파일.
         reset:       True=카테고리 결과를 초기화한 뒤 처음부터 재실행
                      (out_dir 삭제 + benchmark_results.json/csv 에서 해당 카테고리 레코드 제거).
                      resume=True 와 함께 쓰면 reset 이 먼저 적용된다.
+        results_dir: benchmark_results.json / benchmark_comparison.csv 저장 경로
+                     (None=yaml의 results_dir 사용, 없으면 output_dir 와 동일).
+                     Colab 환경: Google Drive 경로를 지정해 세션 종료 후에도 보존.
+                     예) "/content/drive/MyDrive/data/Aroma/benchmark_results"
     """
     from utils.ad_metrics import extract_metrics
 
@@ -729,10 +744,19 @@ def run_benchmark(
     cat_name = Path(cat_dir).name
     out_dir = output_root / cat_name
 
+    # ── results_root: JSON/CSV 저장 경로 (Drive 지정 가능) ──
+    # 우선순위: 인자 results_dir > yaml results_dir > output_root(로컬 폴백)
+    _results_dir = (
+        results_dir
+        or config["experiment"].get("results_dir")
+    )
+    results_root = Path(_results_dir) if _results_dir else output_root
+
     # ── 카테고리 초기화 (reset=True 시 처음부터 재실행) ──
     if reset:
         output_root.mkdir(parents=True, exist_ok=True)
-        _reset_category(output_root, out_dir, cat_name)
+        results_root.mkdir(parents=True, exist_ok=True)
+        _reset_category(out_dir, results_root, cat_name)
 
     # ── 파일 로그 설정 (CASDA 패턴) ──
     # 동일 핸들러 중복 추가 방지: FileHandler 가 없을 때만 등록
@@ -929,7 +953,7 @@ def run_benchmark(
                     _t.cuda.empty_cache()
                 pbar.update(1)
                 # 실험 1건 완료마다 누적 저장 (중간 에러 시 복구 가능)
-                _save_results_summary(output_root, cat_name, results)
+                _save_results_summary(results_root, cat_name, results)
 
     pbar.close()
     total_time = time.time() - benchmark_start
@@ -941,7 +965,7 @@ def run_benchmark(
     )
 
     # ── 누적 요약 저장 (CASDA reporter 패턴) ──
-    _save_results_summary(output_root, cat_name, results)
+    _save_results_summary(results_root, cat_name, results)
 
     return results
 
@@ -958,7 +982,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--groups", nargs="*", help="실행할 그룹 (미지정=전체).")
     p.add_argument("--models", nargs="*", help="실행할 모델 (미지정=전체).")
     p.add_argument("--no-resume", action="store_true", help="이미 완료된 실험도 재실행.")
-    p.add_argument("--output_dir", default=None, help="결과 저장 루트 경로.")
+    p.add_argument("--output_dir", default=None, help="실험 아티팩트 저장 루트 경로.")
+    p.add_argument("--results_dir", default=None,
+                   help="benchmark_results.json / benchmark_comparison.csv 저장 경로. "
+                        "Colab: Google Drive 경로 지정으로 세션 종료 후에도 보존. "
+                        "미지정 시 yaml results_dir 또는 output_dir 사용.")
     return p.parse_args()
 
 
@@ -971,6 +999,7 @@ def main() -> None:
         models=args.models,
         resume=not args.no_resume,
         output_dir=args.output_dir,
+        results_dir=args.results_dir,
     )
     print(json.dumps(results, indent=2))
 
