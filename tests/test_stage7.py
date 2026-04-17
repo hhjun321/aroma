@@ -510,3 +510,88 @@ def test_effdet_baseline_good_loader_uses_config_batch_size():
                         f"DataLoader batch_size 가 하드코딩됨 ({kw.value.value}). "
                         f"config['dataset']['eval_batch_size'] 를 사용해야 함."
                     )
+
+
+# ---------------------------------------------------------------------------
+# results_dir: JSON/CSV 저장 경로 분리 테스트
+# ---------------------------------------------------------------------------
+
+def _make_dummy_results() -> dict:
+    return {
+        "yolo11": {
+            "baseline": {"image_auroc": 0.85, "image_f1": 0.80, "pixel_auroc": None,
+                         "total_time_seconds": 10.0, "timestamp": "2026-01-01T00:00:00",
+                         "training_pipeline": "ultralytics", "use_amp": True, "error": None},
+        }
+    }
+
+
+def test_save_results_summary_writes_to_results_root(tmp_path):
+    """_save_results_summary 가 results_root 에 JSON/CSV 를 저장한다."""
+    from stage7_benchmark import _save_results_summary
+
+    results_root = tmp_path / "drive_results"
+    _save_results_summary(results_root, "bottle", _make_dummy_results())
+
+    assert (results_root / "benchmark_results.json").exists()
+    assert (results_root / "benchmark_comparison.csv").exists()
+
+    data = json.loads((results_root / "benchmark_results.json").read_text())
+    assert len(data) == 1
+    assert data[0]["category"] == "bottle"
+    assert data[0]["image_auroc"] == pytest.approx(0.85)
+
+
+def test_save_results_summary_accumulates_across_categories(tmp_path):
+    """여러 카테고리 결과가 benchmark_results.json 에 누적된다."""
+    from stage7_benchmark import _save_results_summary
+
+    results_root = tmp_path / "drive_results"
+    _save_results_summary(results_root, "bottle", _make_dummy_results())
+    _save_results_summary(results_root, "cable", _make_dummy_results())
+
+    data = json.loads((results_root / "benchmark_results.json").read_text())
+    categories = {r["category"] for r in data}
+    assert categories == {"bottle", "cable"}
+
+
+def test_reset_category_removes_from_results_root(tmp_path):
+    """_reset_category 가 results_root 의 JSON/CSV 에서 해당 카테고리를 제거한다."""
+    from stage7_benchmark import _save_results_summary, _reset_category
+
+    results_root = tmp_path / "drive_results"
+    out_dir = tmp_path / "local_outputs" / "bottle"
+    out_dir.mkdir(parents=True)
+    (out_dir / "dummy.txt").write_text("x")
+
+    # bottle, cable 누적 저장
+    _save_results_summary(results_root, "bottle", _make_dummy_results())
+    _save_results_summary(results_root, "cable", _make_dummy_results())
+
+    # bottle reset
+    _reset_category(out_dir, results_root, "bottle")
+
+    # out_dir 삭제됨
+    assert not out_dir.exists()
+
+    # JSON 에서 bottle 제거, cable 유지
+    data = json.loads((results_root / "benchmark_results.json").read_text())
+    categories = {r["category"] for r in data}
+    assert "bottle" not in categories
+    assert "cable" in categories
+
+
+def test_results_dir_separate_from_output_dir(tmp_path):
+    """results_root 와 output_root 가 다른 경로일 때 각각 올바른 파일이 저장된다."""
+    from stage7_benchmark import _save_results_summary
+
+    output_root = tmp_path / "local"
+    results_root = tmp_path / "drive"
+
+    _save_results_summary(results_root, "bottle", _make_dummy_results())
+
+    # JSON/CSV 는 results_root 에만 존재
+    assert (results_root / "benchmark_results.json").exists()
+    assert (results_root / "benchmark_comparison.csv").exists()
+    assert not (output_root / "benchmark_results.json").exists()
+    assert not (output_root / "benchmark_comparison.csv").exists()
