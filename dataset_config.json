@@ -3,20 +3,29 @@
   "isp_ASM": {
     "domain": "isp",
     "image_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/ASM/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/ASM/test/area",
-    "notes": "256x256px. seed_dir contains real defect images annotated by area."
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/isp/unsupervised/ASM/test/area",
+      "/content/drive/MyDrive/data/Aroma/isp/unsupervised/ASM/test/points"
+    ],
+    "notes": "256x256px. Two defect types: area (33), points (41)."
   },
   "isp_LSM_1": {
     "domain": "isp",
     "image_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_1/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_1/test/area",
-    "notes": "512x512px. Largest ISP-AD split (3678 train patches). Recommended starting modality."
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_1/test/area",
+      "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_1/test/points"
+    ],
+    "notes": "512x512px. Largest ISP-AD split (3678 train patches). Two defect types: area (49), points (46). Recommended starting modality."
   },
   "isp_LSM_2": {
     "domain": "isp",
     "image_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_2/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_2/test/area",
-    "notes": "512x512px."
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_2/test/area",
+      "/content/drive/MyDrive/data/Aroma/isp/unsupervised/LSM_2/test/points"
+    ],
+    "notes": "512x512px. Two defect types: area (63), points (33)."
   },
   "mvtec_bottle": {
     "domain": "mvtec",
@@ -30,52 +39,115 @@
   "mvtec_cable": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/cable/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/cut_outer_insulation"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/bent_wire",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/cable_swap",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/combined",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/cut_inner_insulation",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/cut_outer_insulation",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/missing_cable",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/missing_wire",
+      "/content/drive/MyDrive/data/Aroma/mvtec/cable/test/poke_insulation"
+    ]
   },
   "mvtec_capsule": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/capsule/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/scratch"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/crack",
+      "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/faulty_imprint",
+      "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/poke",
+      "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/scratch",
+      "/content/drive/MyDrive/data/Aroma/mvtec/capsule/test/squeeze"
+    ]
   },
   "mvtec_carpet": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/carpet/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/cut"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/color",
+      "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/cut",
+      "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/hole",
+      "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/metal_contamination",
+      "/content/drive/MyDrive/data/Aroma/mvtec/carpet/test/thread"
+    ]
   },
   "mvtec_grid": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/grid/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/broken"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/bent",
+      "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/broken",
+      "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/glue",
+      "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/metal_contamination",
+      "/content/drive/MyDrive/data/Aroma/mvtec/grid/test/thread"
+    ]
   },
   "mvtec_hazelnut": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/test/crack"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/test/crack",
+      "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/test/cut",
+      "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/test/hole",
+      "/content/drive/MyDrive/data/Aroma/mvtec/hazelnut/test/print"
+    ]
   },
   "mvtec_leather": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/leather/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/cut"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/color",
+      "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/cut",
+      "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/fold",
+      "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/glue",
+      "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/poke"
+    ]
   },
   "mvtec_metal_nut": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/test/scratch"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/test/bent",
+      "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/test/color",
+      "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/test/flip",
+      "/content/drive/MyDrive/data/Aroma/mvtec/metal_nut/test/scratch"
+    ]
   },
   "mvtec_pill": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/pill/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/crack"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/color",
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/combined",
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/contamination",
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/crack",
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/faulty_imprint",
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/pill_type",
+      "/content/drive/MyDrive/data/Aroma/mvtec/pill/test/scratch"
+    ]
   },
   "mvtec_screw": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/screw/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/scratch_head"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/manipulated_front",
+      "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/scratch_head",
+      "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/scratch_neck",
+      "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/thread_side",
+      "/content/drive/MyDrive/data/Aroma/mvtec/screw/test/thread_top"
+    ]
   },
   "mvtec_tile": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/tile/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/crack"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/crack",
+      "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/glue_strip",
+      "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/gray_stroke",
+      "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/oil",
+      "/content/drive/MyDrive/data/Aroma/mvtec/tile/test/rough"
+    ]
   },
   "mvtec_toothbrush": {
     "domain": "mvtec",
@@ -85,17 +157,36 @@
   "mvtec_transistor": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/transistor/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/bent_lead"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/bent_lead",
+      "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/cut_lead",
+      "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/damaged_case",
+      "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/misplaced"
+    ]
   },
   "mvtec_wood": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/wood/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/scratch"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/color",
+      "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/combined",
+      "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/hole",
+      "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/liquid",
+      "/content/drive/MyDrive/data/Aroma/mvtec/wood/test/scratch"
+    ]
   },
   "mvtec_zipper": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/zipper/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/broken_teeth"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/broken_teeth",
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/combined",
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/fabric_border",
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/fabric_interior",
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/rough",
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/split_teeth",
+      "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/squeezed_teeth"
+    ]
   },
   "visa_candle": {
     "domain": "visa",

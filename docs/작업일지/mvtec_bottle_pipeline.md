@@ -512,18 +512,26 @@ ENTRY        = CONFIG[CATEGORY_KEY]
 
 PRUNING_THRESHOLD            = 0.6
 PRUNING_THRESHOLD_BY_DOMAIN  = {"isp": 0.6, "mvtec": 0.6, "visa": 0.4}
+AUGMENTATION_RATIO_FULL      = 2.0   # good 대비 aroma_full defect 비율 (167 × 2.0 = 334)
+AUGMENTATION_RATIO_PRUNED    = 1.5   # good 대비 aroma_pruned defect 비율 (167 × 1.5 = 251)
 SPLIT_RATIO                  = 0.8
 SPLIT_SEED                   = 42
 NUM_IO_THREADS               = 8
 BALANCE_DEFECT_TYPES         = True   # 3 유형 균등 샘플링
+FORCE_REBUILD                = False  # True: 기존 augmented_dataset 삭제 후 재실행
 LOCAL_TMP                    = Path("/content/tmp_stage6")
 
 seed_dirs_list = ENTRY.get("seed_dirs") or [ENTRY["seed_dir"]]
 image_dir      = Path(ENTRY["image_dir"])
 
 sentinel = CAT_DIR / "augmented_dataset" / "build_report.json"
-if sentinel.exists():
-    print("✓ Stage 6 완료 (skip)")
+if sentinel.exists() and FORCE_REBUILD:
+    import shutil
+    shutil.rmtree(str(CAT_DIR / "augmented_dataset"))
+    print("  기존 augmented_dataset 삭제 완료 (FORCE_REBUILD)")
+
+if sentinel.exists() and not FORCE_REBUILD:
+    print("✓ Stage 6 완료 (skip) — 재실행 시 FORCE_REBUILD = True 로 변경")
 else:
     # 로컬 경로: Drive 경로 구조 보존 (Aroma/mvtec/bottle)
     # → dataset_builder 내부 도메인 추출 로직이 경로 구조에 의존
@@ -568,6 +576,8 @@ else:
             seed_dirs                   = local_seed_dirs,
             pruning_threshold           = PRUNING_THRESHOLD,
             pruning_threshold_by_domain = PRUNING_THRESHOLD_BY_DOMAIN,
+            augmentation_ratio_full     = AUGMENTATION_RATIO_FULL,    # 명시적 지정 필수
+            augmentation_ratio_pruned   = AUGMENTATION_RATIO_PRUNED,  # None이면 전체 defect 포함
             split_ratio                 = SPLIT_RATIO,
             split_seed                  = SPLIT_SEED,
             workers                     = NUM_IO_THREADS,
@@ -660,6 +670,29 @@ else:
 
 ---
 
+## Stage 7: 벤치마크 결과 초기화 (재실행 시)
+
+> 이전 벤치마크 결과가 있으면 sentinel(`experiment_meta.json`)이 skip을 유발한다.
+> Stage 6 재실행 후 결과가 바뀐 경우 아래 셀로 bottle 결과만 삭제한다.
+
+```python
+import shutil
+from pathlib import Path
+
+REPO       = Path("/content/aroma")
+OUTPUT_DIR = REPO / "outputs" / "benchmark_results"
+CAT_NAME   = "bottle"
+
+cat_out = OUTPUT_DIR / CAT_NAME
+if cat_out.exists():
+    shutil.rmtree(str(cat_out))
+    print(f"✓ 삭제: {cat_out}")
+else:
+    print(f"  없음: {cat_out}")
+```
+
+---
+
 ## Stage 7: 벤치마크 (로컬 SSD 캐시)
 
 > `augmented_dataset`을 로컬 SSD로 복사하여 DataLoader I/O 가속.
@@ -710,13 +743,19 @@ else:
             copy_sec = time.time() - t0
             print(f"완료 ({copy_sec:.1f}s)")
 
-            # ── 2) test set 준비 (로컬에서) ─────────────────────────
+            # ── 2) test set 준비 (로컬 + Drive 동기화) ──────────────
             for g in NON_BASELINE:
+                # 로컬 test set 준비
                 group_test = local_cat / "augmented_dataset" / g / "test"
                 if not group_test.exists():
                     result = _ensure_test_dir(str(local_cat), g)
                     method = "symlink" if result.is_symlink() else "copy"
-                    print(f"  test set: {g}/test [{method}]")
+                    print(f"  test set (로컬): {g}/test [{method}]")
+                # Drive에도 test set 유지 (데이터 구조 확인용)
+                drive_test = CAT_DIR / "augmented_dataset" / g / "test"
+                if not drive_test.exists():
+                    _ensure_test_dir(str(CAT_DIR), g)
+                    print(f"  test set (Drive): {g}/test 생성")
 
             # ── 3) 벤치마크 실행 (로컬 데이터, 결과는 Drive) ────────
             print(f"  벤치마크 실행: 모델={MODELS}, 그룹={GROUPS}")

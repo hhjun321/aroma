@@ -12,7 +12,7 @@
 |-------|---------|----------|------|
 | 0 (resize) | 셀 내 직접 구현 | O | Colab Drive repo에 `workers` 파라미터 미지원 |
 | 1 (ROI) | `-1` (auto) | — | CPU-bound, 캐시 불필요 |
-| 1b (seed) | `-1` (auto, batch) | — | `run_seed_characterization_batch()` 사용 |
+| 1b (seed) | `-1` (auto, batch) | — | `run_seed_characterization_batch()` 사용, seed_dirs 배열 + prefix 명명 지원 |
 | 2 (variants) | `-1` (auto) | — | CPU-bound |
 | 3 (layout) | `-1` (auto) | — | GPU 모드(`use_gpu=True`) 우선 |
 | 4 (synthesis) | `4` (fixed) | O | I/O-bound, ~5,260 ops |
@@ -85,14 +85,14 @@ SMOKE_ENTRIES = {k: CONFIG[k] for k in SMOKE_KEYS}
 # 카테고리별 기본 경로 계산
 SMOKE_CATS = {}
 for key, entry in SMOKE_ENTRIES.items():
-    cat_dir   = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir   = Path(seed_dirs_list[0]).parents[1]
     image_dir = entry["image_dir"]
-    seed_dir  = entry["seed_dir"]
     domain    = entry["domain"]
     SMOKE_CATS[key] = {
         "cat_dir": cat_dir,
         "image_dir": image_dir,
-        "seed_dir": seed_dir,
+        "seed_dirs": seed_dirs_list,
         "domain": domain,
     }
 
@@ -100,6 +100,7 @@ print("=== Smoke Test 대상 ===")
 for key, info in SMOKE_CATS.items():
     exists = info["cat_dir"].exists()
     print(f"  {key}: {info['cat_dir']} {'✓' if exists else '✗ NOT FOUND'}")
+    print(f"    seed_dirs: {[Path(s).name for s in info['seed_dirs']]}")
 ```
 
 ---
@@ -179,11 +180,13 @@ for key, info in SMOKE_CATS.items():
 
     # Resize (로컬 SSD 캐시)
     total = {"resized": 0, "skipped": 0, "errors": 0}
-    for label, dir_path in [
+    resize_targets = [
         ("image_dir", Path(info["image_dir"])),
-        ("seed_dir",  Path(info["seed_dir"])),
         ("test/good", cat_dir / "test" / "good"),
-    ]:
+    ]
+    for sd in info["seed_dirs"]:
+        resize_targets.append((f"seed/{Path(sd).name}", Path(sd)))
+    for label, dir_path in resize_targets:
         s = resize_dir_local(dir_path, TARGET_SIZE)
         for k in total:
             total[k] += s[k]
@@ -245,22 +248,26 @@ print("\n✓ Stage 1 완료")
 from stage1b_seed_characterization import run_seed_characterization_batch
 
 for key, info in SMOKE_CATS.items():
-    seed_dir = Path(info["seed_dir"])
-    cat_dir  = info["cat_dir"]
-    seeds    = sorted(seed_dir.glob("*.png")) if seed_dir.exists() else []
+    seed_dirs_list = info["seed_dirs"]
+    cat_dir        = info["cat_dir"]
+    use_prefix     = len(seed_dirs_list) > 1
 
     print(f"\n{'='*50}")
-    print(f"Stage 1b: {key} ({len(seeds)} seeds)")
+    print(f"Stage 1b: {key} (seed_dirs={len(seed_dirs_list)}개, prefix={use_prefix})")
 
     # 미완료 seed만 필터링
     tasks = []
     skipped = 0
-    for seed in seeds:
-        out = cat_dir / "stage1b_output" / seed.stem
-        if (out / "seed_profile.json").exists():
-            skipped += 1
-        else:
-            tasks.append((str(seed), str(out)))
+    for sd_str in seed_dirs_list:
+        sd = Path(sd_str)
+        seeds = sorted(sd.glob("*.png")) if sd.exists() else []
+        for seed in seeds:
+            seed_id = f"{sd.name}_{seed.stem}" if use_prefix else seed.stem
+            out = cat_dir / "stage1b_output" / seed_id
+            if (out / "seed_profile.json").exists():
+                skipped += 1
+            else:
+                tasks.append((str(seed), str(out)))
 
     if not tasks:
         print(f"  ⏭ {key}: 모두 완료 (skip {skipped})")
@@ -603,10 +610,10 @@ def parallel_copytree(src_dst_pairs, max_workers=4):
         results = list(executor.map(_copy_one, src_dst_pairs))
     return [r for r in results if r is not None]
 
-# cat_dir별 seed_dirs 수집
+# cat_dir별 seed_dirs 수집 (복수 유형 배열 지원)
 cat_seed_dirs = defaultdict(list)
 for key, info in SMOKE_CATS.items():
-    cat_seed_dirs[str(info["cat_dir"])].append(info["seed_dir"])
+    cat_seed_dirs[str(info["cat_dir"])].extend(info["seed_dirs"])
 
 for key, info in SMOKE_CATS.items():
     cat_dir   = info["cat_dir"]
@@ -682,6 +689,7 @@ for key, info in SMOKE_CATS.items():
         augmentation_ratio_pruned    = ratio_pruned,    # 명시적 전달!
         augmentation_ratio_by_domain = None,            # 이미 적용했으므로 None
         workers                      = 8,               # I/O-bound 작업에 최적화
+        balance_defect_types         = True,            # 복수 결함 유형 균등 샘플링
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")
@@ -805,198 +813,6 @@ print("\n✓ 삭제 완료. 이제 셀 9를 다시 실행하세요.")
 2. **셀 9** 재실행 (Stage 6 - 도메인별 비율 적용)
    - 삭제한 카테고리만 재실행됨 (나머지는 스킵)
 3. **셀 10** 실행 (검증)
-
----
-
-## 셀 10.5: 데이터셋 필터링 — 도메인별 목표 비율 적용
-
-> **목적:** Stage 6 결과물을 도메인별 목표 비율에 맞게 필터링  
-> **방법:** Quality score 기반 상위 이미지 선택하여 과도한 증강 데이터 제거
-
-```python
-import json
-from pathlib import Path
-from typing import Dict
-
-# 도메인별 목표 증강 비율
-AUGMENTATION_RATIO_BY_DOMAIN = {
-    "isp": {"full": 1.0, "pruned": 0.5},
-    "mvtec": {"full": 2.0, "pruned": 1.5},
-    "visa": {"full": 2.0, "pruned": 1.5},
-}
-
-def load_quality_scores(stage4_output: Path) -> Dict[str, float]:
-    """Load quality scores from all seed directories."""
-    scores = {}
-    for seed_dir in stage4_output.iterdir():
-        if not seed_dir.is_dir():
-            continue
-        score_file = seed_dir / "quality_scores.json"
-        if not score_file.exists():
-            continue
-        with open(score_file) as f:
-            seed_scores = json.load(f)
-        
-        # quality_scores.json is a list of dicts: [{"filename": "...", "final_score": ...}, ...]
-        if isinstance(seed_scores, list):
-            for item in seed_scores:
-                if isinstance(item, dict) and "filename" in item and "final_score" in item:
-                    filename = item["filename"]
-                    scores[filename] = item["final_score"]
-        # Fallback: if it's a dict (old format)
-        elif isinstance(seed_scores, dict):
-            for img_name, score_data in seed_scores.items():
-                if isinstance(score_data, dict) and "final_score" in score_data:
-                    scores[img_name] = score_data["final_score"]
-    return scores
-
-def filter_dataset_group(group_dir: Path, target_ratio: float, quality_scores: Dict[str, float]):
-    """Filter defect images to match target ratio."""
-    good_dir = group_dir / "good"
-    if not good_dir.exists():
-        return {"kept": 0, "removed": 0, "good_count": 0}
-    
-    good_images = list(good_dir.glob("*.png")) + list(good_dir.glob("*.jpg"))
-    good_count = len(good_images)
-    target_defect_count = int(good_count * target_ratio)
-    
-    print(f"    Good: {good_count}, Target defects: {target_defect_count} (ratio={target_ratio})")
-    
-    defect_dirs = [d for d in group_dir.iterdir() if d.is_dir() and d.name != "good"]
-    total_kept = 0
-    total_removed = 0
-    
-    for defect_dir in defect_dirs:
-        defect_images = list(defect_dir.glob("*.png")) + list(defect_dir.glob("*.jpg"))
-        current_count = len(defect_images)
-        
-        if current_count <= target_defect_count:
-            print(f"      {defect_dir.name}: {current_count} (skip)")
-            total_kept += current_count
-            continue
-        
-        # Sort by quality score (high to low)
-        scored_images = []
-        for img_path in defect_images:
-            img_name = img_path.name
-            # Try to find score by filename (quality_scores uses just filename)
-            score = quality_scores.get(img_name, 0.5)  # Default to 0.5 if not found
-            scored_images.append((img_path, score))
-        
-        scored_images.sort(key=lambda x: x[1], reverse=True)
-        keep_images = scored_images[:target_defect_count]
-        remove_images = scored_images[target_defect_count:]
-        
-        # Delete low-quality images
-        for img_path, score in remove_images:
-            img_path.unlink()
-        
-        print(f"      {defect_dir.name}: {current_count} → {len(keep_images)} (removed {len(remove_images)})")
-        total_kept += len(keep_images)
-        total_removed += len(remove_images)
-    
-    return {"kept": total_kept, "removed": total_removed, "good_count": good_count}
-
-def filter_category(cat_dir: Path, domain: str):
-    """Filter augmented dataset for one category."""
-    augmented_dir = cat_dir / "augmented_dataset"
-    if not augmented_dir.exists():
-        print(f"  ❌ augmented_dataset not found")
-        return
-    
-    ratio_full = AUGMENTATION_RATIO_BY_DOMAIN[domain]["full"]
-    ratio_pruned = AUGMENTATION_RATIO_BY_DOMAIN[domain]["pruned"]
-    
-    print(f"  Target: full={ratio_full}, pruned={ratio_pruned}")
-    
-    # Load quality scores
-    stage4_output = cat_dir / "stage4_output"
-    quality_scores = {}
-    if stage4_output.exists():
-        quality_scores = load_quality_scores(stage4_output)
-        print(f"  Loaded {len(quality_scores)} quality scores")
-    
-    # Filter aroma_full
-    aroma_full = augmented_dir / "aroma_full"
-    if aroma_full.exists():
-        print(f"  🔧 Filtering aroma_full...")
-        stats_full = filter_dataset_group(aroma_full, ratio_full, quality_scores)
-    
-    # Filter aroma_pruned
-    aroma_pruned = augmented_dir / "aroma_pruned"
-    if aroma_pruned.exists():
-        print(f"  🔧 Filtering aroma_pruned...")
-        stats_pruned = filter_dataset_group(aroma_pruned, ratio_pruned, quality_scores)
-    
-    # Update build_report.json
-    report_path = augmented_dir / "build_report.json"
-    if report_path.exists():
-        with open(report_path) as f:
-            report = json.load(f)
-        if "aroma_full" in report:
-            report["aroma_full"]["defect_count"] = stats_full["kept"]
-            report["ratio_full"] = ratio_full
-        if "aroma_pruned" in report:
-            report["aroma_pruned"]["defect_count"] = stats_pruned["kept"]
-            report["aroma_pruned"]["defect_pruned"] = stats_pruned["removed"]
-            report["ratio_pruned"] = ratio_pruned
-        report["_filtered"] = True
-        with open(report_path, "w") as f:
-            json.dump(report, f, indent=2)
-    
-    print(f"  ✓ Complete: aroma_full={stats_full['kept']}, aroma_pruned={stats_pruned['kept']}")
-
-# ── 3개 카테고리 필터링 실행 ──────────────────────────────────
-print("🚀 Starting dataset filtering...\n")
-
-# 카테고리 키에서 도메인 추출 (isp_ASM → isp, mvtec_bottle → mvtec)
-for key, info in SMOKE_CATS.items():
-    domain = key.split("_")[0]  # "isp_ASM" → "isp"
-    print(f"\n{'='*50}")
-    print(f"{key} (domain={domain})")
-    print(f"{'='*50}")
-    filter_category(info["cat_dir"], domain)
-
-print("\n" + "="*50)
-print("✓ All categories filtered!")
-print("="*50)
-
-# ── 결과 검증 ─────────────────────────────────────────────────
-print("\n📊 Filtered Dataset Statistics\n")
-print("="*70)
-
-for key, info in SMOKE_CATS.items():
-    report_path = info["cat_dir"] / "augmented_dataset" / "build_report.json"
-    if not report_path.exists():
-        continue
-    
-    with open(report_path) as f:
-        report = json.load(f)
-    
-    baseline_good = report["baseline"]["good_count"]
-    full_defect = report["aroma_full"]["defect_count"]
-    pruned_defect = report["aroma_pruned"]["defect_count"]
-    
-    ratio_full_actual = full_defect / baseline_good if baseline_good > 0 else 0
-    ratio_pruned_actual = pruned_defect / baseline_good if baseline_good > 0 else 0
-    
-    ratio_full_target = report.get("ratio_full", "N/A")
-    ratio_pruned_target = report.get("ratio_pruned", "N/A")
-    
-    print(f"\n{key}:")
-    print(f"  Good: {baseline_good}")
-    print(f"  aroma_full:   {full_defect:4d} (target={ratio_full_target}, actual={ratio_full_actual:.2f})")
-    print(f"  aroma_pruned: {pruned_defect:4d} (target={ratio_pruned_target}, actual={ratio_pruned_actual:.2f})")
-
-print("\n" + "="*70)
-```
-
-**예상 출력:**
-```
-isp_ASM:      500 good,  500 full (1.0),  250 pruned (0.5) ✓
-mvtec_bottle: 209 good,  418 full (2.0),  313 pruned (1.5) ✓
-visa_candle:  900 good, 1800 full (2.0), 1350 pruned (1.5) ✓
-```
 
 ---
 
