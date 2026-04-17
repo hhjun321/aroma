@@ -62,7 +62,8 @@ seen = set()
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
-    cat_dir = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
     if str(cat_dir) in seen:
         continue
     seen.add(str(cat_dir))
@@ -139,7 +140,8 @@ seen = set()
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
-    cat_dir   = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir   = Path(seed_dirs_list[0]).parents[1]
     image_dir = entry["image_dir"]
     if str(cat_dir) in seen:
         continue
@@ -213,17 +215,26 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
 
 # 처리 대상 수집
+# seed_dirs 배열을 지원: 여러 결함 유형이 있는 경우 {defect_type}_{stem} 으로 ID 생성
 all_seeds, skip = [], 0
+seen_cats = set()
 for key, entry in ENTRIES:
-    seed_dir = Path(entry["seed_dir"])
-    seeds    = sorted(seed_dir.glob("*.png")) if seed_dir.exists() else []
-    cat_dir  = seed_dir.parents[1]
-    for seed in seeds:
-        out = cat_dir / "stage1b_output" / seed.stem
-        if (out / "seed_profile.json").exists():
-            skip += 1
-        else:
-            all_seeds.append((cat_dir, seed))
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    use_prefix     = len(seed_dirs_list) > 1
+    cat_dir        = Path(seed_dirs_list[0]).parents[1]
+    if str(cat_dir) in seen_cats:
+        continue
+    seen_cats.add(str(cat_dir))
+    for seed_dir_str in seed_dirs_list:
+        seed_dir = Path(seed_dir_str)
+        seeds    = sorted(seed_dir.glob("*.png")) if seed_dir.exists() else []
+        for seed in seeds:
+            seed_id = f"{seed_dir.name}_{seed.stem}" if use_prefix else seed.stem
+            out = cat_dir / "stage1b_output" / seed_id
+            if (out / "seed_profile.json").exists():
+                skip += 1
+            else:
+                all_seeds.append((cat_dir, seed, seed_id))
 
 if not all_seeds:
     print(f"✓ {LABEL} 모든 작업 완료")
@@ -232,23 +243,23 @@ else:
     failed = []
 
     def _run_stage1b(args):
-        cat_dir, seed = args
-        out = cat_dir / "stage1b_output" / seed.stem
+        cat_dir, seed, seed_id = args
+        out = cat_dir / "stage1b_output" / seed_id
         run_seed_characterization(
             seed_defect = str(seed),
             output_dir  = str(out),
         )
-        return cat_dir.name, seed.stem
+        return cat_dir.name, seed_id
 
     with tqdm(total=len(all_seeds), desc=f"Stage1b {LABEL}") as bar:
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as ex:
             futs = {ex.submit(_run_stage1b, t): t for t in all_seeds}
             for fut in as_completed(futs):
-                cat_dir, seed = futs[fut]
+                cat_dir, seed, seed_id = futs[fut]
                 try:
                     fut.result()
                 except Exception as e:
-                    failed.append({"category": cat_dir.name, "seed": seed.stem,
+                    failed.append({"category": cat_dir.name, "seed": seed_id,
                                    "error": str(e), "type": type(e).__name__})
                 bar.update(1)
 
@@ -288,8 +299,13 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
 
 all_seeds, skip = [], 0
+seen_cats = set()
 for key, entry in ENTRIES:
-    cat_dir     = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir     = Path(seed_dirs_list[0]).parents[1]
+    if str(cat_dir) in seen_cats:
+        continue
+    seen_cats.add(str(cat_dir))
     stage1b_dir = cat_dir / "stage1b_output"
     if not stage1b_dir.exists():
         continue
@@ -363,8 +379,13 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
 
 all_seeds, skip = [], 0
+seen_cats = set()
 for key, entry in ENTRIES:
-    cat_dir    = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir    = Path(seed_dirs_list[0]).parents[1]
+    if str(cat_dir) in seen_cats:
+        continue
+    seen_cats.add(str(cat_dir))
     stage2_dir = cat_dir / "stage2_output"
     if not stage2_dir.exists():
         continue
@@ -445,7 +466,8 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
 # 카테고리 단위로 묶기
 categories = {}
 for key, entry in ENTRIES:
-    cat_dir = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
     categories.setdefault(str(cat_dir), (cat_dir, entry["image_dir"]))
 
 all_cats, skip_total = [], 0
@@ -527,8 +549,13 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
            if not k.startswith("_") and v["domain"] == DOMAIN_FILTER]
 
 all_seeds, skip = [], 0
+seen_cats = set()
 for key, entry in ENTRIES:
-    cat_dir    = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir    = Path(seed_dirs_list[0]).parents[1]
+    if str(cat_dir) in seen_cats:
+        continue
+    seen_cats.add(str(cat_dir))
     stage4_dir = cat_dir / "stage4_output"
     if not stage4_dir.exists():
         continue
@@ -603,21 +630,23 @@ PRUNING_THRESHOLD_BY_DOMAIN = {  # 도메인별 override (visa candle=0.493 대�
     "mvtec": 0.6,
     "visa": 0.4,
 }
-SPLIT_RATIO = 0.8   # good 이미지 train/test 비율 (None=원본 분할 유지)
-SPLIT_SEED  = 42    # 결정적 분할 시드
+SPLIT_RATIO           = 0.8   # good 이미지 train/test 비율 (None=원본 분할 유지)
+SPLIT_SEED            = 42    # 결정적 분할 시드
+BALANCE_DEFECT_TYPES  = True  # seed_dirs 배열 항목의 유형별 균등 샘플링
 
-# cat_dir 단위로 묶기 (카테고리당 여러 seed_dir 가능)
+# cat_dir 단위로 묶기 (카테고리당 여러 seed_dirs 가능)
 cat_map: dict[str, str] = {}
 cat_seed_dirs: dict[str, list] = defaultdict(list)
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
-    cat_dir   = str(Path(entry["seed_dir"]).parents[1])
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir   = str(Path(seed_dirs_list[0]).parents[1])
     image_dir = entry["image_dir"]
     if cat_dir in cat_map and cat_map[cat_dir] != image_dir:
         raise ValueError(f"image_dir 불일치: {cat_dir}")
     cat_map[cat_dir] = image_dir
-    cat_seed_dirs[cat_dir].append(entry["seed_dir"])
+    cat_seed_dirs[cat_dir].extend(seed_dirs_list)
 
 all_cats, skip = [], 0
 for cat_dir, image_dir in cat_map.items():
@@ -643,6 +672,7 @@ else:
             split_ratio                = SPLIT_RATIO,
             split_seed                 = SPLIT_SEED,
             workers                    = NUM_IO_THREADS,
+            balance_defect_types       = BALANCE_DEFECT_TYPES,
         )
         return Path(cat_dir).name
 
@@ -695,7 +725,8 @@ seen = set()
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
-    cat_dir = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
     if str(cat_dir) in seen:
         continue
     seen.add(str(cat_dir))
@@ -755,7 +786,8 @@ seen, tasks, failed_prep = set(), [], []
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
-    cat_dir = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
     if str(cat_dir) in seen or cat_dir.name in EXCLUDE:
         continue
     seen.add(str(cat_dir))
@@ -827,7 +859,8 @@ all_cats, skip = [], 0
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
-    cat_dir = Path(entry["seed_dir"]).parents[1]
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
     if str(cat_dir) in seen:
         continue
     seen.add(str(cat_dir))

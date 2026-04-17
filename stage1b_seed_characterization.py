@@ -9,8 +9,13 @@ from utils.defect_characterization import DefectCharacterizer
 from utils.parallel import resolve_workers, run_parallel
 
 
-def extract_seed_mask(image: np.ndarray, checkpoint: str = None) -> np.ndarray:
-    """Extract binary defect mask from seed image via SAM or Otsu fallback."""
+def extract_seed_mask(image: np.ndarray, checkpoint: str = None) -> tuple:
+    """Extract binary defect mask from seed image via SAM or Otsu fallback.
+
+    Returns:
+        (mask, method) where mask is a uint8 binary array and method is
+        'sam' or 'otsu'.
+    """
     try:
         from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
         ckpt = checkpoint or "sam_vit_b_01ec64.pth"
@@ -20,13 +25,13 @@ def extract_seed_mask(image: np.ndarray, checkpoint: str = None) -> np.ndarray:
         if masks:
             # Select smallest non-background mask (likely the defect)
             sorted_masks = sorted(masks, key=lambda m: m["area"])
-            return (sorted_masks[0]["segmentation"].astype(np.uint8)) * 255
+            return (sorted_masks[0]["segmentation"].astype(np.uint8)) * 255, "sam"
     except Exception:
         pass
     # Otsu fallback
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    return binary
+    return binary, "otsu"
 
 
 def run_seed_characterization(seed_defect: str, output_dir: str,
@@ -37,7 +42,7 @@ def run_seed_characterization(seed_defect: str, output_dir: str,
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    mask_bin = extract_seed_mask(image, model_checkpoint)
+    mask_bin, seg_method = extract_seed_mask(image, model_checkpoint)
     mask_path = out / "seed_mask.png"
     save_mask(mask_bin, mask_path)
 
@@ -62,6 +67,7 @@ def run_seed_characterization(seed_defect: str, output_dir: str,
         "extent": round(metrics["extent"], 4),
         "aspect_ratio": round(metrics["aspect_ratio"], 4),
         "mask_path": str(mask_path),
+        "segmentation_method": seg_method,
     }
     save_json(profile, out / "seed_profile.json")
 

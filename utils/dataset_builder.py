@@ -8,6 +8,7 @@ baseline / aroma_full / aroma_pruned 3개 group 을 MVTec-style 폴더 구조로
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import warnings
 from pathlib import Path
@@ -16,6 +17,17 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _get_defect_type(seed_id: str) -> str:
+    """seed_id 에서 결함 유형 접두사를 추출한다.
+
+    Examples:
+        'broken_large_000' → 'broken_large'
+        '000'              → ''   (단일 유형 진입점, 접두사 없음)
+    """
+    m = re.match(r'^(.+)_\d+$', seed_id)
+    return m.group(1) if m else ''
+
 
 def _copy_worker(args_tuple: tuple) -> str | None:
     """ProcessPoolExecutor pickle-safe 복사 워커.
@@ -38,6 +50,7 @@ def _collect_defect_paths(
     pruning_threshold: float | None = None,
     augmentation_ratio: float | None = None,
     good_count: int = 0,
+    balance_defect_types: bool = False,
 ) -> list[tuple[str, str]]:
     """stage4_output/{seed_id}/defect/*.png 수집 (단일 깊이 *).
 
@@ -47,6 +60,10 @@ def _collect_defect_paths(
         augmentation_ratio: 원본 대비 합성 defect 비율 (None이면 모든 이미지 사용).
             예: 2.0 → 원본 good 209개면 합성 defect 418개 선택.
         good_count: 원본 good 이미지 개수 (augmentation_ratio 계산에 사용).
+        balance_defect_types: True 이면 결함 유형별 균등 샘플링을 적용한다.
+            seed_id 의 접두사(예: broken_large, broken_small)를 유형으로 식별하고
+            augmentation_ratio 로 계산된 할당량을 유형 수로 균등 분배한다.
+            단일 유형(접두사 없음) 카테고리에는 영향 없음.
 
     Returns:
         List of (src_path_str, dst_filename) where
@@ -102,18 +119,44 @@ def _collect_defect_paths(
     # ── 3단계: augmentation_ratio 기반 샘플링 ────────────────────────────
     if augmentation_ratio is not None and good_count > 0:
         target_count = int(good_count * augmentation_ratio)
-        
-        # quality_score 기준 내림차순 정렬 후 상위 K개 선택
-        candidates = sorted(candidates, key=lambda x: x[2], reverse=True)
-        
-        if len(candidates) > target_count:
-            candidates = candidates[:target_count]
-        elif len(candidates) < target_count:
-            warnings.warn(
-                f"증강 비율 {augmentation_ratio}×{good_count}={target_count}개 요청, "
-                f"가용 defect {len(candidates)}개만 사용 (카테고리: {Path(cat_dir).name})",
-                stacklevel=3,
-            )
+
+        if balance_defect_types:
+            # 결함 유형별 균등 분배: seed_id 접두사로 유형 식별
+            from collections import defaultdict
+            type_groups: dict[str, list] = defaultdict(list)
+            for item in candidates:
+                src, dst, q = item
+                seed_id = Path(src).parents[1].name  # e.g. 'broken_large_000'
+                dtype = _get_defect_type(seed_id)    # e.g. 'broken_large'
+                type_groups[dtype].append(item)
+
+            n_types = max(1, len(type_groups))
+            per_type = max(1, target_count // n_types)
+            balanced: list = []
+            for dtype in sorted(type_groups):
+                items_sorted = sorted(type_groups[dtype], key=lambda x: x[2],
+                                      reverse=True)
+                if len(items_sorted) < per_type:
+                    warnings.warn(
+                        f"결함 유형 '{dtype}' 가용 {len(items_sorted)}개 < "
+                        f"균형 할당 {per_type}개 "
+                        f"(카테고리: {Path(cat_dir).name})",
+                        stacklevel=3,
+                    )
+                balanced.extend(items_sorted[:per_type])
+            candidates = balanced
+        else:
+            # quality_score 기준 내림차순 정렬 후 상위 K개 선택
+            candidates = sorted(candidates, key=lambda x: x[2], reverse=True)
+
+            if len(candidates) > target_count:
+                candidates = candidates[:target_count]
+            elif len(candidates) < target_count:
+                warnings.warn(
+                    f"증강 비율 {augmentation_ratio}×{good_count}={target_count}개 요청, "
+                    f"가용 defect {len(candidates)}개만 사용 (카테고리: {Path(cat_dir).name})",
+                    stacklevel=3,
+                )
 
     # ── 4단계: 최종 결과 반환 ───────────────────────────────────────────
     return [(src, dst) for src, dst, _ in candidates]
@@ -255,6 +298,7 @@ def build_dataset_groups(
     split_ratio: float | None = None,
     split_seed: int = 42,
     workers: int = 0,
+    balance_defect_types: bool = False,
 ) -> dict:
     """3개 dataset group 을 구성하고 build_report.json 을 저장한다.
 
@@ -282,6 +326,10 @@ def build_dataset_groups(
             예: 0.8 → 전체 good 의 80% 를 train, 20% 를 test 에 사용.
         split_seed: split_ratio 사용 시 결정적 셔플 시드 (기본 42).
         workers: 병렬 워커 수 (0=순차).
+        balance_defect_types: True 이면 결함 유형별 균등 샘플링 적용.
+            seed_id 접두사(예: broken_large, broken_small)로 유형을 식별하고
+            augmentation_ratio 할당량을 유형 수로 균등 분배한다.
+            단일 유형 카테고리(기존 ISP·VisA·MVTec 단일 시드 진입점)에는 영향 없음.
 
     Returns:
         build_report dict. build_report.json 으로도 저장.
@@ -342,8 +390,11 @@ def build_dataset_groups(
         cached_has_defects = cached.get("aroma_full", {}).get("defect_count", 0) > 0
         stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
 
+        balance_match = (
+            cached.get("balance_defect_types", False) == balance_defect_types
+        )
         if (threshold_match and ratio_full_match and ratio_pruned_match and
-                split_ratio_match and split_seed_match and
+                split_ratio_match and split_seed_match and balance_match and
                 (cached_has_defects or not stage4_now_exists)):
             return cached
 
@@ -431,6 +482,7 @@ def build_dataset_groups(
         pruning_threshold=None,
         augmentation_ratio=ratio_full,
         good_count=good_count,
+        balance_defect_types=balance_defect_types,
     )
     if not full_defect_pairs:
         # CASDA validate_yolo_dataset 패턴 — 학습 전 데이터 무결성 사전 검증
@@ -474,6 +526,7 @@ def build_dataset_groups(
         pruning_threshold=effective_threshold,
         augmentation_ratio=ratio_pruned,
         good_count=good_count,
+        balance_defect_types=balance_defect_types,
     )
     if pruned_defect_pairs:
         from tqdm import tqdm
@@ -496,6 +549,7 @@ def build_dataset_groups(
         "augmentation_ratio_pruned": ratio_pruned,
         "split_ratio": split_ratio,
         "split_seed": split_seed if split_ratio is not None else None,
+        "balance_defect_types": balance_defect_types,
         "domain": domain,
         "stage4_status": stage4_status,
         "stage4_seeds_total": stage4_seeds_total,

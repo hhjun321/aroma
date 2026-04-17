@@ -21,7 +21,11 @@
   "mvtec_bottle": {
     "domain": "mvtec",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/bottle/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/mvtec/bottle/test/broken_large"
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/mvtec/bottle/test/broken_large",
+      "/content/drive/MyDrive/data/Aroma/mvtec/bottle/test/broken_small",
+      "/content/drive/MyDrive/data/Aroma/mvtec/bottle/test/contamination"
+    ]
   },
   "mvtec_cable": {
     "domain": "mvtec",

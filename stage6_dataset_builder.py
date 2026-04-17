@@ -26,6 +26,7 @@ def run_dataset_builder(
     split_ratio: float | None = None,
     split_seed: int = 42,
     workers: int = 0,
+    balance_defect_types: bool = False,
 ) -> dict:
     """build_dataset_groups() 의 직접 래퍼.
 
@@ -47,6 +48,7 @@ def run_dataset_builder(
         split_ratio=split_ratio,
         split_seed=split_seed,
         workers=workers,
+        balance_defect_types=balance_defect_types,
     )
 
 
@@ -87,6 +89,7 @@ def main() -> None:
     pruning_threshold_by_domain = None
     split_ratio = args.split_ratio
     split_seed = args.split_seed
+    balance_defect_types = False
     if args.config:
         from pathlib import Path
         config_path = Path(args.config)
@@ -101,6 +104,7 @@ def main() -> None:
                 split_ratio = ds.get("split_ratio")
             if split_seed == 42:
                 split_seed = ds.get("split_seed", 42)
+            balance_defect_types = bool(ds.get("defect_type_balance", False))
 
     result = run_dataset_builder(
         cat_dir=args.cat_dir,
@@ -114,6 +118,7 @@ def main() -> None:
         split_ratio=split_ratio,
         split_seed=split_seed,
         workers=args.workers,
+        balance_defect_types=balance_defect_types,
     )
     print(f"Domain: {result.get('domain', 'unknown')}")
     print(f"Applied ratio_full: {result.get('augmentation_ratio_full')}")

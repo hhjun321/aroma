@@ -36,6 +36,12 @@ dataset:
   # Fallback 기본값 (도메인 매칭 실패 시 또는 override 용도)
   augmentation_ratio_full: null      # null=모두 사용
   augmentation_ratio_pruned: null    # null=모두 사용
+
+  # 결함 유형별 균등 샘플링
+  # True: seed_id 접두사(broken_large/broken_small/contamination 등)로 유형을 식별하고
+  #       augmentation_ratio 할당량을 유형 수로 균등 분배 → 특정 유형 편향 방지
+  # False(기본): 품질 점수 상위 K개 단순 선택 (기존 동작)
+  defect_type_balance: true
   
   task_by_domain:
     isp: classification
