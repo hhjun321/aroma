@@ -33,7 +33,7 @@ drive.mount("/content/drive")
 from pathlib import Path
 
 REPO_LOCAL = Path("/content/aroma")
-REPO_DRIVE = Path("/content/drive/MyDrive/project/aroma")
+REPO_DRIVE = Path("/content/aroma")
 
 # Drive repo가 있으면 로컬 클론 없이 직접 사용 가능
 # 로컬 클론이 필요하면 아래 주석 해제:
@@ -59,7 +59,7 @@ from pathlib import Path
 # ━━━ 코드 경로 자동 탐지 ━━━
 # 우선순위: 로컬 클론 > Drive repo
 REPO_LOCAL = Path("/content/aroma")
-REPO_DRIVE = Path("/content/drive/MyDrive/project/aroma")
+REPO_DRIVE = Path("/content/aroma")
 
 if REPO_LOCAL.exists() and (REPO_LOCAL / "stage0_resize.py").exists():
     CODE_ROOT = str(REPO_LOCAL)
@@ -78,7 +78,7 @@ REPO   = REPO_DRIVE  # dataset_config, configs 등은 항상 Drive에 위치
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 # ━━━ Smoke Test 대상 카테고리 (2개) ━━━
-SMOKE_KEYS = ["isp_ASM", "mvtec_bottle"]  # visa_candle 제외 (Stage 4 defect=0)
+SMOKE_KEYS = ["isp_ASM", "visa_candle"]  # visa_candle 제외 (Stage 4 defect=0)
 
 SMOKE_ENTRIES = {k: CONFIG[k] for k in SMOKE_KEYS}
 
@@ -174,7 +174,11 @@ for key, info in SMOKE_CATS.items():
 
     # Clean
     if CLEAN_FIRST:
-        deleted = clean_category(entry)
+        # clean_category expects 'seed_dir' (single str); adapt for seed_dirs array
+        clean_entry = dict(entry)
+        if "seed_dir" not in clean_entry:
+            clean_entry["seed_dir"] = info["seed_dirs"][0]
+        deleted = clean_category(clean_entry)
         if deleted:
             print(f"  {len(deleted)} items deleted")
 
@@ -816,13 +820,38 @@ print("\n✓ 삭제 완료. 이제 셀 9를 다시 실행하세요.")
 
 ---
 
+## 셀 10.5: Stage 7 — 벤치마크 결과 초기화 (재실행 시)
+
+> seed_dirs 변경으로 augmented_dataset이 재생성되었으므로 이전 벤치마크 결과(sentinel)를 삭제한다.
+> 삭제하지 않으면 셀 11에서 "모든 모델/그룹 완료 (skip)" 처리됨.
+
+```python
+import shutil
+from pathlib import Path
+
+OUTPUT_DIR = REPO / "outputs" / "benchmark_results"
+
+for key, info in SMOKE_CATS.items():
+    cat_name = info["cat_dir"].name
+    cat_out  = OUTPUT_DIR / cat_name
+    if cat_out.exists():
+        shutil.rmtree(str(cat_out))
+        print(f"✓ 삭제: {cat_out}")
+    else:
+        print(f"  없음: {cat_out}")
+
+print("\n✓ 완료 — 셀 11(벤치마크)을 실행하세요")
+```
+
+---
+
 ## 셀 11: Stage 7 — test set 준비 + 벤치마크 (로컬 SSD 캐시)
 
 > 학습 데이터(augmented_dataset)를 로컬 SSD로 복사하여 DataLoader I/O 가속.
 > 결과 JSON은 Drive에 직접 저장 (소량이므로 Drive 직접 쓰기 OK).
 
 ```python
-import shutil, time
+import shutil, time, yaml
 from stage7_benchmark import run_benchmark, _ensure_test_dir
 
 LOCAL_TMP = Path("/content/tmp_stage7")
@@ -927,8 +956,8 @@ Tried to allocate 5.71 GiB...
 
 ```python
 # Git pull로 최신 수정 적용
-!cd /content/drive/MyDrive/project/aroma && git pull
-!cd /content/drive/MyDrive/project/aroma && git log --oneline -3
+!cd /content/aroma && git pull
+!cd /content/aroma && git log --oneline -3
 
 # 예상 출력:
 # (latest) fix: YOLO OOM - 청크 분할 평가 + PYTORCH_ALLOC_CONF + cache=False
@@ -951,7 +980,7 @@ drive.mount("/content/drive")
 import sys
 from pathlib import Path
 
-REPO = Path("/content/drive/MyDrive/project/aroma")
+REPO = Path("/content/aroma")
 sys.path.insert(0, str(REPO))
 
 DATA_BASE = Path("/content/drive/MyDrive/data/Aroma")
