@@ -44,7 +44,7 @@ def run_parallel(
     Returns:
         List of non-None results. Order is not guaranteed in parallel mode.
     """
-    use_parallel = num_workers > 1 and len(tasks) > 10
+    use_parallel = num_workers > 1 and len(tasks) >= 2
 
     if not use_parallel:
         return [r for r in (fn(t) for t in tasks) if r is not None]

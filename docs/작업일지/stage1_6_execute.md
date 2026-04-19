@@ -15,7 +15,7 @@ import sys, json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 sys.path.insert(0, str(REPO))
 
 from scripts.check_progress import check_category, print_report
@@ -45,7 +45,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage0_resize import resize_category, clean_category
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -124,7 +124,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage1_roi_extraction import run_extraction
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -202,7 +202,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage1b_seed_characterization import run_seed_characterization
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -284,7 +284,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage2_defect_seed_generation import run_seed_generation
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -369,7 +369,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage3_layout_logic import run_layout_logic
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -443,7 +443,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage4_mpb_synthesis import run_synthesis_batch
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER  = "isp"   # "isp" / "mvtec" / "visa"
@@ -535,7 +535,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage5_quality_scoring import run_quality_scoring
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -615,7 +615,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage6_dataset_builder import run_dataset_builder
 
-REPO   = Path("/content/drive/MyDrive/project/aroma")
+REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -714,7 +714,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/content/aroma")
 
-REPO          = Path("/content/drive/MyDrive/project/aroma")
+REPO          = Path("/content/aroma")
 CONFIG        = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG     = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -773,7 +773,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage7_benchmark import _ensure_test_dir
 
-REPO          = Path("/content/drive/MyDrive/project/aroma")
+REPO          = Path("/content/aroma")
 CONFIG        = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG     = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
 DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
@@ -840,7 +840,7 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage7_benchmark import run_benchmark
 
-REPO        = Path("/content/drive/MyDrive/project/aroma")
+REPO        = Path("/content/aroma")
 CONFIG_PATH = str(REPO / "configs" / "benchmark_experiment.yaml")
 CONFIG      = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
@@ -919,7 +919,7 @@ else:
 import json
 from pathlib import Path
 
-REPO          = Path("/content/drive/MyDrive/project/aroma")
+REPO          = Path("/content/aroma")
 OUTPUT_DIR    = REPO / "outputs" / "benchmark_results"
 DOMAIN_FILTER = "isp"   # 필터링할 도메인 (없으면 전체 출력)
 

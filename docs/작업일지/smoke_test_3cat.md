@@ -541,8 +541,8 @@ for key, info in SMOKE_CATS.items():
     # Batch processing with seed-level parallelism
     results = run_quality_scoring_batch(
         stage4_seed_dirs = seed_dirs,
-        workers          = 0,   # No image-level parallelism (avoid nested overhead)
-        parallel_seeds   = -1,  # Auto seed-level parallelism
+        workers          = 2,   # Image-level parallelism within each seed
+        parallel_seeds   = 2,   # Seed-level parallelism (Colab 2-CPU 기준)
     )
 
     # Report results
