@@ -573,7 +573,7 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-PRUNING_THRESHOLD = 0.6
+PRUNING_RATIO = 0.5   # quality_score 상위 50% rank 기반 선택 (domain-agnostic)
 LOCAL_TMP = Path("/content/tmp_stage6")
 
 # 도메인별 증강 비율 설정 로드
@@ -688,7 +688,7 @@ for key, info in SMOKE_CATS.items():
         cat_dir                      = str(local_cat),
         image_dir                    = str(local_image_dir),
         seed_dirs                    = local_seed_dirs,
-        pruning_threshold            = PRUNING_THRESHOLD,
+        pruning_ratio                = PRUNING_RATIO,
         augmentation_ratio_full      = ratio_full,      # 명시적 전달!
         augmentation_ratio_pruned    = ratio_pruned,    # 명시적 전달!
         augmentation_ratio_by_domain = None,            # 이미 적용했으므로 None

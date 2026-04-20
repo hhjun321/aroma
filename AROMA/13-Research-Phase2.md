@@ -66,6 +66,22 @@ CASDA 연구에서 활용한 핵심 원리:
 | EfficientDet 성능 하락 | MPB 블러 → 결함 경계 흐림 | 결함 특징이 분류기에 제대로 전달되지 않음 |
 | YOLO11은 상대적 유지 | 경량 모델 특성상 블러 영향 덜 받음 | MPB 블러의 영향도 차이 확인 |
 
+**1차 연구 Smoke Test 실측치 (bottle/ASM/candle, image_auroc):**
+
+| 카테고리 | 모델 | baseline | aroma_full | aroma_pruned | Δ full | 비고 |
+|---------|------|---------|-----------|-------------|--------|------|
+| bottle | YOLO11 | 0.851 | 0.967 | 0.974 | **+0.116** | 합성 효과 명확 |
+| bottle | EfficientDet | 0.994 | 0.947 | 0.925 | **−0.047** | ⚠ MPB 블러 영향 의심 |
+| ASM | YOLO11 | 0.689 | 0.768 | 0.697 | +0.080 | |
+| ASM | EfficientDet | 0.721 | 0.851 | 0.867 | +0.129 | |
+| candle | YOLO11 | 0.625 | 0.890 | — | +0.265 | pruned=NoDefectImages¹ |
+| candle | EfficientDet | 0.764 | 0.750 | — | −0.014 | pruned=NoDefectImages¹ |
+
+> ¹ candle aroma_pruned 실패 원인: MPB 블러(blur_score≈0.14)로 quality_score≈0.49 → 절대 임계값(0.6) 미달.  
+> → `pruning_ratio=0.5`(순위 기반 상위 50%) 교체로 해소 예정.
+
+> bottle EfficientDet은 baseline이 이미 0.994로 포화 상태에 가깝고, MPB 블러가 정밀 경계 분류기에 혼선을 줄 경우 실측치와 같이 하락 가능하다.
+
 > MPB 위에 Diffusion을 적용하는 하이브리드 방식(Option B)은 마지막 단계에서 MPB를 사용하므로 **동일한 블러 문제에 직면한다**. 따라서 **Stage 4를 Diffusion으로 완전 교체(Option A)** 만이 근본 해결책이다.
 
 ---
@@ -259,9 +275,22 @@ aroma_diffusion 최종 이미지 (MPB 블러 없음)
 
 ### 합성 방식 대조 (AUROC 기준)
 
+**1차 연구 (MPB) 실측치 — 3카테고리 smoke test:**
+
+| 모델 | 그룹 | bottle (MVTec) | candle (VisA) | ASM (ISP) |
+|------|------|---------------|-------------|----------|
+| YOLO11 | aroma_full | 0.967 (+0.116) | 0.890 (+0.265) | 0.768 (+0.080) |
+| YOLO11 | aroma_pruned | 0.974 (+0.122) | — (NoDefects) | 0.697 (+0.008) |
+| EfficientDet | aroma_full | 0.947 (−0.047) | 0.750 (−0.014) | 0.851 (+0.129) |
+| EfficientDet | aroma_pruned | 0.925 (−0.070) | — (NoDefects) | 0.867 (+0.146) |
+
+> Δ는 각 카테고리의 baseline 대비 변화량. candle pruned는 pruning_ratio 교체 후 재실험 예정.
+
+**2차 연구 (Diffusion) — 실험 완료 후 기입:**
+
 | 합성 방식 | MVTec AUROC | VisA AUROC | 비고 |
 |---------|------------|-----------|------|
-| MPB (1차 기준선) | — | — | EfficientDet 블러 문제 재현 |
+| MPB (1차 기준선) | bottle=0.947 (EfficientDet) | candle=0.750 (EfficientDet) | EfficientDet 블러 문제 재현 |
 | Diffusion (Option A) | — | — | Stage 4 완전 교체, 블러 없음 |
 
 ---
