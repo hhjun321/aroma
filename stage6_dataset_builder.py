@@ -27,6 +27,8 @@ def run_dataset_builder(
     workers: int = 0,
     balance_defect_types: bool = False,
     groups: list[str] | None = None,
+    preselected_defect_pairs_full: list[tuple[str, str]] | None = None,
+    preselected_defect_pairs_pruned: list[tuple[str, str]] | None = None,
 ) -> dict:
     """build_dataset_groups() 의 직접 래퍼.
 
@@ -49,6 +51,8 @@ def run_dataset_builder(
         workers=workers,
         balance_defect_types=balance_defect_types,
         groups=groups,
+        preselected_defect_pairs_full=preselected_defect_pairs_full,
+        preselected_defect_pairs_pruned=preselected_defect_pairs_pruned,
     )
 
 

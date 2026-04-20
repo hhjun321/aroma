@@ -562,7 +562,8 @@ print("\n✓ Stage 5 완료")
 
 ## 셀 9: Stage 6 — 증강 데이터셋 구성 (로컬 SSD 캐시)
 
-> 순수 파일 복사 Stage (~9,590 I/O ops). 로컬 SSD에서 구성 후 Drive로 일괄 업로드.
+> **최적화**: quality_scores.json만 Drive에서 읽어 선택 대상을 결정하고, 선택된 PNG만 로컬 SSD로 복사.
+> 전체 stage4_output 대비 복사 파일 수를 대폭 절감 (예: 5000 → ~500장).
 > ThreadPoolExecutor 병렬 복사 + tqdm 진행률 표시.
 
 ```python
@@ -645,55 +646,90 @@ for key, info in SMOKE_CATS.items():
 
     print(f"  로컬 캐시 복사 중... (경로: {relative_path})")
     
-    # 병렬로 모든 필요한 디렉토리 복사
-    copy_tasks = []
-    
-    # 1) stage4_output 복사 (defect 이미지 + quality_scores.json)
-    stage4_src = cat_dir / "stage4_output"
-    if stage4_src.exists():
-        copy_tasks.append((stage4_src, local_cat / "stage4_output"))
+    # 도메인별 비율
+    ratio_full   = RATIO_MAP[domain]["full"]
+    ratio_pruned = RATIO_MAP[domain]["pruned"]
 
-    # 2) image_dir (train/good) 복사
+    # ── 1단계: Drive의 quality_scores.json만 읽어 선택 대상 결정 ──────────
+    # good_count: Drive image_dir에서 직접 카운트 (복사 전)
+    _exts = ("*.png", "*.jpg", "*.jpeg")
+    good_count_drive = sum(len(list(image_dir.glob(e))) for e in _exts)
+
+    from utils.dataset_builder import _collect_defect_paths
+    full_pairs_drive = _collect_defect_paths(
+        str(cat_dir),
+        pruning_ratio    = None,
+        augmentation_ratio = ratio_full,
+        good_count       = good_count_drive,
+        balance_defect_types = True,
+    )
+    pruned_pairs_drive = _collect_defect_paths(
+        str(cat_dir),
+        pruning_ratio    = PRUNING_RATIO,
+        augmentation_ratio = ratio_pruned,
+        good_count       = good_count_drive,
+        balance_defect_types = True,
+    )
+    needed_srcs = {src for src, _ in full_pairs_drive} | {src for src, _ in pruned_pairs_drive}
+    print(f"  선택된 defect: full={len(full_pairs_drive)}, pruned={len(pruned_pairs_drive)}, "
+          f"고유={len(needed_srcs)} (전체 stage4_output 복사 대비 절약)")
+
+    # ── 2단계: 선택된 PNG만 로컬 SSD로 복사 (stage4_output 구조 유지) ───────
+    from concurrent.futures import ThreadPoolExecutor
+    def _copy_file(src_dst):
+        src, dst = src_dst
+        dst = Path(dst)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, str(dst))
+
+    file_copy_tasks = [
+        (src_str, str(local_cat / Path(src_str).relative_to(cat_dir)))
+        for src_str in needed_srcs
+    ]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        list(tqdm(ex.map(_copy_file, file_copy_tasks),
+                  total=len(file_copy_tasks), desc="  defect PNG 복사", leave=False))
+
+    # ── 3단계: 나머지 소용량 디렉토리 병렬 복사 ──────────────────────────
     local_image_dir = local_cat / "train" / "good"
-    copy_tasks.append((image_dir, local_image_dir))
-
-    # 3) test/good 복사
+    light_tasks = [(image_dir, local_image_dir)]
     test_good_src = cat_dir / "test" / "good"
     if test_good_src.exists():
-        copy_tasks.append((test_good_src, local_cat / "test" / "good"))
-
-    # 4) seed_dirs (test defect) 복사
+        light_tasks.append((test_good_src, local_cat / "test" / "good"))
     local_seed_dirs = []
     for sd in cat_seed_dirs[str(cat_dir)]:
         sd_path = Path(sd)
         local_sd = local_cat / "test" / sd_path.name
         if sd_path.exists():
-            copy_tasks.append((sd_path, local_sd))
+            light_tasks.append((sd_path, local_sd))
             local_seed_dirs.append(str(local_sd))
-    
-    # 병렬 복사 실행 (4개 스레드로 동시 복사)
-    parallel_copytree(copy_tasks, max_workers=4)
-    
-    copy_sec = time.time() - t0
-    print(f"  로컬 캐시 완료 ({copy_sec:.1f}s, {len(copy_tasks)}개 디렉토리)")
+    parallel_copytree(light_tasks, max_workers=2)
 
-    # ── 로컬에서 데이터셋 구성 (병렬 복사 + 명시적 비율 전달) ──────
+    copy_sec = time.time() - t0
+    print(f"  로컬 캐시 완료 ({copy_sec:.1f}s)")
+
+    # ── 4단계: 선택 경로를 로컬 SSD 경로로 리매핑 ────────────────────────
+    def _remap(pairs):
+        return [(str(local_cat / Path(src).relative_to(cat_dir)), dst_name)
+                for src, dst_name in pairs]
+    full_pairs_local   = _remap(full_pairs_drive)
+    pruned_pairs_local = _remap(pruned_pairs_drive)
+
+    # ── 로컬에서 데이터셋 구성 (preselected pairs로 재선택 없이 직접 복사) ──
     t1 = time.time()
     
-    # 도메인별 비율 명시적 전달 (로컬 경로에서 도메인 추출 실패 대비)
-    ratio_full = RATIO_MAP[domain]["full"]
-    ratio_pruned = RATIO_MAP[domain]["pruned"]
-    
     result = run_dataset_builder(
-        cat_dir                      = str(local_cat),
-        image_dir                    = str(local_image_dir),
-        seed_dirs                    = local_seed_dirs,
-        pruning_ratio                = PRUNING_RATIO,
-        augmentation_ratio_full      = ratio_full,      # 명시적 전달!
-        augmentation_ratio_pruned    = ratio_pruned,    # 명시적 전달!
-        augmentation_ratio_by_domain = None,            # 이미 적용했으므로 None
-        workers                      = 8,               # I/O-bound 작업에 최적화
-        balance_defect_types         = True,            # 복수 결함 유형 균등 샘플링
+        cat_dir                          = str(local_cat),
+        image_dir                        = str(local_image_dir),
+        seed_dirs                        = local_seed_dirs,
+        pruning_ratio                    = PRUNING_RATIO,
+        augmentation_ratio_full          = ratio_full,
+        augmentation_ratio_pruned        = ratio_pruned,
+        augmentation_ratio_by_domain     = None,
+        workers                          = 8,
+        balance_defect_types             = True,
+        preselected_defect_pairs_full    = full_pairs_local,
+        preselected_defect_pairs_pruned  = pruned_pairs_local,
     )
     build_sec = time.time() - t1
     print(f"  데이터셋 구성 완료 ({build_sec:.1f}s)")

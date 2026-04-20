@@ -301,6 +301,8 @@ def build_dataset_groups(
     workers: int = 0,
     balance_defect_types: bool = False,
     groups: list[str] | None = None,
+    preselected_defect_pairs_full: list[tuple[str, str]] | None = None,
+    preselected_defect_pairs_pruned: list[tuple[str, str]] | None = None,
 ) -> dict:
     """dataset group 을 구성하고 build_report.json 을 저장한다.
 
@@ -332,6 +334,11 @@ def build_dataset_groups(
             단일 유형 카테고리(기존 ISP·VisA·MVTec 단일 시드 진입점)에는 영향 없음.
         groups: 빌드할 그룹 목록. None 이면 전체 ["baseline", "aroma_full", "aroma_pruned"].
             예: ["aroma_pruned"] → aroma_pruned 만 재빌드, baseline/aroma_full 은 건드리지 않음.
+        preselected_defect_pairs_full: 미리 선택된 (src_path, dst_filename) 쌍 목록.
+            제공 시 aroma_full 의 _collect_defect_paths 호출을 건너뛴다.
+            노트북에서 Drive 경로로 선택 후 로컬 SSD 경로로 리매핑해 전달.
+        preselected_defect_pairs_pruned: 미리 선택된 (src_path, dst_filename) 쌍 목록.
+            제공 시 aroma_pruned 의 _collect_defect_paths 호출을 건너뛴다.
 
     Returns:
         build_report dict. build_report.json 으로도 저장.
@@ -500,13 +507,16 @@ def build_dataset_groups(
                 _copy_images(Path(image_dir), good_dst,
                              num_workers, desc="aroma_full/train/good")
 
-        full_defect_pairs = _collect_defect_paths(
-            cat_dir,
-            pruning_ratio=None,
-            augmentation_ratio=ratio_full,
-            good_count=good_count,
-            balance_defect_types=balance_defect_types,
-        )
+        if preselected_defect_pairs_full is not None:
+            full_defect_pairs = preselected_defect_pairs_full
+        else:
+            full_defect_pairs = _collect_defect_paths(
+                cat_dir,
+                pruning_ratio=None,
+                augmentation_ratio=ratio_full,
+                good_count=good_count,
+                balance_defect_types=balance_defect_types,
+            )
         if not full_defect_pairs:
             detail = (
                 "stage4_output 미존재"
@@ -546,13 +556,16 @@ def build_dataset_groups(
                 _copy_images(Path(image_dir), good_dst,
                              num_workers, desc="aroma_pruned/train/good")
 
-        pruned_defect_pairs = _collect_defect_paths(
-            cat_dir,
-            pruning_ratio=pruning_ratio,
-            augmentation_ratio=ratio_pruned,
-            good_count=good_count,
-            balance_defect_types=balance_defect_types,
-        )
+        if preselected_defect_pairs_pruned is not None:
+            pruned_defect_pairs = preselected_defect_pairs_pruned
+        else:
+            pruned_defect_pairs = _collect_defect_paths(
+                cat_dir,
+                pruning_ratio=pruning_ratio,
+                augmentation_ratio=ratio_pruned,
+                good_count=good_count,
+                balance_defect_types=balance_defect_types,
+            )
         from tqdm import tqdm
         pruned_defect_dst = aug_dir / "aroma_pruned" / "train" / "defect"
         if pruned_defect_dst.exists():
