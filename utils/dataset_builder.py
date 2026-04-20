@@ -300,8 +300,9 @@ def build_dataset_groups(
     split_seed: int = 42,
     workers: int = 0,
     balance_defect_types: bool = False,
+    groups: list[str] | None = None,
 ) -> dict:
-    """3개 dataset group 을 구성하고 build_report.json 을 저장한다.
+    """dataset group 을 구성하고 build_report.json 을 저장한다.
 
     Args:
         cat_dir: 카테고리 루트 디렉터리 (e.g. `.../mvtec/bottle`).
@@ -329,63 +330,88 @@ def build_dataset_groups(
             seed_id 접두사(예: broken_large, broken_small)로 유형을 식별하고
             augmentation_ratio 할당량을 유형 수로 균등 분배한다.
             단일 유형 카테고리(기존 ISP·VisA·MVTec 단일 시드 진입점)에는 영향 없음.
+        groups: 빌드할 그룹 목록. None 이면 전체 ["baseline", "aroma_full", "aroma_pruned"].
+            예: ["aroma_pruned"] → aroma_pruned 만 재빌드, baseline/aroma_full 은 건드리지 않음.
 
     Returns:
         build_report dict. build_report.json 으로도 저장.
 
     Skip:
-        build_report.json 이 존재하고 저장된 파라미터들이 일치하면
-        재생성 없이 로드하여 반환. 불일치 시 전체 재생성.
+        그룹별로 독립적으로 skip 을 판단한다.
+        각 그룹의 train/defect(또는 train/good) 디렉터리와 build_report.json 의
+        파라미터가 일치하면 해당 그룹만 건너뜀.
+        baseline 이 skip 된 경우 good_count 는 기존 디렉터리에서 산출한다.
     """
+    _ALL_GROUPS = ["baseline", "aroma_full", "aroma_pruned"]
+    target_groups: set[str] = set(groups) if groups is not None else set(_ALL_GROUPS)
+
     cat_path = Path(cat_dir)
     aug_dir = cat_path / "augmented_dataset"
     report_path = aug_dir / "build_report.json"
 
     # ── 도메인별 비율 우선 적용 ──────────────────────────────────────────
-    # cat_dir 경로에서 도메인 추출
-    # 경로 구조:
-    #   MVTec/VisA: .../domain/category/ → parent.name = domain
-    #   ISP: .../isp/unsupervised/category/ → parent.parent.name = domain
     domain = cat_path.parent.name
     if domain == "unsupervised":  # ISP special case
         domain = cat_path.parent.parent.name
-    
+
     if augmentation_ratio_by_domain and domain in augmentation_ratio_by_domain:
         domain_ratios = augmentation_ratio_by_domain[domain]
-        ratio_full = domain_ratios.get("full", augmentation_ratio_full)
+        ratio_full   = domain_ratios.get("full",   augmentation_ratio_full)
         ratio_pruned = domain_ratios.get("pruned", augmentation_ratio_pruned)
     else:
-        ratio_full = augmentation_ratio_full
+        ratio_full   = augmentation_ratio_full
         ratio_pruned = augmentation_ratio_pruned
 
-    # Skip 조건 확인
-    # stage4_output 이 존재하고 이전 실행에서 실제 defect 가 수집됐을 때만 skip.
-    # stage4 가 미실행인 채로 캐시된 경우(defect_count=0) stage4 완료 후 재실행 가능하도록 skip 하지 않음.
-    stage4_dir = cat_path / "stage4_output"
-    if report_path.exists():
-        cached = json.loads(report_path.read_text())
-        pruning_ratio_match = cached.get("pruning_ratio") == pruning_ratio
-        ratio_full_match = (
-            cached.get("augmentation_ratio_full") == ratio_full
-        )
-        ratio_pruned_match = (
-            cached.get("augmentation_ratio_pruned") == ratio_pruned
-        )
-        split_ratio_match = cached.get("split_ratio") == split_ratio
-        split_seed_match = (
-            split_ratio is None  # split_ratio=None 이면 seed 무관
-            or cached.get("split_seed", 42) == split_seed
-        )
-        cached_has_defects = cached.get("aroma_full", {}).get("defect_count", 0) > 0
-        stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
+    # ── 캐시된 report 로드 ───────────────────────────────────────────────
+    cached: dict = json.loads(report_path.read_text()) if report_path.exists() else {}
 
-        balance_match = (
-            cached.get("balance_defect_types", False) == balance_defect_types
-        )
-        if (pruning_ratio_match and ratio_full_match and ratio_pruned_match and
-                split_ratio_match and split_seed_match and balance_match and
-                (cached_has_defects or not stage4_now_exists)):
-            return cached
+    stage4_dir = cat_path / "stage4_output"
+    stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
+
+    # ── 그룹별 skip 판단 ─────────────────────────────────────────────────
+    def _group_done(group: str) -> bool:
+        """현재 파라미터로 그룹이 이미 완성되어 있으면 True."""
+        if group == "baseline":
+            good_dir = aug_dir / "baseline" / "train" / "good"
+            if not good_dir.exists() or not any(good_dir.iterdir()):
+                return False
+            split_ok = (
+                cached.get("split_ratio") == split_ratio
+                and (split_ratio is None or cached.get("split_seed", 42) == split_seed)
+            )
+            return split_ok
+
+        if group == "aroma_full":
+            defect_dir = aug_dir / "aroma_full" / "train" / "defect"
+            has_defects = defect_dir.exists() and any(defect_dir.iterdir())
+            if not has_defects and stage4_now_exists:
+                return False
+            return (
+                cached.get("augmentation_ratio_full") == ratio_full
+                and cached.get("balance_defect_types", False) == balance_defect_types
+                and (cached.get("aroma_full", {}).get("defect_count", 0) > 0
+                     or not stage4_now_exists)
+            )
+
+        if group == "aroma_pruned":
+            defect_dir = aug_dir / "aroma_pruned" / "train" / "defect"
+            has_defects = defect_dir.exists() and any(defect_dir.iterdir())
+            if not has_defects and stage4_now_exists:
+                return False
+            return (
+                cached.get("pruning_ratio") == pruning_ratio
+                and cached.get("augmentation_ratio_pruned") == ratio_pruned
+                and cached.get("balance_defect_types", False) == balance_defect_types
+                and (cached.get("aroma_pruned", {}).get("defect_count", 0) > 0
+                     or not stage4_now_exists)
+            )
+
+        return False
+
+    build_groups = {g for g in target_groups if not _group_done(g)}
+
+    if not build_groups:
+        return cached
 
     from concurrent.futures import ThreadPoolExecutor
     from utils.parallel import resolve_workers
@@ -402,11 +428,12 @@ def build_dataset_groups(
             stacklevel=2,
         )
 
-    # ── good 이미지 train/test 분할 ───────────────────────────────────────
-    # split_ratio 가 설정된 경우: train/good + test/good 를 pooling 후 결정적 분할
-    #   → 모든 카테고리·도메인에 동일한 비율 보장, test 가 train 에 포함되지 않음
-    # split_ratio=None: 원본 데이터셋 분할 그대로 사용 (기존 동작)
+    # ── good_count 확보 ───────────────────────────────────────────────────
+    # baseline 이 skip 된 경우 기존 디렉터리에서 카운트.
+    # split_ratio 사용 시 train_good_paths 도 결정적으로 재계산 (동일 결과).
     test_good_src = Path(image_dir).parents[1] / "test" / "good"
+    train_good_paths: list = []
+    test_good_paths: list  = []
 
     if split_ratio is not None:
         train_good_paths, test_good_paths = _split_good_images(
@@ -415,139 +442,156 @@ def build_dataset_groups(
             split_ratio=split_ratio,
             split_seed=split_seed,
         )
-        good_count = _copy_file_list(
-            train_good_paths, aug_dir / "baseline" / "train" / "good",
-            num_workers, desc="baseline/train/good (split)"
-        )
-        _copy_file_list(
-            test_good_paths, aug_dir / "baseline" / "test" / "good",
-            num_workers, desc="baseline/test/good (split)"
-        )
-    else:
-        # 원본 분할 사용
-        good_count = _copy_images(
-            Path(image_dir), aug_dir / "baseline" / "train" / "good",
-            num_workers, desc="baseline/train/good"
-        )
-        if test_good_src.exists():
-            _copy_images(test_good_src,
-                         aug_dir / "baseline" / "test" / "good",
-                         num_workers, desc="baseline/test/good")
 
-    # test/{defect_type}/ — 원본 test 디렉터리 전체 스캔 (모든 defect 유형 포함)
-    # 공정한 벤치마크를 위해 seed로 사용된 유형만이 아닌 전체 defect 유형을 포함한다.
-    # seed_dirs는 원본 test 구조가 없을 때(이전 버전 호환) 폴백으로 사용.
-    cat_test_dir = Path(image_dir).parents[1] / "test"
-    if cat_test_dir.exists():
-        for defect_dir in sorted(cat_test_dir.iterdir()):
-            if defect_dir.is_dir() and defect_dir.name != "good":
-                _copy_images(defect_dir,
-                             aug_dir / "baseline" / "test" / defect_dir.name,
-                             num_workers, desc=f"baseline/test/{defect_dir.name}")
+    if "baseline" not in build_groups:
+        # baseline 은 완성되어 있음 — good_count 를 캐시 또는 디렉터리에서 산출
+        good_count = cached.get("baseline", {}).get("good_count", 0)
+        if not good_count:
+            good_dir = aug_dir / "baseline" / "train" / "good"
+            good_count = sum(
+                1 for p in good_dir.iterdir()
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ) if good_dir.exists() else 0
     else:
-        # 폴백: 원본 데이터셋 구조가 없을 때 seed_dirs 기반으로 구성
-        for sd in seed_dirs:
-            defect_type = Path(sd).name
-            src = Path(sd)
-            if src.exists():
-                _copy_images(src,
-                             aug_dir / "baseline" / "test" / defect_type,
-                             num_workers, desc=f"baseline/test/{defect_type}")
-
-    # ── aroma_full/train/ ─────────────────────────────────────────────────
-    # good train 이미지는 baseline 과 동일한 분할을 사용 → 공정한 비교 보장
-    if split_ratio is not None:
-        _copy_file_list(
-            train_good_paths, aug_dir / "aroma_full" / "train" / "good",
-            num_workers, desc="aroma_full/train/good (split)"
-        )
-    else:
-        _copy_images(Path(image_dir),
-                     aug_dir / "aroma_full" / "train" / "good",
-                     num_workers, desc="aroma_full/train/good")
-
-    full_defect_pairs = _collect_defect_paths(
-        cat_dir,
-        pruning_ratio=None,
-        augmentation_ratio=ratio_full,
-        good_count=good_count,
-        balance_defect_types=balance_defect_types,
-    )
-    if not full_defect_pairs:
-        # CASDA validate_yolo_dataset 패턴 — 학습 전 데이터 무결성 사전 검증
-        detail = (
-            "stage4_output 미존재"
-            if not stage4_dir.exists()
-            else "stage4_output 존재하나 defect 이미지 0건 — "
-                 "quality_scores.json 누락 또는 Stage 4 미완료 가능성"
-        )
-        warnings.warn(
-            f"aroma_* defect 이미지 0건 ({detail}): {cat_dir}",
-            stacklevel=2,
-        )
-    if full_defect_pairs:
-        from tqdm import tqdm
-        full_defect_dst = aug_dir / "aroma_full" / "train" / "defect"
-        full_defect_dst.mkdir(parents=True, exist_ok=True)
-        tasks = [(src, str(full_defect_dst / dst_name))
-                 for src, dst_name in full_defect_pairs]
-        if num_workers <= 1:
-            for t in tqdm(tasks, desc="  aroma_full/train/defect", leave=False):
-                _copy_worker(t)
+        # ── baseline 빌드 ─────────────────────────────────────────────────
+        if split_ratio is not None:
+            good_count = _copy_file_list(
+                train_good_paths, aug_dir / "baseline" / "train" / "good",
+                num_workers, desc="baseline/train/good (split)"
+            )
+            _copy_file_list(
+                test_good_paths, aug_dir / "baseline" / "test" / "good",
+                num_workers, desc="baseline/test/good (split)"
+            )
         else:
-            with ThreadPoolExecutor(max_workers=num_workers) as ex:
-                list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
-                         desc="  aroma_full/train/defect", leave=False))
+            good_count = _copy_images(
+                Path(image_dir), aug_dir / "baseline" / "train" / "good",
+                num_workers, desc="baseline/train/good"
+            )
+            if test_good_src.exists():
+                _copy_images(test_good_src,
+                             aug_dir / "baseline" / "test" / "good",
+                             num_workers, desc="baseline/test/good")
 
-    # ── aroma_pruned/train/ ───────────────────────────────────────────────
-    if split_ratio is not None:
-        _copy_file_list(
-            train_good_paths, aug_dir / "aroma_pruned" / "train" / "good",
-            num_workers, desc="aroma_pruned/train/good (split)"
+        cat_test_dir = Path(image_dir).parents[1] / "test"
+        if cat_test_dir.exists():
+            for defect_dir in sorted(cat_test_dir.iterdir()):
+                if defect_dir.is_dir() and defect_dir.name != "good":
+                    _copy_images(defect_dir,
+                                 aug_dir / "baseline" / "test" / defect_dir.name,
+                                 num_workers, desc=f"baseline/test/{defect_dir.name}")
+        else:
+            for sd in seed_dirs:
+                src = Path(sd)
+                if src.exists():
+                    _copy_images(src,
+                                 aug_dir / "baseline" / "test" / src.name,
+                                 num_workers, desc=f"baseline/test/{src.name}")
+
+    # ── aroma_full 빌드 ───────────────────────────────────────────────────
+    full_defect_pairs: list = cached.get("aroma_full", {}).get("_pairs", [])  # placeholder
+    if "aroma_full" in build_groups:
+        good_dst = aug_dir / "aroma_full" / "train" / "good"
+        if not good_dst.exists() or not any(good_dst.iterdir()):
+            if split_ratio is not None:
+                _copy_file_list(train_good_paths, good_dst,
+                                num_workers, desc="aroma_full/train/good (split)")
+            else:
+                _copy_images(Path(image_dir), good_dst,
+                             num_workers, desc="aroma_full/train/good")
+
+        full_defect_pairs = _collect_defect_paths(
+            cat_dir,
+            pruning_ratio=None,
+            augmentation_ratio=ratio_full,
+            good_count=good_count,
+            balance_defect_types=balance_defect_types,
         )
-    else:
-        _copy_images(Path(image_dir),
-                     aug_dir / "aroma_pruned" / "train" / "good",
-                     num_workers, desc="aroma_pruned/train/good")
+        if not full_defect_pairs:
+            detail = (
+                "stage4_output 미존재"
+                if not stage4_dir.exists()
+                else "stage4_output 존재하나 defect 이미지 0건 — "
+                     "quality_scores.json 누락 또는 Stage 4 미완료 가능성"
+            )
+            warnings.warn(
+                f"aroma_full defect 이미지 0건 ({detail}): {cat_dir}",
+                stacklevel=2,
+            )
+        else:
+            from tqdm import tqdm
+            full_defect_dst = aug_dir / "aroma_full" / "train" / "defect"
+            if full_defect_dst.exists():
+                shutil.rmtree(str(full_defect_dst))
+            full_defect_dst.mkdir(parents=True, exist_ok=True)
+            tasks = [(src, str(full_defect_dst / dst_name))
+                     for src, dst_name in full_defect_pairs]
+            if num_workers <= 1:
+                for t in tqdm(tasks, desc="  aroma_full/train/defect", leave=False):
+                    _copy_worker(t)
+            else:
+                with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                    list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
+                              desc="  aroma_full/train/defect", leave=False))
 
-    pruned_defect_pairs = _collect_defect_paths(
-        cat_dir,
-        pruning_ratio=pruning_ratio,
-        augmentation_ratio=ratio_pruned,
-        good_count=good_count,
-        balance_defect_types=balance_defect_types,
-    )
-    if pruned_defect_pairs:
+    # ── aroma_pruned 빌드 ─────────────────────────────────────────────────
+    pruned_defect_pairs: list = []
+    if "aroma_pruned" in build_groups:
+        good_dst = aug_dir / "aroma_pruned" / "train" / "good"
+        if not good_dst.exists() or not any(good_dst.iterdir()):
+            if split_ratio is not None:
+                _copy_file_list(train_good_paths, good_dst,
+                                num_workers, desc="aroma_pruned/train/good (split)")
+            else:
+                _copy_images(Path(image_dir), good_dst,
+                             num_workers, desc="aroma_pruned/train/good")
+
+        pruned_defect_pairs = _collect_defect_paths(
+            cat_dir,
+            pruning_ratio=pruning_ratio,
+            augmentation_ratio=ratio_pruned,
+            good_count=good_count,
+            balance_defect_types=balance_defect_types,
+        )
         from tqdm import tqdm
         pruned_defect_dst = aug_dir / "aroma_pruned" / "train" / "defect"
-        pruned_defect_dst.mkdir(parents=True, exist_ok=True)
-        tasks = [(src, str(pruned_defect_dst / dst_name))
-                 for src, dst_name in pruned_defect_pairs]
-        if num_workers <= 1:
-            for t in tqdm(tasks, desc="  aroma_pruned/train/defect", leave=False):
-                _copy_worker(t)
-        else:
-            with ThreadPoolExecutor(max_workers=num_workers) as ex:
-                list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
-                         desc="  aroma_pruned/train/defect", leave=False))
+        if pruned_defect_dst.exists():
+            shutil.rmtree(str(pruned_defect_dst))
+        if pruned_defect_pairs:
+            pruned_defect_dst.mkdir(parents=True, exist_ok=True)
+            tasks = [(src, str(pruned_defect_dst / dst_name))
+                     for src, dst_name in pruned_defect_pairs]
+            if num_workers <= 1:
+                for t in tqdm(tasks, desc="  aroma_pruned/train/defect", leave=False):
+                    _copy_worker(t)
+            else:
+                with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                    list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
+                              desc="  aroma_pruned/train/defect", leave=False))
 
-    report = {
-        "pruning_ratio": pruning_ratio,
-        "augmentation_ratio_full": ratio_full,
+    # ── report 갱신 (기존 캐시와 머지) ──────────────────────────────────
+    report = dict(cached)
+    report.update({
+        "pruning_ratio":            pruning_ratio,
+        "augmentation_ratio_full":  ratio_full,
         "augmentation_ratio_pruned": ratio_pruned,
-        "split_ratio": split_ratio,
-        "split_seed": split_seed if split_ratio is not None else None,
-        "balance_defect_types": balance_defect_types,
-        "domain": domain,
-        "stage4_status": stage4_status,
-        "stage4_seeds_total": stage4_seeds_total,
+        "split_ratio":              split_ratio,
+        "split_seed":               split_seed if split_ratio is not None else None,
+        "balance_defect_types":     balance_defect_types,
+        "domain":                   domain,
+        "stage4_status":            stage4_status,
+        "stage4_seeds_total":       stage4_seeds_total,
         "stage4_seeds_with_defects": stage4_seeds_with_defects,
-        "baseline":     {"good_count": good_count, "defect_count": 0},
-        "aroma_full":   {"good_count": good_count,
-                         "defect_count": len(full_defect_pairs)},
-        "aroma_pruned": {"good_count": good_count,
-                         "defect_count": len(pruned_defect_pairs)},
-    }
+    })
+    if "baseline" in build_groups:
+        report["baseline"] = {"good_count": good_count, "defect_count": 0}
+    if "aroma_full" in build_groups:
+        report["aroma_full"] = {"good_count": good_count,
+                                "defect_count": len(full_defect_pairs)}
+    if "aroma_pruned" in build_groups:
+        report["aroma_pruned"] = {"good_count": good_count,
+                                  "defect_count": len(pruned_defect_pairs)}
+
     aug_dir.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2))
     return report

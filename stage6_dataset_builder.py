@@ -26,6 +26,7 @@ def run_dataset_builder(
     split_seed: int = 42,
     workers: int = 0,
     balance_defect_types: bool = False,
+    groups: list[str] | None = None,
 ) -> dict:
     """build_dataset_groups() 의 직접 래퍼.
 
@@ -47,6 +48,7 @@ def run_dataset_builder(
         split_seed=split_seed,
         workers=workers,
         balance_defect_types=balance_defect_types,
+        groups=groups,
     )
 
 
@@ -76,6 +78,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="benchmark_experiment.yaml 경로 (비율·분할 설정 로드용).")
     p.add_argument("--workers", type=int, default=0,
                    help="병렬 워커 수 (0=순차, -1=자동, N>=2=N 프로세스).")
+    p.add_argument("--groups", nargs="+", default=None,
+                   choices=["baseline", "aroma_full", "aroma_pruned"],
+                   help="빌드할 그룹 지정 (기본=전체). 예: --groups aroma_pruned")
     return p
 
 
@@ -117,6 +122,7 @@ def main() -> None:
         split_seed=split_seed,
         workers=args.workers,
         balance_defect_types=balance_defect_types,
+        groups=args.groups,
     )
     print(f"Domain: {result.get('domain', 'unknown')}")
     print(f"Applied ratio_full: {result.get('augmentation_ratio_full')}")
