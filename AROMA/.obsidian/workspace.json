@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "07-Stage5-Quality.md",
+                "file": "13-Research-Phase2.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "07-Stage5-Quality"
+              "title": "13-Research-Phase2"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "07-Stage5-Quality.md",
+                "file": "13-Research-Phase2.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "07-Stage5-Quality 의 백링크"
+              "title": "13-Research-Phase2 의 백링크"
             }
           },
           {
@@ -113,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "07-Stage5-Quality.md",
+                "file": "13-Research-Phase2.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "07-Stage5-Quality 의 나가는 링크"
+              "title": "13-Research-Phase2 의 나가는 링크"
             }
           },
           {
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "07-Stage5-Quality.md",
+                "file": "13-Research-Phase2.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "07-Stage5-Quality 의 개요"
+              "title": "13-Research-Phase2 의 개요"
             }
           }
         ]
@@ -185,6 +185,19 @@
   },
   "active": "5c6f1d908acc2f17",
   "lastOpenFiles": [
+    "12-Research-Phase1.md",
+    "13-Research-Phase2.md",
+    "13-Research-Phase2.md.tmp.1504.1776658327186",
+    "13-Research-Phase2.md.tmp.1504.1776658315665",
+    "13-Research-Phase2.md.tmp.1504.1776658309683",
+    "13-Research-Phase2.md.tmp.1504.1776658302506",
+    "13-Research-Phase2.md.tmp.1504.1776658283358",
+    "13-Research-Phase2.md.tmp.1504.1776658277431",
+    "13-Research-Phase2.md.tmp.1504.1776658266052",
+    "13-Research-Phase2.md.tmp.1504.1776658260430",
+    "07-Stage5-Quality.md",
+    "13-Research-Phase2.md.tmp.1504.1776657526252",
+    "13-Research-Phase2.md.tmp.1504.1776657515709",
     "08-Stage6-Dataset.md",
     "09-Stage7a-Benchmark.md",
     "09-Stage7b-Results.md",
@@ -197,13 +210,6 @@
     "01-Stage0-Resize.md",
     "00-INDEX.md",
     "06-Stage4-MPB.md",
-    "11-Parallel-Guide.md.tmp.1504.1776646876024",
-    "10-Dataset-Structure.md.tmp.1504.1776646857432",
-    "09-Stage7b-Results.md.tmp.1504.1776646838411",
-    "09-Stage7a-Benchmark.md.tmp.1504.1776646824873",
-    "08-Stage6-Dataset.md.tmp.1504.1776646801872",
-    "07-Stage5-Quality.md",
-    "07-Stage5-Quality.md.tmp.1504.1776646778275",
     "02-Stage1-ROI.md"
   ]
 }

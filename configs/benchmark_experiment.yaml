@@ -3,15 +3,7 @@ dataset:
   eval_chunk_size: 64   # YOLO predict 청크 크기 (대량 test set OOM 방지)
   image_size: 512
   num_workers: 4
-  pruning_threshold: 0.6
-
-  # 도메인별 pruning_threshold override (global pruning_threshold 대체)
-  # VisA: candle quality=0.493 — artifact_score의 hf_ratio 상수(5.0)가
-  #        매끄러운 표면 텍스처(candle 왁스) 에 대해 보수적으로 적용됨
-  pruning_threshold_by_domain:
-    isp: 0.6
-    mvtec: 0.6
-    visa: 0.4
+  pruning_ratio: 0.5  # aroma_pruned: quality_score 상위 50% rank 기반 선택 (domain-agnostic)
 
   # train/test good 이미지 분할 비율
   # 모든 카테고리·도메인에 동일한 비율 적용 → 공정한 모델 성능 비교

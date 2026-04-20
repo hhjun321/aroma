@@ -44,6 +44,7 @@ outputs/benchmark_results/{cat_name}/{model}/{group}/experiment_meta.json
 
 ## 노트 목록
 
+### 파이프라인
 - [[01-Stage0-Resize]]
 - [[02-Stage1-ROI]]
 - [[03-Stage1b-Seed]]
@@ -54,5 +55,11 @@ outputs/benchmark_results/{cat_name}/{model}/{group}/experiment_meta.json
 - [[08-Stage6-Dataset]]
 - [[09-Stage7a-Benchmark]]
 - [[09-Stage7b-Results]]
+
+### 레퍼런스
 - [[10-Dataset-Structure]]
 - [[11-Parallel-Guide]]
+
+### 연구
+- [[12-Research-Phase1]] — 1차: 지능적 배치 유효성 검증 (MVTec·VisA·ISP)
+- [[13-Research-Phase2]] — 2차: Multi-class 분류 + MPB vs GAN/Diffusion 대조 실험

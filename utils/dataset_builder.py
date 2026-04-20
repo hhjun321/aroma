@@ -47,7 +47,7 @@ def _copy_worker(args_tuple: tuple) -> str | None:
 
 def _collect_defect_paths(
     cat_dir: str,
-    pruning_threshold: float | None = None,
+    pruning_ratio: float | None = None,
     augmentation_ratio: float | None = None,
     good_count: int = 0,
     balance_defect_types: bool = False,
@@ -56,7 +56,10 @@ def _collect_defect_paths(
 
     Args:
         cat_dir: 카테고리 루트 디렉터리.
-        pruning_threshold: quality_score 최솟값 (None이면 품질 필터링 없음).
+        pruning_ratio: quality_score 기준 상위 X% 선택 비율 (None이면 필터링 없음).
+            예: 0.5 → 전체 후보 중 상위 50% 선택.
+            도메인·카테고리에 무관하게 동일하게 적용 (domain-agnostic rank 기반).
+            augmentation_ratio 적용 전 품질 pre-filter로 동작.
         augmentation_ratio: 원본 대비 합성 defect 비율 (None이면 모든 이미지 사용).
             예: 2.0 → 원본 good 209개면 합성 defect 418개 선택.
         good_count: 원본 good 이미지 개수 (augmentation_ratio 계산에 사용).
@@ -86,9 +89,9 @@ def _collect_defect_paths(
         if not img_paths:
             continue
 
-        # quality_scores.json 로드 (pruning_threshold 또는 augmentation_ratio 사용 시 필요)
+        # quality_scores.json 로드 (pruning_ratio 또는 augmentation_ratio 사용 시 필요)
         quality_map = {}
-        if pruning_threshold is not None or augmentation_ratio is not None:
+        if pruning_ratio is not None or augmentation_ratio is not None:
             quality_file = seed_dir / "quality_scores.json"
             if not quality_file.exists():
                 warnings.warn(
@@ -109,12 +112,11 @@ def _collect_defect_paths(
     if not candidates:
         return []
 
-    # ── 2단계: pruning_threshold 필터링 ──────────────────────────────────
-    if pruning_threshold is not None:
-        candidates = [
-            (src, dst, q) for src, dst, q in candidates
-            if q >= pruning_threshold
-        ]
+    # ── 2단계: pruning_ratio rank 기반 필터링 ────────────────────────────
+    if pruning_ratio is not None and candidates:
+        candidates = sorted(candidates, key=lambda x: x[2], reverse=True)
+        keep = max(1, int(len(candidates) * pruning_ratio))
+        candidates = candidates[:keep]
 
     # ── 3단계: augmentation_ratio 기반 샘플링 ────────────────────────────
     if augmentation_ratio is not None and good_count > 0:
@@ -290,11 +292,10 @@ def build_dataset_groups(
     cat_dir: str,
     image_dir: str,
     seed_dirs: list[str],
-    pruning_threshold: float = 0.6,
+    pruning_ratio: float | None = 0.5,
     augmentation_ratio_full: float | None = None,
     augmentation_ratio_pruned: float | None = None,
     augmentation_ratio_by_domain: dict | None = None,
-    pruning_threshold_by_domain: dict | None = None,
     split_ratio: float | None = None,
     split_seed: int = 42,
     workers: int = 0,
@@ -307,18 +308,16 @@ def build_dataset_groups(
         image_dir: 원본 train/good 이미지 디렉터리.
         seed_dirs: dataset_config.json 에서 추출한 seed_dir 경로 목록.
             baseline/test/{defect_type}/ 구성에 사용.
-        pruning_threshold: aroma_pruned 의 quality_score 최솟값.
+        pruning_ratio: aroma_pruned 의 quality_score 상위 비율 (0~1, None이면 비활성).
+            예: 0.5 → 전체 후보 중 quality_score 기준 상위 50% 선택.
+            도메인·카테고리 무관하게 동일하게 적용 (domain-agnostic rank 기반).
+            augmentation_ratio 적용 전 품질 pre-filter로 동작.
         augmentation_ratio_full: aroma_full의 원본 대비 합성 defect 비율
             (None이면 모든 defect 사용). 예: 2.0 → good 209개면 defect 418개.
         augmentation_ratio_pruned: aroma_pruned의 원본 대비 합성 defect 비율.
         augmentation_ratio_by_domain: 도메인별 비율 설정 (dict).
             예: {"isp": {"full": 1.0, "pruned": 0.5}, "mvtec": {...}}
             이 값이 설정되면 도메인 추출 후 우선 적용됨.
-        pruning_threshold_by_domain: 도메인별 pruning_threshold override (dict).
-            예: {"isp": 0.6, "mvtec": 0.6, "visa": 0.4}
-            설정 시 해당 도메인에 global pruning_threshold 대신 사용됨.
-            VisA candle quality=0.493: artifact_score hf_ratio 상수(5.0)가
-            매끄러운 표면 텍스처에 맞지 않아 발생하는 캘리브레이션 문제 대응.
         split_ratio: train/test good 이미지 분할 비율 (0~1).
             None=원본 데이터셋 분할 사용 (기본 동작).
             설정 시 train/good + test/good 전체를 pooling 후
@@ -359,23 +358,13 @@ def build_dataset_groups(
         ratio_full = augmentation_ratio_full
         ratio_pruned = augmentation_ratio_pruned
 
-    # 도메인별 pruning_threshold override
-    if pruning_threshold_by_domain and domain in pruning_threshold_by_domain:
-        effective_threshold = pruning_threshold_by_domain[domain]
-    else:
-        effective_threshold = pruning_threshold
-
     # Skip 조건 확인
     # stage4_output 이 존재하고 이전 실행에서 실제 defect 가 수집됐을 때만 skip.
     # stage4 가 미실행인 채로 캐시된 경우(defect_count=0) stage4 완료 후 재실행 가능하도록 skip 하지 않음.
     stage4_dir = cat_path / "stage4_output"
     if report_path.exists():
         cached = json.loads(report_path.read_text())
-        threshold_match = abs(
-            cached.get("effective_pruning_threshold",
-                        cached.get("pruning_threshold", -1))
-            - effective_threshold
-        ) < 1e-6
+        pruning_ratio_match = cached.get("pruning_ratio") == pruning_ratio
         ratio_full_match = (
             cached.get("augmentation_ratio_full") == ratio_full
         )
@@ -393,7 +382,7 @@ def build_dataset_groups(
         balance_match = (
             cached.get("balance_defect_types", False) == balance_defect_types
         )
-        if (threshold_match and ratio_full_match and ratio_pruned_match and
+        if (pruning_ratio_match and ratio_full_match and ratio_pruned_match and
                 split_ratio_match and split_seed_match and balance_match and
                 (cached_has_defects or not stage4_now_exists)):
             return cached
@@ -479,7 +468,7 @@ def build_dataset_groups(
 
     full_defect_pairs = _collect_defect_paths(
         cat_dir,
-        pruning_threshold=None,
+        pruning_ratio=None,
         augmentation_ratio=ratio_full,
         good_count=good_count,
         balance_defect_types=balance_defect_types,
@@ -523,7 +512,7 @@ def build_dataset_groups(
 
     pruned_defect_pairs = _collect_defect_paths(
         cat_dir,
-        pruning_threshold=effective_threshold,
+        pruning_ratio=pruning_ratio,
         augmentation_ratio=ratio_pruned,
         good_count=good_count,
         balance_defect_types=balance_defect_types,
@@ -543,8 +532,7 @@ def build_dataset_groups(
                          desc="  aroma_pruned/train/defect", leave=False))
 
     report = {
-        "pruning_threshold": pruning_threshold,
-        "effective_pruning_threshold": effective_threshold,
+        "pruning_ratio": pruning_ratio,
         "augmentation_ratio_full": ratio_full,
         "augmentation_ratio_pruned": ratio_pruned,
         "split_ratio": split_ratio,

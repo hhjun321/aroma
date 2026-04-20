@@ -18,11 +18,10 @@ def run_dataset_builder(
     cat_dir: str,
     image_dir: str,
     seed_dirs: list[str],
-    pruning_threshold: float = 0.6,
+    pruning_ratio: float | None = 0.5,
     augmentation_ratio_full: float | None = None,
     augmentation_ratio_pruned: float | None = None,
     augmentation_ratio_by_domain: dict | None = None,
-    pruning_threshold_by_domain: dict | None = None,
     split_ratio: float | None = None,
     split_seed: int = 42,
     workers: int = 0,
@@ -40,11 +39,10 @@ def run_dataset_builder(
         cat_dir=cat_dir,
         image_dir=image_dir,
         seed_dirs=seed_dirs,
-        pruning_threshold=pruning_threshold,
+        pruning_ratio=pruning_ratio,
         augmentation_ratio_full=augmentation_ratio_full,
         augmentation_ratio_pruned=augmentation_ratio_pruned,
         augmentation_ratio_by_domain=augmentation_ratio_by_domain,
-        pruning_threshold_by_domain=pruning_threshold_by_domain,
         split_ratio=split_ratio,
         split_seed=split_seed,
         workers=workers,
@@ -62,8 +60,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="원본 train/good 이미지 디렉터리.")
     p.add_argument("--seed_dirs", nargs="+", required=True,
                    help="dataset_config.json 의 seed_dir 경로 목록 (공백 구분).")
-    p.add_argument("--pruning_threshold", type=float, default=0.6,
-                   help="aroma_pruned quality_score 최솟값 (기본 0.6).")
+    p.add_argument("--pruning_ratio", type=float, default=0.5,
+                   help="aroma_pruned quality_score 상위 비율 (기본 0.5 = 상위 50%%).")
     p.add_argument("--augmentation_ratio_full", type=float, default=None,
                    help="aroma_full 원본 대비 합성 defect 비율 (None=모두 사용).")
     p.add_argument("--augmentation_ratio_pruned", type=float, default=None,
@@ -86,7 +84,7 @@ def main() -> None:
 
     # ── Config 파일에서 dataset 설정 로드 ─────────────────────────────────
     augmentation_ratio_by_domain = None
-    pruning_threshold_by_domain = None
+    pruning_ratio = args.pruning_ratio
     split_ratio = args.split_ratio
     split_seed = args.split_seed
     balance_defect_types = False
@@ -98,8 +96,9 @@ def main() -> None:
                 config = yaml.safe_load(f)
             ds = config.get("dataset", {})
             augmentation_ratio_by_domain = ds.get("augmentation_ratio_by_domain")
-            pruning_threshold_by_domain = ds.get("pruning_threshold_by_domain")
             # CLI 인자가 없을 때만 config 값 사용 (CLI 우선)
+            if pruning_ratio is None:
+                pruning_ratio = ds.get("pruning_ratio", 0.5)
             if split_ratio is None:
                 split_ratio = ds.get("split_ratio")
             if split_seed == 42:
@@ -110,11 +109,10 @@ def main() -> None:
         cat_dir=args.cat_dir,
         image_dir=args.image_dir,
         seed_dirs=args.seed_dirs,
-        pruning_threshold=args.pruning_threshold,
+        pruning_ratio=pruning_ratio,
         augmentation_ratio_full=args.augmentation_ratio_full,
         augmentation_ratio_pruned=args.augmentation_ratio_pruned,
         augmentation_ratio_by_domain=augmentation_ratio_by_domain,
-        pruning_threshold_by_domain=pruning_threshold_by_domain,
         split_ratio=split_ratio,
         split_seed=split_seed,
         workers=args.workers,
@@ -123,7 +121,7 @@ def main() -> None:
     print(f"Domain: {result.get('domain', 'unknown')}")
     print(f"Applied ratio_full: {result.get('augmentation_ratio_full')}")
     print(f"Applied ratio_pruned: {result.get('augmentation_ratio_pruned')}")
-    print(f"effective_pruning_threshold: {result.get('effective_pruning_threshold')}")
+    print(f"pruning_ratio: {result.get('pruning_ratio')}")
     print(f"split_ratio: {result.get('split_ratio')}  split_seed: {result.get('split_seed')}")
     print(f"baseline   good={result['baseline']['good_count']}")
     print(f"aroma_full defect={result['aroma_full']['defect_count']}")

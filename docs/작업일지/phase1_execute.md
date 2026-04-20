@@ -1,4 +1,7 @@
-# AROMA Stage 1–6 Colab 실행 셀
+# AROMA Phase 1 — Stage 1–6 Colab 실행 셀
+
+> **합성 방식:** MPB (Masked Poisson Blending) — Stage 4: `stage4_mpb_synthesis.py`
+> Phase 2 (Diffusion 교체) 실행은 `phase2_execute.md` 참조.
 
 ## 규칙
 
@@ -602,7 +605,7 @@ else:
 
 ## Stage 6: 증강 데이터셋 구성
 
-**Sentinel:** `{cat_dir}/augmented_dataset/build_report.json` (threshold 일치 + defect 존재)
+**Sentinel:** `{cat_dir}/augmented_dataset/build_report.json` (pruning_ratio 일치 + defect 존재)
 **병렬:** 카테고리 단위 `ThreadPoolExecutor` (I/O-bound Drive 파일 복사)
 
 ```python
@@ -624,12 +627,7 @@ LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 # 병렬 설정
 NUM_IO_THREADS = 8  # 카테고리 내부 파일 복사 스레드 수 (I/O-bound → Thread 유리)
 CAT_THREADS    = 2  # 카테고리 단위 동시 처리 수 (Drive 동시 쓰기 안정성 고려)
-PRUNING_THRESHOLD = 0.6  # aroma_pruned quality 임계값 (global fallback)
-PRUNING_THRESHOLD_BY_DOMAIN = {  # 도메인별 override (visa candle=0.493 대응)
-    "isp": 0.6,
-    "mvtec": 0.6,
-    "visa": 0.4,
-}
+PRUNING_RATIO = 0.5  # aroma_pruned: quality_score 상위 50% rank 기반 선택
 SPLIT_RATIO           = 0.8   # good 이미지 train/test 비율 (None=원본 분할 유지)
 SPLIT_SEED            = 42    # 결정적 분할 시드
 BALANCE_DEFECT_TYPES  = True  # seed_dirs 배열 항목의 유형별 균등 샘플링
@@ -664,15 +662,14 @@ else:
     def _run_stage6(args):
         cat_dir, image_dir, seed_dirs = args
         run_dataset_builder(
-            cat_dir                    = cat_dir,
-            image_dir                  = image_dir,
-            seed_dirs                  = seed_dirs,
-            pruning_threshold          = PRUNING_THRESHOLD,
-            pruning_threshold_by_domain= PRUNING_THRESHOLD_BY_DOMAIN,
-            split_ratio                = SPLIT_RATIO,
-            split_seed                 = SPLIT_SEED,
-            workers                    = NUM_IO_THREADS,
-            balance_defect_types       = BALANCE_DEFECT_TYPES,
+            cat_dir              = cat_dir,
+            image_dir            = image_dir,
+            seed_dirs            = seed_dirs,
+            pruning_ratio        = PRUNING_RATIO,
+            split_ratio          = SPLIT_RATIO,
+            split_seed           = SPLIT_SEED,
+            workers              = NUM_IO_THREADS,
+            balance_defect_types = BALANCE_DEFECT_TYPES,
         )
         return Path(cat_dir).name
 
