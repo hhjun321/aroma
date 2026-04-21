@@ -41,6 +41,9 @@ dataset:
     visa: segmentation
   train_batch_size: 16
 
+synthesis:
+  max_images_per_seed: 50   # seed당 최대 합성 이미지 수 (null → 전체 good 이미지)
+
 dataset_groups:
   baseline:
     description: 원본 train/good 만 (pretrained 특징 거리)

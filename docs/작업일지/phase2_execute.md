@@ -77,7 +77,7 @@ Stage 3 (레이아웃 로직) 출력은 Phase 1 과 동일하게 사용한다.
 > 결과는 로컬에 쓰고 Drive 에 업로드. Drive FUSE I/O 병목 해소.
 
 ```python
-import json, sys, shutil, time
+import json, sys, shutil, time, yaml
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from tqdm.auto import tqdm
@@ -85,12 +85,15 @@ from tqdm.auto import tqdm
 sys.path.insert(0, "/content/aroma")
 from stage4_diffusion_synthesis import run_synthesis_batch
 
-REPO   = Path("/content/aroma")
-CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+REPO      = Path("/content/aroma")
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
 CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
 LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+
+MAX_IMAGES_PER_SEED = BENCH_CFG.get("synthesis", {}).get("max_images_per_seed", 50)
 
 # Diffusion 파라미터 (CASDA 검증값)
 CONTROLNET_MODEL    = None    # None → pretrained lllyasviel/sd-controlnet-canny 사용
@@ -183,6 +186,7 @@ else:
                 guidance_scale      = GUIDANCE_SCALE,
                 conditioning_scale  = CONDITIONING_SCALE,
                 seed                = SEED,
+                max_images_per_seed = MAX_IMAGES_PER_SEED,
             )
             infer_sec = time.time() - t1
 

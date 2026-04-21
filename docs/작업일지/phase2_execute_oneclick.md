@@ -55,7 +55,7 @@ STRENGTH            = 0.7
 GUIDANCE_SCALE      = 7.5
 CONDITIONING_SCALE  = 0.7   # 학습 1.0 → 추론 0.7 (아티팩트 방지)
 DIFFUSION_SEED      = 42
-MAX_IMAGES_PER_SEED = 50    # seed당 최대 합성 이미지 수 (None → 전체 good 이미지)
+MAX_IMAGES_PER_SEED = BENCH_CFG.get("synthesis", {}).get("max_images_per_seed", 50)
 
 # Stage 5 병렬
 SEED_THREADS = 4    # seed 단위 동시 처리
@@ -74,13 +74,14 @@ DATASET_GROUP        = "aroma_diffusion"
 LOCAL_TMP = Path("/content/tmp_phase2")
 # ─────────────────────────────────────────────────────────────────────
 
-import json, sys
+import json, sys, yaml
 from pathlib import Path
 
 sys.path.insert(0, "/content/aroma")
-REPO   = Path("/content/aroma")
-CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
-LABEL  = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+REPO      = Path("/content/aroma")
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+LABEL     = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 
 _LOCAL_DOMAIN_PATH = {
     "isp":   LOCAL_TMP / "isp" / "unsupervised",

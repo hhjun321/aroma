@@ -32,6 +32,9 @@ dataset:
     visa: segmentation
   train_batch_size: 16
 
+synthesis:
+  max_images_per_seed: 50   # seed당 최대 합성 이미지 수 (null → 전체 good 이미지)
+
 # Phase 2 비교 그룹: MPB (Phase 1) vs Diffusion (Phase 2)
 # 핵심 비교 지표: aroma_mpb vs aroma_diffusion — MPB 블러 해소 검증
 dataset_groups:

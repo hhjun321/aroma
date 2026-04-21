@@ -403,15 +403,16 @@ else:
 > 결과만 Drive로 업로드. placement_map의 `defect_path`를 로컬 경로로 치환.
 
 ```python
-import json, sys, shutil, time
+import json, sys, shutil, time, yaml
 from pathlib import Path
 from tqdm.auto import tqdm
 
 sys.path.insert(0, "/content/aroma")
 from stage4_mpb_synthesis import run_synthesis_batch
 
-REPO   = Path("/content/aroma")
-CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+REPO      = Path("/content/aroma")
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment.yaml").read_text())
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER      = "isp"
 LABEL              = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
@@ -419,7 +420,7 @@ USE_FAST_BLEND     = True
 IMG_THREADS        = 4
 PNG_COMPRESSION    = {"isp": 3, "mvtec": 3, "visa": 1}[DOMAIN_FILTER]
 MAX_BACKGROUND_DIM = None   # 해상도 불일치 방지 — 변경 금지
-MAX_IMAGES_PER_SEED = 50    # seed당 최대 합성 이미지 수 (None → 전체 good 이미지)
+MAX_IMAGES_PER_SEED = BENCH_CFG.get("synthesis", {}).get("max_images_per_seed", 50)
 LOCAL_TMP          = Path("/content/tmp_stage4")
 
 ENTRIES = [(k, v) for k, v in CONFIG.items()
