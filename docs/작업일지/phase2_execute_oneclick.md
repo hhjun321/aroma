@@ -11,7 +11,12 @@
 3. **셀 3**: Stage 4 — Diffusion 합성 (GPU)
 4. **셀 4**: Stage 5 — 품질 점수 + Drive 체크포인트 업데이트
 5. **셀 5**: Stage 6 — 데이터셋 구성 + Drive 업로드
-6. **런타임 → 모두 실행** 또는 셀 순서대로 실행
+6. **셀 7**: Stage 7 — 벤치마크
+7. **런타임 → 모두 실행** 또는 셀 순서대로 실행
+
+**재실행이 필요한 경우:**
+- Stage 4-5-6 재실행: **셀 3-0** (해당 카테고리 합성·데이터셋 초기화)
+- Stage 7 재실행: **셀 6-0** (`RESET_GROUPS` 지정 후 experiment_meta.json 삭제)
 
 ## 설계 원칙
 
@@ -598,6 +603,47 @@ for key, entry in CONFIG.items():
 
 ---
 
+## 셀 6-0: Stage 7 초기화 (선택)
+
+> 특정 카테고리·그룹의 벤치마크를 처음부터 재실행할 때 사용.
+> Drive `DRIVE_OUTPUT_DIR/{cat}/{model}/{group}/experiment_meta.json` 을 삭제.
+> `CAT_ONLY` / `RESET_GROUPS` 로 범위를 한정할 것.
+
+```python
+import shutil
+from pathlib import Path
+
+# ── 초기화 범위 설정 ──────────────────────────────────────────────────
+CAT_ONLY_RESET    = ["bottle"]          # None → 전체 카테고리
+RESET_GROUPS      = ["aroma_diffusion"] # None → 전체 그룹 (baseline 포함 주의)
+RESET_MODELS      = None                # None → 전체 모델
+
+# 셀 7의 DRIVE_OUTPUT_DIR 와 동일하게 맞출 것
+DRIVE_OUTPUT_DIR_ = (
+    BENCH_CFG["experiment"].get("results_dir")
+    or "/content/drive/MyDrive/data/Aroma/benchmark_results_phase2"
+)
+_models = RESET_MODELS or list(BENCH_CFG["models"].keys())
+_groups = RESET_GROUPS or list(BENCH_CFG["dataset_groups"].keys())
+
+drive_root = Path(DRIVE_OUTPUT_DIR_)
+for cat_dir in sorted(drive_root.iterdir()):
+    if not cat_dir.is_dir():
+        continue
+    if CAT_ONLY_RESET and cat_dir.name not in CAT_ONLY_RESET:
+        continue
+    for model in _models:
+        for group in _groups:
+            meta = cat_dir / model / group / "experiment_meta.json"
+            if meta.exists():
+                meta.unlink()
+                print(f"  삭제: {cat_dir.name}/{model}/{group}/experiment_meta.json")
+
+print("초기화 완료 → 셀 7 재실행 가능")
+```
+
+---
+
 ## 셀 7: Stage 7 test set 준비 + 벤치마크 (로컬 SSD 캐시)
 
 > **로컬 SSD 최적화:** `augmented_dataset/{group}/train/` + `baseline/test/` 를
@@ -704,8 +750,16 @@ for key, entry in CONFIG.items():
         print(f"  ⚠ {cat_dir.name}: aroma_diffusion 미완료 → skip")
         continue
     out_root = Path(DRIVE_OUTPUT_DIR) / cat_dir.name
-    if all((out_root / m / g / "experiment_meta.json").exists()
-           for m in MODELS for g in GROUPS):
+    # 데이터가 실제로 존재하는 그룹만 skip 판정 대상으로 한정
+    # (aroma_mpb 등 미완료 그룹의 오래된 experiment_meta.json이 skip을 오유발하는 것을 방지)
+    present_groups = [
+        g for g in GROUPS
+        if (cat_dir / "augmented_dataset" / g / "train" / "defect").exists()
+    ]
+    if present_groups and all(
+        (out_root / m / g / "experiment_meta.json").exists()
+        for m in MODELS for g in present_groups
+    ):
         skip_bench += 1
     else:
         all_bench.append(cat_dir)
