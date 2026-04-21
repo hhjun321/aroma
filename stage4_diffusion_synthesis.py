@@ -100,7 +100,7 @@ def _make_roi_mask(placements: List[dict], h: int, w: int) -> np.ndarray:
 
 
 def _canny_control_image(defect_path: str, size: tuple) -> Image.Image:
-    """Stage 2 variant 이미지 → Canny 엣지 → ControlNet control image."""
+    """Stage 1b seed_path 원본 결함 이미지 → Canny 엣지 → ControlNet control image."""
     patch = cv2.imread(defect_path, cv2.IMREAD_GRAYSCALE)
     if patch is None:
         return Image.new("RGB", size, 128)
@@ -180,7 +180,7 @@ def _synthesize_one(
             generator=generator,
         ).images[0]
 
-    # CASDA 패턴: grayscale 후처리 → RGB 아티팩트 제거
+    # grayscale 후처리: 불필요한 RGB 아티팩트 제거 후 RGB 복원
     result_pil = result_pil.convert("L").convert("RGB")
 
     # 원본 해상도로 복원

@@ -112,6 +112,49 @@ print_report(results)
 
 ---
 
+## 셀 3-0: 재실행 전 데이터 초기화 (선택)
+
+> 특정 카테고리의 Stage 4-5-6 결과를 삭제하고 처음부터 재실행할 때 사용.
+> `stage4_diffusion_output/` (Drive 체크포인트) 와 `augmented_dataset/aroma_diffusion/` (Stage 6 출력) 을 제거.
+
+```python
+import shutil, json
+from pathlib import Path
+
+REPO   = Path("/content/aroma")
+CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+
+DOMAIN_FILTER = "mvtec"     # 셀 1과 동일하게 맞출 것
+CAT_ONLY      = ["bottle"]  # 초기화할 카테고리
+
+seen = set()
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+        continue
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+
+    targets = [
+        cat_dir / "stage4_diffusion_output",
+        cat_dir / "augmented_dataset" / "aroma_diffusion",
+    ]
+    for t in targets:
+        if t.exists():
+            shutil.rmtree(str(t))
+            print(f"  삭제: {t}")
+        else:
+            print(f"  없음 (skip): {t}")
+
+print("초기화 완료 → 셀 3 재실행 가능")
+```
+
+---
+
 ## 셀 3: Stage 4-5-6 통합 파이프라인
 
 > **로컬 SSD 경로 구조** (`dataset_builder` 도메인 추출 로직 호환)

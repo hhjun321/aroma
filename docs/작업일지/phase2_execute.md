@@ -611,7 +611,13 @@ BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.ya
 DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
 CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
 LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]  # → "MVTec AD"
-OUTPUT_DIR    = str(REPO / "outputs" / "benchmark_results_phase2")
+
+# Drive 저장 경로: yaml의 results_dir 값 사용 (없으면 기본값)
+DRIVE_OUTPUT_DIR = (
+    BENCH_CFG["experiment"].get("results_dir")
+    or "/content/drive/MyDrive/data/Aroma/benchmark_results_phase2"
+)
+print(f"Drive 저장 경로: {DRIVE_OUTPUT_DIR}")
 
 EXCLUDE = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
 MODELS  = list(BENCH_CFG["models"].keys())
@@ -637,7 +643,7 @@ for key, entry in CONFIG.items():
     if not (cat_dir / "augmented_dataset" / "aroma_diffusion" / "train" / "defect").exists():
         print(f"  ⚠ {cat_dir.name}: aroma_diffusion 미완료 (Stage 4/6 Phase2 필요) → skip")
         continue
-    out_root = Path(OUTPUT_DIR) / cat_dir.name
+    out_root = Path(DRIVE_OUTPUT_DIR) / cat_dir.name
     if all((out_root / m / g / "experiment_meta.json").exists()
            for m in MODELS for g in GROUPS):
         skip += 1
@@ -658,7 +664,8 @@ else:
                 config_path = CONFIG_PATH,
                 cat_dir     = str(cat_dir),
                 resume      = True,
-                output_dir  = OUTPUT_DIR,
+                output_dir  = DRIVE_OUTPUT_DIR,
+                results_dir = DRIVE_OUTPUT_DIR,
             )
             for model_name, group_results in results.items():
                 for group, val in group_results.items():
@@ -686,7 +693,6 @@ import json
 from pathlib import Path
 
 REPO          = Path("/content/aroma")
-OUTPUT_DIR    = REPO / "outputs" / "benchmark_results_phase2"
 DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD (없으면 전체 출력)
 CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 (None → 전체)
 
@@ -695,6 +701,12 @@ BENCH_CFG = __import__("yaml").safe_load(
     (REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
 MODELS = list(BENCH_CFG["models"].keys())
 GROUPS = list(BENCH_CFG["dataset_groups"].keys())
+
+# 벤치마크 셀과 동일한 Drive 경로에서 결과 읽기
+DRIVE_OUTPUT_DIR = Path(
+    BENCH_CFG["experiment"].get("results_dir")
+    or "/content/drive/MyDrive/data/Aroma/benchmark_results_phase2"
+)
 
 if DOMAIN_FILTER:
     valid_cats = {Path(v.get("seed_dirs", [v["seed_dir"]])[0]).parents[1].name
@@ -706,7 +718,7 @@ if CAT_ONLY:
     valid_cats = (valid_cats or set()) & set(CAT_ONLY)
 
 rows = []
-for cat_dir in sorted(OUTPUT_DIR.iterdir()):
+for cat_dir in sorted(DRIVE_OUTPUT_DIR.iterdir()):
     if not cat_dir.is_dir():
         continue
     if valid_cats is not None and cat_dir.name not in valid_cats:
