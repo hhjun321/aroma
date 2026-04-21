@@ -1,0 +1,79 @@
+dataset:
+  eval_batch_size: 32
+  eval_chunk_size: 64   # YOLO predict 청크 크기 (대량 test set OOM 방지)
+  image_size: 512
+  num_workers: 4
+  pruning_ratio: 0.5  # quality_score 상위 50% rank 기반 선택 (Stage 6에서 적용됨)
+
+  # train/test good 이미지 분할 비율
+  split_ratio: 0.8   # 전체 good 이미지의 80% train, 20% test
+  split_seed: 42
+
+  # 도메인별 증강 비율 (domain → {full, pruned})
+  augmentation_ratio_by_domain:
+    isp:
+      full: 1.0
+      pruned: 0.5
+    mvtec:
+      full: 2.0
+      pruned: 1.5
+    visa:
+      full: 2.0
+      pruned: 1.5
+
+  augmentation_ratio_full: null
+  augmentation_ratio_pruned: null
+
+  defect_type_balance: true
+
+  task_by_domain:
+    isp: classification
+    mvtec: segmentation
+    visa: segmentation
+  train_batch_size: 16
+
+# Phase 2 비교 그룹: MPB (Phase 1) vs Diffusion (Phase 2)
+# 핵심 비교 지표: aroma_mpb vs aroma_diffusion — MPB 블러 해소 검증
+dataset_groups:
+  baseline:
+    description: 원본 train/good 만 (pretrained 특징 거리)
+  aroma_mpb:
+    description: 원본 + Phase 1 MPB 합성 (stage4_output 기반)
+  aroma_diffusion:
+    description: 원본 + Phase 2 Diffusion 합성 (stage4_diffusion_output 기반)
+
+evaluation:
+  metrics:
+    - image_auroc
+    - image_f1
+    - pixel_auroc
+  pixel_auroc_domains:
+    - mvtec
+    - visa
+
+category_filter:
+  exclude:
+    isp:
+      - LSM_2
+    mvtec: []
+    visa: []
+
+experiment:
+  name: aroma_benchmark_phase2
+  output_dir: outputs/benchmark_results_phase2
+  results_dir: /content/drive/MyDrive/data/Aroma/benchmark_results_phase2
+  seed: 42
+
+models:
+  yolo11:
+    model: yolo11n-cls.pt
+    epochs: 30
+    lr: 0.01
+    pretrained: true
+
+  efficientdet_d0:
+    backbone: efficientdet_d0
+    epochs: 30
+    lr: 0.0001
+    optimizer: adam
+    pretrained: true
