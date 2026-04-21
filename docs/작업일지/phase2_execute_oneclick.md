@@ -377,15 +377,19 @@ from stage7_benchmark import _ensure_test_dir, run_benchmark
 
 CONFIG_PATH = str(REPO / "configs" / "benchmark_experiment_phase2.yaml")
 BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
-OUTPUT_DIR  = str(REPO / "outputs" / "benchmark_results_phase2")
 
 EXCLUDE             = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
 MODELS              = list(BENCH_CFG["models"].keys())
 GROUPS              = list(BENCH_CFG["dataset_groups"].keys())
 NON_BASELINE_GROUPS = [g for g in GROUPS if g != "baseline"]
 
-# results_dir: benchmark_results.json / benchmark_comparison.csv 저장 (yaml 설정값 우선)
-DRIVE_RESULTS_DIR = BENCH_CFG["experiment"].get("results_dir") or OUTPUT_DIR
+# Drive 저장 경로: experiment_meta.json + benchmark_results.json/csv 모두 여기에 저장
+# yaml의 results_dir 값을 사용 (benchmark_experiment_phase2.yaml → experiment.results_dir)
+DRIVE_OUTPUT_DIR = (
+    BENCH_CFG["experiment"].get("results_dir")
+    or "/content/drive/MyDrive/data/Aroma/benchmark_results_phase2"
+)
+print(f"Drive 저장 경로: {DRIVE_OUTPUT_DIR}")
 
 LOCAL_TMP_S7 = Path("/content/tmp_stage7")
 # {domain}/{cat} 구조: run_benchmark 내부 domain 감지 (pixel_auroc 여부) 에 사용
@@ -454,7 +458,7 @@ for key, entry in CONFIG.items():
     if not (cat_dir / "augmented_dataset" / "aroma_diffusion" / "train" / "defect").exists():
         print(f"  ⚠ {cat_dir.name}: aroma_diffusion 미완료 → skip")
         continue
-    out_root = Path(OUTPUT_DIR) / cat_dir.name
+    out_root = Path(DRIVE_OUTPUT_DIR) / cat_dir.name
     if all((out_root / m / g / "experiment_meta.json").exists()
            for m in MODELS for g in GROUPS):
         skip_bench += 1
@@ -469,9 +473,9 @@ else:
     bench_failed = []
 
     for cat_dir in tqdm(all_bench, desc=f"Stage7 {LABEL}"):
-        local_cat  = _LOCAL_S7_BASE / cat_dir.name          # 학습 데이터 캐시
-        local_out  = LOCAL_TMP_S7 / "results" / cat_dir.name  # 실험 메타 로컬 저장
-        drive_out  = Path(OUTPUT_DIR) / cat_dir.name          # Drive 업로드 대상
+        local_cat  = _LOCAL_S7_BASE / cat_dir.name              # 학습 데이터 캐시
+        local_out  = LOCAL_TMP_S7 / "results" / cat_dir.name  # 실험 메타 로컬 임시 저장
+        drive_out  = Path(DRIVE_OUTPUT_DIR) / cat_dir.name    # Drive 최종 저장
 
         t_total = time.time()
         try:
@@ -496,15 +500,15 @@ else:
 
             # ── 벤치마크 실행 (로컬 경로) ────────────────────────────
             # cat_dir=local_cat → 학습·평가 이미지를 로컬 NVMe에서 읽음
-            # output_dir=local_out → experiment_meta.json 등 로컬에만 기록
-            # results_dir=DRIVE_RESULTS_DIR → benchmark_results.json/csv 는 Drive 직접 기록
+            # output_dir=local_out → experiment_meta.json 등 로컬 임시 기록
+            # results_dir=DRIVE_OUTPUT_DIR → benchmark_results.json/csv 실험 1건마다 Drive 직접 기록
             t = time.time()
             results = run_benchmark(
                 config_path = CONFIG_PATH,
                 cat_dir     = str(local_cat),
                 resume      = True,
                 output_dir  = str(local_out),
-                results_dir = DRIVE_RESULTS_DIR,
+                results_dir = DRIVE_OUTPUT_DIR,
             )
             bench_sec = time.time() - t
 
@@ -552,12 +556,17 @@ else:
 import json, yaml
 from pathlib import Path
 
-OUTPUT_DIR = REPO / "outputs" / "benchmark_results_phase2"
 BENCH_CFG  = yaml.safe_load(
     (REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text()
 )
 MODELS = list(BENCH_CFG["models"].keys())
 GROUPS = list(BENCH_CFG["dataset_groups"].keys())
+
+# 셀 5와 동일한 Drive 경로에서 결과 읽기
+DRIVE_OUTPUT_DIR = Path(
+    BENCH_CFG["experiment"].get("results_dir")
+    or "/content/drive/MyDrive/data/Aroma/benchmark_results_phase2"
+)
 
 if CAT_ONLY:
     valid_cats = set(CAT_ONLY)
@@ -571,7 +580,7 @@ else:
     valid_cats = None
 
 rows = []
-for cat_dir in sorted(OUTPUT_DIR.iterdir()):
+for cat_dir in sorted(DRIVE_OUTPUT_DIR.iterdir()):
     if not cat_dir.is_dir():
         continue
     if valid_cats is not None and cat_dir.name not in valid_cats:
