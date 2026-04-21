@@ -394,24 +394,28 @@ else:
 ## 셀 5: Stage 6 — 데이터셋 구성
 
 > **skip:** `augmented_dataset/aroma_diffusion/train/defect` 존재 → 카테고리 skip
+>
+> **병렬:** `CAT_THREADS=2` 카테고리 동시 처리 (Stage 4 종료 후 순수 I/O-bound)
+>
+> **선택적 복사:** `_collect_defect_paths`로 Drive의 `quality_scores.json`만 읽어 선택 대상 결정 →
+> 선택된 PNG만 로컬 SSD로 복사. 전체 `stage4_diffusion_output` 복사 대비 파일 수 대폭 절감.
+> `preselected_defect_pairs_full` 전달로 내부 재선택 없이 직접 빌드.
 
 ```python
 import shutil, time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm.auto import tqdm
 
 from stage6_dataset_builder import run_dataset_builder
+from utils.dataset_builder import _collect_defect_paths
 
 
-def _parallel_copytree(src_dst_pairs, max_workers=4):
-    def _copy(pair):
-        src, dst = Path(pair[0]), Path(pair[1])
-        if src.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        list(ex.map(_copy, src_dst_pairs))
+CAT_THREADS = 2   # 카테고리 동시 처리 (Drive 동시 쓰기 안정성 고려)
+
+# augmentation_ratio_by_domain: benchmark_experiment_phase2.yaml 에서 로드
+AUGMENTATION_RATIO_BY_DOMAIN = BENCH_CFG.get("dataset", {}).get("augmentation_ratio_by_domain")
+_ratio_full = (AUGMENTATION_RATIO_BY_DOMAIN or {}).get(DOMAIN_FILTER, {}).get("full")
 
 
 # ── 카테고리 목록 구성 ─────────────────────────────────────────────────
@@ -442,39 +446,70 @@ else:
     print(f"{LABEL} Stage 6: {len(all_cats)} categories 처리 예정 (skip {skip}건)")
     failed = []
 
-    for cat_dir, image_dir, seed_dirs in tqdm(all_cats, desc=f"Stage6 {LABEL}"):
+    def _run_stage6(args):
+        cat_dir, image_dir, seed_dirs = args
         local_cat    = _LOCAL_DOMAIN_PATH / cat_dir.name
         local_imgdir = local_cat / "train" / "good"
-        local_stage4 = local_cat / STAGE4_SUBDIR
-        drive_stage4 = cat_dir / STAGE4_SUBDIR
 
         t_total = time.time()
         try:
-            # ── Drive 체크포인트 + image_dir → 로컬 복사 ─────────────────
-            t = time.time()
-            copy_pairs = [(image_dir, local_imgdir)]
-            if drive_stage4.exists():
-                copy_pairs.append((drive_stage4, local_stage4))
-            _parallel_copytree(copy_pairs, max_workers=4)
-            copy_sec = time.time() - t
+            # ── 1단계: Drive quality_scores.json으로 선택 대상 결정 ────────
+            _exts = ("*.png", "*.jpg", "*.jpeg")
+            good_count_drive = sum(len(list(Path(image_dir).glob(e))) for e in _exts)
 
-            # ── 데이터셋 구성 ─────────────────────────────────────────────
-            t = time.time()
-            result = run_dataset_builder(
-                cat_dir              = str(local_cat),
-                image_dir            = str(local_imgdir),
-                seed_dirs            = seed_dirs,
+            pairs_drive = _collect_defect_paths(
+                str(cat_dir),
                 pruning_ratio        = PRUNING_RATIO,
-                split_ratio          = SPLIT_RATIO,
-                split_seed           = SPLIT_SEED,
-                workers              = NUM_IO_THREADS,
+                augmentation_ratio   = _ratio_full,
+                good_count           = good_count_drive,
                 balance_defect_types = BALANCE_DEFECT_TYPES,
                 stage4_subdir        = STAGE4_SUBDIR,
-                dataset_group        = DATASET_GROUP,
+            )
+
+            # ── 2단계: 선택된 PNG만 로컬 SSD로 복사 ─────────────────────
+            t = time.time()
+
+            def _copy_file(src_dst):
+                src, dst = Path(src_dst[0]), Path(src_dst[1])
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst))
+
+            file_tasks = [
+                (src_str, str(local_cat / Path(src_str).relative_to(cat_dir)))
+                for src_str, _ in pairs_drive
+            ]
+            with ThreadPoolExecutor(max_workers=NUM_IO_THREADS) as ex:
+                list(tqdm(ex.map(_copy_file, file_tasks), total=len(file_tasks),
+                          desc=f"  {cat_dir.name} defect PNG", leave=False))
+
+            shutil.copytree(str(image_dir), str(local_imgdir), dirs_exist_ok=True)
+            copy_sec = time.time() - t
+
+            # ── 3단계: 경로 리매핑 → 로컬 pairs ─────────────────────────
+            pairs_local = [
+                (str(local_cat / Path(src).relative_to(cat_dir)), dst_name)
+                for src, dst_name in pairs_drive
+            ]
+
+            # ── 4단계: 데이터셋 구성 (preselected → 내부 재선택 없음) ────
+            t = time.time()
+            result = run_dataset_builder(
+                cat_dir                       = str(local_cat),
+                image_dir                     = str(local_imgdir),
+                seed_dirs                     = seed_dirs,
+                pruning_ratio                 = PRUNING_RATIO,
+                augmentation_ratio_by_domain  = AUGMENTATION_RATIO_BY_DOMAIN,
+                split_ratio                   = SPLIT_RATIO,
+                split_seed                    = SPLIT_SEED,
+                workers                       = NUM_IO_THREADS,
+                balance_defect_types          = BALANCE_DEFECT_TYPES,
+                stage4_subdir                 = STAGE4_SUBDIR,
+                dataset_group                 = DATASET_GROUP,
+                preselected_defect_pairs_full = pairs_local,
             )
             build_sec = time.time() - t
 
-            # ── Drive 업로드: aroma_diffusion 그룹만 ─────────────────────
+            # ── 5단계: Drive 업로드: aroma_diffusion 그룹만 ─────────────
             t = time.time()
             drive_aroma = cat_dir / "augmented_dataset" / DATASET_GROUP
             if drive_aroma.exists():
@@ -488,16 +523,25 @@ else:
             defect_count = result.get(DATASET_GROUP, {}).get("defect_count", "?")
             print(
                 f"  ✓ {cat_dir.name} [{time.time()-t_total:.0f}s 합계]  "
-                f"복사:{copy_sec:.0f}s  구성:{build_sec:.0f}s  업로드:{up_sec:.0f}s  "
-                f"[defect={defect_count}]"
+                f"선택:{len(pairs_drive)}장  복사:{copy_sec:.0f}s  "
+                f"구성:{build_sec:.0f}s  업로드:{up_sec:.0f}s  [defect={defect_count}]"
             )
-
-        except Exception as e:
-            import traceback
-            failed.append({"category": cat_dir.name, "error": str(e), "type": type(e).__name__})
-            traceback.print_exc()
         finally:
             shutil.rmtree(str(local_cat), ignore_errors=True)
+
+        return cat_dir.name
+
+    with tqdm(total=len(all_cats), desc=f"Stage6 {LABEL}") as bar:
+        with ThreadPoolExecutor(max_workers=CAT_THREADS) as ex:
+            futs = {ex.submit(_run_stage6, t): t for t in all_cats}
+            for fut in as_completed(futs):
+                cat_dir, *_ = futs[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    failed.append({"category": cat_dir.name,
+                                   "error": str(e), "type": type(e).__name__})
+                bar.update(1)
 
     print("\n" + (f"✓ {LABEL} Stage 6 완료" if not failed else f"✗ {len(failed)}건 실패"))
     for f in failed:
