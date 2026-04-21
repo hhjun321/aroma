@@ -5,6 +5,7 @@ Composites defect patches onto background images using cv2.seamlessClone
 """
 import argparse
 import logging
+import random
 import warnings
 from pathlib import Path
 from typing import List, Optional
@@ -316,6 +317,8 @@ def run_synthesis_batch(
     workers: int = 0,
     png_compression: int = 3,
     max_background_dim: Optional[int] = None,
+    max_images_per_seed: Optional[int] = None,
+    seed: int = 42,
 ) -> None:
     """Category-level batch synthesis with background caching.
 
@@ -353,9 +356,15 @@ def run_synthesis_batch(
     from utils.parallel import resolve_workers, run_parallel
 
     # Build {image_id: [(seed_id, placements), ...]}
+    # max_images_per_seed: seed별로 유효 entries를 샘플링 (재현성을 위해 seed 고정)
     image_seed_map: dict = {}
+    rng = random.Random(seed)
     for seed_id, pm_path in seed_placement_maps:
-        for entry in load_json(pm_path):
+        entries = [e for e in load_json(pm_path) if e.get("placements")]
+        if max_images_per_seed is not None and len(entries) > max_images_per_seed:
+            entries = rng.sample(entries, max_images_per_seed)
+            logger.info(f"  [{seed_id}] max_images_per_seed={max_images_per_seed} 적용")
+        for entry in entries:
             image_seed_map.setdefault(entry["image_id"], []).append(
                 (seed_id, entry.get("placements", []))
             )

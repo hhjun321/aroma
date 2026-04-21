@@ -419,6 +419,7 @@ USE_FAST_BLEND     = True
 IMG_THREADS        = 4
 PNG_COMPRESSION    = {"isp": 3, "mvtec": 3, "visa": 1}[DOMAIN_FILTER]
 MAX_BACKGROUND_DIM = None   # 해상도 불일치 방지 — 변경 금지
+MAX_IMAGES_PER_SEED = 50    # seed당 최대 합성 이미지 수 (None → 전체 good 이미지)
 LOCAL_TMP          = Path("/content/tmp_stage4")
 
 ENTRIES = [(k, v) for k, v in CONFIG.items()
@@ -500,14 +501,15 @@ else:
             # 4) 로컬 SSD에서 합성
             t1 = time.time()
             run_synthesis_batch(
-                image_dir           = str(local_imgdir),
-                seed_placement_maps = local_pm_pairs,
-                output_root         = str(local_stage4),
-                format              = "cls",
-                use_fast_blend      = USE_FAST_BLEND,
-                workers             = IMG_THREADS,
-                png_compression     = PNG_COMPRESSION,
-                max_background_dim  = MAX_BACKGROUND_DIM,
+                image_dir            = str(local_imgdir),
+                seed_placement_maps  = local_pm_pairs,
+                output_root          = str(local_stage4),
+                format               = "cls",
+                use_fast_blend       = USE_FAST_BLEND,
+                workers              = IMG_THREADS,
+                png_compression      = PNG_COMPRESSION,
+                max_background_dim   = MAX_BACKGROUND_DIM,
+                max_images_per_seed  = MAX_IMAGES_PER_SEED,
             )
             synth_sec = time.time() - t1
 

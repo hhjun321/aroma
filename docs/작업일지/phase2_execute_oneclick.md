@@ -55,6 +55,7 @@ STRENGTH            = 0.7
 GUIDANCE_SCALE      = 7.5
 CONDITIONING_SCALE  = 0.7   # 학습 1.0 → 추론 0.7 (아티팩트 방지)
 DIFFUSION_SEED      = 42
+MAX_IMAGES_PER_SEED = 50    # seed당 최대 합성 이미지 수 (None → 전체 good 이미지)
 
 # Stage 5 병렬
 SEED_THREADS = 4    # seed 단위 동시 처리
@@ -252,19 +253,20 @@ else:
             else:
                 t_infer = time.time()
                 run_synthesis_batch(
-                    image_dir           = str(local_imgdir),
-                    seed_placement_maps = seed_pm_pairs,
-                    output_root         = str(local_stage4),
-                    cat_dir             = str(cat_dir),  # stage1b_output 경로용 (Drive)
-                    format              = "cls",
-                    controlnet_model    = CONTROLNET_MODEL,
-                    device              = DEVICE,
-                    resolution          = RESOLUTION,
-                    num_inference_steps = NUM_INFERENCE_STEPS,
-                    strength            = STRENGTH,
-                    guidance_scale      = GUIDANCE_SCALE,
-                    conditioning_scale  = CONDITIONING_SCALE,
-                    seed                = DIFFUSION_SEED,
+                    image_dir            = str(local_imgdir),
+                    seed_placement_maps  = seed_pm_pairs,
+                    output_root          = str(local_stage4),
+                    cat_dir              = str(cat_dir),  # stage1b_output 경로용 (Drive)
+                    format               = "cls",
+                    controlnet_model     = CONTROLNET_MODEL,
+                    device               = DEVICE,
+                    resolution           = RESOLUTION,
+                    num_inference_steps  = NUM_INFERENCE_STEPS,
+                    strength             = STRENGTH,
+                    guidance_scale       = GUIDANCE_SCALE,
+                    conditioning_scale   = CONDITIONING_SCALE,
+                    seed                 = DIFFUSION_SEED,
+                    max_images_per_seed  = MAX_IMAGES_PER_SEED,
                 )
                 infer_sec = time.time() - t_infer
 

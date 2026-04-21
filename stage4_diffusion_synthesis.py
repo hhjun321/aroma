@@ -23,6 +23,7 @@ CASDA 검증 파라미터:
 """
 import argparse
 import logging
+import random
 from pathlib import Path
 from typing import List, Optional
 
@@ -219,6 +220,7 @@ def run_synthesis(
     guidance_scale: float = 7.5,
     conditioning_scale: float = 0.7,
     seed: int = 42,
+    max_images_per_seed: Optional[int] = None,
 ) -> None:
     """단일 seed에 대한 Diffusion 합성 실행."""
     validate_dir(image_dir, name="Background image_dir")
@@ -230,6 +232,12 @@ def run_synthesis(
     img_dir = Path(image_dir)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # 유효 entry만 추린 후 수량 제한 (재현성을 위해 seed 고정)
+    valid_entries = [e for e in entries if e.get("placements")]
+    if max_images_per_seed is not None and len(valid_entries) > max_images_per_seed:
+        rng = random.Random(seed)
+        valid_entries = rng.sample(valid_entries, max_images_per_seed)
+
     pipe = _get_pipeline(controlnet_model, device)
 
     # Canny와 PromptGenerator는 seed당 1회만 계산 (이미지마다 재계산 방지)
@@ -238,7 +246,7 @@ def run_synthesis(
     )
     prompt_gen = PromptGenerator(style="technical")
 
-    for i, entry in enumerate(entries):
+    for i, entry in enumerate(valid_entries):
         image_id: str = entry["image_id"]
         placements: List[dict] = entry.get("placements", [])
         if not placements:
@@ -280,6 +288,7 @@ def run_synthesis_batch(
     guidance_scale: float = 7.5,
     conditioning_scale: float = 0.7,
     seed: int = 42,
+    max_images_per_seed: Optional[int] = None,
 ) -> None:
     """카테고리 레벨 배치 합성. GPU 단일 점유이므로 순차 처리."""
     validate_dir(image_dir, name="Background image_dir")
@@ -300,17 +309,22 @@ def run_synthesis_batch(
         img_dir = Path(image_dir)
         seed_out = Path(output_root) / seed_id
 
+        # 유효 entry만 추린 후 수량 제한 (재현성을 위해 seed 고정)
+        valid_entries = [e for e in entries if e.get("placements")]
+        if max_images_per_seed is not None and len(valid_entries) > max_images_per_seed:
+            rng = random.Random(seed)
+            valid_entries = rng.sample(valid_entries, max_images_per_seed)
+            logger.info(f"  [{seed_id}] {len(entries)} → {max_images_per_seed}장 서브샘플")
+
         # Canny와 PromptGenerator는 seed당 1회만 계산 (이미지마다 재계산 방지)
         control_pil = _canny_control_image(
             seed_profile.get("seed_path", ""), (resolution, resolution)
         )
         prompt_gen = PromptGenerator(style="technical")
 
-        for i, entry in enumerate(entries):
+        for i, entry in enumerate(valid_entries):
             image_id: str = entry["image_id"]
             placements: List[dict] = entry.get("placements", [])
-            if not placements:
-                continue
             bg_path = img_dir / f"{image_id}.png"
             if not bg_path.exists():
                 continue
