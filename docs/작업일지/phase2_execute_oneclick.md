@@ -185,50 +185,53 @@ else:
 
         try:
             # ── Stage 4: Diffusion 합성 ──────────────────────────────
+            # Drive에 결과가 부분/완료 존재하면 일단 로컬로 복사.
+            # 완료 여부와 무관하게 로컬 기준으로 미완료 seed만 추론 → 중단 재개 지원.
             t = time.time()
-            stage4_done = drive_stage4.exists() and any(drive_stage4.glob("**/defect/*.png"))
+            copy_pairs = [(image_dir, local_imgdir)]
+            if drive_stage4.exists():
+                copy_pairs.append((drive_stage4, local_stage4))
+            _parallel_copytree(copy_pairs, max_workers=4)
+            copy_sec = time.time() - t
 
-            if stage4_done:
-                # Drive에 이미 있음 → local 복사 (재추론 없음, Stage 5·6 재사용)
-                _parallel_copytree([
-                    (image_dir,    local_imgdir),
-                    (drive_stage4, local_stage4),
-                ], max_workers=4)
-                timing["s4"] = f"Drive캐시({time.time()-t:.0f}s)"
+            # 로컬 기준 미완료 seed 목록 (sentinel: {seed}/defect/*.png)
+            stage3_dir = cat_dir / "stage3_output"
+            seed_pm_pairs = [
+                (d.name, str(d / "placement_map.json"))
+                for d in sorted(stage3_dir.iterdir())
+                if d.is_dir()
+                and (d / "placement_map.json").exists()
+                and not any((local_stage4 / d.name / "defect").glob("*.png"))
+            ]
+
+            if not seed_pm_pairs:
+                timing["s4"] = f"Drive캐시({copy_sec:.0f}s)"
             else:
-                # image_dir 복사 후 Diffusion 추론
-                _parallel_copytree([(image_dir, local_imgdir)], max_workers=4)
-
-                stage3_dir = cat_dir / "stage3_output"
-                seed_pm_pairs = [
-                    (d.name, str(d / "placement_map.json"))
-                    for d in sorted(stage3_dir.iterdir())
-                    if d.is_dir()
-                    and (d / "placement_map.json").exists()
-                    and not any((local_stage4 / d.name / "defect").glob("*.png"))
-                ]
-                if seed_pm_pairs:
-                    run_synthesis_batch(
-                        image_dir           = str(local_imgdir),
-                        seed_placement_maps = seed_pm_pairs,
-                        output_root         = str(local_stage4),
-                        cat_dir             = str(cat_dir),  # stage1b_output 경로용 (Drive)
-                        format              = "cls",
-                        controlnet_model    = CONTROLNET_MODEL,
-                        device              = DEVICE,
-                        resolution          = RESOLUTION,
-                        num_inference_steps = NUM_INFERENCE_STEPS,
-                        strength            = STRENGTH,
-                        guidance_scale      = GUIDANCE_SCALE,
-                        conditioning_scale  = CONDITIONING_SCALE,
-                        seed                = DIFFUSION_SEED,
-                    )
-                infer_sec = time.time() - t
+                t_infer = time.time()
+                run_synthesis_batch(
+                    image_dir           = str(local_imgdir),
+                    seed_placement_maps = seed_pm_pairs,
+                    output_root         = str(local_stage4),
+                    cat_dir             = str(cat_dir),  # stage1b_output 경로용 (Drive)
+                    format              = "cls",
+                    controlnet_model    = CONTROLNET_MODEL,
+                    device              = DEVICE,
+                    resolution          = RESOLUTION,
+                    num_inference_steps = NUM_INFERENCE_STEPS,
+                    strength            = STRENGTH,
+                    guidance_scale      = GUIDANCE_SCALE,
+                    conditioning_scale  = CONDITIONING_SCALE,
+                    seed                = DIFFUSION_SEED,
+                )
+                infer_sec = time.time() - t_infer
 
                 # Drive 체크포인트: GPU 결과 보존 (재실행 시 재추론 방지)
                 t_ckpt = time.time()
                 shutil.copytree(str(local_stage4), str(drive_stage4), dirs_exist_ok=True)
-                timing["s4"] = f"추론{infer_sec:.0f}s+체크포인트{time.time()-t_ckpt:.0f}s"
+                timing["s4"] = (
+                    f"복사{copy_sec:.0f}s+추론{infer_sec:.0f}s"
+                    f"+체크포인트{time.time()-t_ckpt:.0f}s"
+                )
 
             # ── Stage 5: 품질 점수 ───────────────────────────────────
             # local_stage4 기준으로 처리 (Drive 재다운로드 없음)
@@ -350,14 +353,23 @@ for key, entry in CONFIG.items():
 
 ---
 
-## 셀 5: Stage 7 test set 준비 + 벤치마크
+## 셀 5: Stage 7 test set 준비 + 벤치마크 (로컬 SSD 캐시)
 
-> `baseline/test` → `aroma_mpb/test`, `aroma_diffusion/test` symlink (실패 시 copytree 폴백).
-> test set 준비 완료 후 바로 벤치마크 실행.
+> **로컬 SSD 최적화:** `augmented_dataset/{group}/train/` + `baseline/test/` 를
+> `/content/tmp_stage7` 에 복사 후 학습·평가. 30 epoch × 전체 이미지 반복 읽기가
+> Drive FUSE가 아닌 로컬 NVMe에서 수행되어 학습 시간 단축.
+>
+> **resume 지원:** Drive의 기존 `experiment_meta.json` 을 local 에 먼저 복사하여
+> `resume=True` 가 정상 동작.
+>
+> **Drive 쓰기 최소화:** 학습 중 쓰는 파일은 local 에만. 완료 후 meta JSON 만 업로드.
+> `benchmark_results.json` / `benchmark_comparison.csv` 는 실험 1건 완료마다 Drive 에 직접 기록
+> (`results_dir` 파라미터, yaml 설정값 사용).
 
 ```python
-import json, sys, yaml
+import json, shutil, sys, time, yaml
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from tqdm.auto import tqdm
 
 sys.path.insert(0, "/content/aroma")
@@ -367,12 +379,30 @@ CONFIG_PATH = str(REPO / "configs" / "benchmark_experiment_phase2.yaml")
 BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
 OUTPUT_DIR  = str(REPO / "outputs" / "benchmark_results_phase2")
 
-EXCLUDE            = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
-MODELS             = list(BENCH_CFG["models"].keys())
-GROUPS             = list(BENCH_CFG["dataset_groups"].keys())
+EXCLUDE             = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
+MODELS              = list(BENCH_CFG["models"].keys())
+GROUPS              = list(BENCH_CFG["dataset_groups"].keys())
 NON_BASELINE_GROUPS = [g for g in GROUPS if g != "baseline"]
 
-# ── test set 준비 ─────────────────────────────────────────────────────
+# results_dir: benchmark_results.json / benchmark_comparison.csv 저장 (yaml 설정값 우선)
+DRIVE_RESULTS_DIR = BENCH_CFG["experiment"].get("results_dir") or OUTPUT_DIR
+
+LOCAL_TMP_S7 = Path("/content/tmp_stage7")
+# {domain}/{cat} 구조: run_benchmark 내부 domain 감지 (pixel_auroc 여부) 에 사용
+_LOCAL_S7_BASE = LOCAL_TMP_S7 / DOMAIN_FILTER
+
+
+def _parallel_copytree_s7(src_dst_pairs, max_workers=4):
+    def _copy(pair):
+        src, dst = Path(pair[0]), Path(pair[1])
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(_copy, src_dst_pairs))
+
+
+# ── Drive: test set symlink 준비 (O(1), Drive 영속 보존) ────────────────
 seen, test_tasks, test_failed = set(), [], []
 for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
@@ -391,22 +421,19 @@ for key, entry in CONFIG.items():
             test_tasks.append((cat_dir, g))
 
 if test_tasks:
-    print(f"test set 준비: {len(test_tasks)}개")
-    for cat_dir, group in tqdm(test_tasks, desc="test set"):
+    print(f"Drive test set 준비: {len(test_tasks)}개")
+    for cat_dir, group in test_tasks:
         try:
             result = _ensure_test_dir(str(cat_dir), group)
             method = "symlink" if result.is_symlink() else "copy"
             print(f"  ✓ {cat_dir.name}/{group} [{method}]")
         except Exception as e:
             test_failed.append(f"{cat_dir.name}/{group}: {e}")
-    if test_failed:
-        print(f"✗ test set 실패 {len(test_failed)}건 — 벤치마크 계속 진행")
-        for m in test_failed:
-            print(f"  {m}")
+            print(f"  ✗ {cat_dir.name}/{group}: {e}")
 else:
-    print("✓ test set 준비 완료 (모두 존재)")
+    print("✓ Drive test set 준비 완료")
 
-# ── 벤치마크 ─────────────────────────────────────────────────────────
+# ── 벤치마크 대상 카테고리 목록 ─────────────────────────────────────────
 seen = set()
 all_bench, skip_bench = [], 0
 for key, entry in CONFIG.items():
@@ -442,25 +469,76 @@ else:
     bench_failed = []
 
     for cat_dir in tqdm(all_bench, desc=f"Stage7 {LABEL}"):
+        local_cat  = _LOCAL_S7_BASE / cat_dir.name          # 학습 데이터 캐시
+        local_out  = LOCAL_TMP_S7 / "results" / cat_dir.name  # 실험 메타 로컬 저장
+        drive_out  = Path(OUTPUT_DIR) / cat_dir.name          # Drive 업로드 대상
+
+        t_total = time.time()
         try:
+            # ── 학습 데이터 로컬 복사 ────────────────────────────────
+            # {group}/train/ (학습 이미지) + baseline/test/ (평가 이미지)
+            # test/{group}/ symlink 는 run_benchmark 내부 _ensure_test_dir 이 자동 생성
+            t = time.time()
+            copy_pairs = [
+                (cat_dir / "augmented_dataset" / "baseline" / "test",
+                 local_cat / "augmented_dataset" / "baseline" / "test"),
+            ]
+            for g in GROUPS:
+                src_train = cat_dir / "augmented_dataset" / g / "train"
+                if src_train.exists():
+                    copy_pairs.append((src_train, local_cat / "augmented_dataset" / g / "train"))
+            _parallel_copytree_s7(copy_pairs, max_workers=4)
+            copy_sec = time.time() - t
+
+            # ── Drive 기존 실험 meta 복사 (resume=True 지원) ──────────
+            if drive_out.exists():
+                shutil.copytree(str(drive_out), str(local_out), dirs_exist_ok=True)
+
+            # ── 벤치마크 실행 (로컬 경로) ────────────────────────────
+            # cat_dir=local_cat → 학습·평가 이미지를 로컬 NVMe에서 읽음
+            # output_dir=local_out → experiment_meta.json 등 로컬에만 기록
+            # results_dir=DRIVE_RESULTS_DIR → benchmark_results.json/csv 는 Drive 직접 기록
+            t = time.time()
             results = run_benchmark(
                 config_path = CONFIG_PATH,
-                cat_dir     = str(cat_dir),
+                cat_dir     = str(local_cat),
                 resume      = True,
-                output_dir  = OUTPUT_DIR,
+                output_dir  = str(local_out),
+                results_dir = DRIVE_RESULTS_DIR,
             )
+            bench_sec = time.time() - t
+
+            # ── experiment_meta.json Drive 업로드 ────────────────────
+            t = time.time()
+            if local_out.exists():
+                drive_out.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(str(local_out), str(drive_out), dirs_exist_ok=True)
+            up_sec = time.time() - t
+
+            print(
+                f"  ✓ {cat_dir.name} [{time.time()-t_total:.0f}s 합계]  "
+                f"복사:{copy_sec:.0f}s  학습+평가:{bench_sec:.0f}s  업로드:{up_sec:.0f}s"
+            )
+
             for model_name, group_results in results.items():
                 for group, val in group_results.items():
                     if isinstance(val, dict) and "error" in val:
                         bench_failed.append({
                             "category": cat_dir.name,
-                            "error": f"{model_name}/{group}: {val['detail'][:80]}",
+                            "error": f"{model_name}/{group}: {val.get('detail','')[:80]}",
                             "type": val["error"],
                         })
+
         except Exception as e:
+            import traceback
             bench_failed.append({"category": cat_dir.name,
                                   "error": str(e), "type": type(e).__name__})
+            traceback.print_exc()
+        finally:
+            shutil.rmtree(str(local_cat), ignore_errors=True)
+            shutil.rmtree(str(local_out), ignore_errors=True)
 
+    shutil.rmtree(str(LOCAL_TMP_S7), ignore_errors=True)
     print("\n" + (f"✓ {LABEL} 벤치마크 완료" if not bench_failed else f"✗ {len(bench_failed)}건 실패"))
     for f in bench_failed:
         print(f"  [{f['category']}] {f['type']}: {f['error'][:120]}")
@@ -532,7 +610,7 @@ else:
 | Stage 4 | 카테고리 순차 | 없음 | GPU 단일 점유 Diffusion 추론 |
 | Stage 5 | `SEED_THREADS=4` | `IMG_WORKERS=-1` | I/O + CPU 혼합, seed 단위 독립 |
 | Stage 6 | 없음 (Stage 4-5-6 통합 루프) | `NUM_IO_THREADS=8` | I/O-bound 파일 복사 |
-| Stage 7 | 카테고리 순차 | 없음 | GPU 단일 점유, `resume=True` 중단 재개 |
+| Stage 7 | 카테고리 순차 | 없음 | GPU 단일 점유; augmented_dataset 로컬 SSD 캐시, meta만 Drive 업로드 |
 
 ## Phase 2 실행 전 체크리스트
 
