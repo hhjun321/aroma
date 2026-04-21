@@ -51,6 +51,7 @@ def _collect_defect_paths(
     augmentation_ratio: float | None = None,
     good_count: int = 0,
     balance_defect_types: bool = False,
+    stage4_subdir: str = "stage4_output",
 ) -> list[tuple[str, str]]:
     """stage4_output/{seed_id}/defect/*.png 수집 (단일 깊이 *).
 
@@ -67,12 +68,14 @@ def _collect_defect_paths(
             seed_id 의 접두사(예: broken_large, broken_small)를 유형으로 식별하고
             augmentation_ratio 로 계산된 할당량을 유형 수로 균등 분배한다.
             단일 유형(접두사 없음) 카테고리에는 영향 없음.
+        stage4_subdir: Stage 4 출력 디렉터리 이름 (기본 "stage4_output").
+            Phase 2 에서는 "stage4_diffusion_output" 을 사용한다.
 
     Returns:
         List of (src_path_str, dst_filename) where
         dst_filename = "{seed_id}_{image_id}.png" (충돌 방지).
     """
-    stage4_dir = Path(cat_dir) / "stage4_output"
+    stage4_dir = Path(cat_dir) / stage4_subdir
     if not stage4_dir.exists():
         return []
 
@@ -164,14 +167,16 @@ def _collect_defect_paths(
     return [(src, dst) for src, dst, _ in candidates]
 
 
-def _check_stage4_status(cat_dir: str) -> tuple[str, int, int]:
+def _check_stage4_status(
+    cat_dir: str, stage4_subdir: str = "stage4_output"
+) -> tuple[str, int, int]:
     """stage4_output 의 완료 상태를 점검한다.
 
     Returns:
         (status, n_total_seeds, n_seeds_with_defects)
         status: "not_started" | "incomplete" | "partial" | "complete"
     """
-    stage4_dir = Path(cat_dir) / "stage4_output"
+    stage4_dir = Path(cat_dir) / stage4_subdir
     if not stage4_dir.exists():
         return ("not_started", 0, 0)
 
@@ -303,6 +308,8 @@ def build_dataset_groups(
     groups: list[str] | None = None,
     preselected_defect_pairs_full: list[tuple[str, str]] | None = None,
     preselected_defect_pairs_pruned: list[tuple[str, str]] | None = None,
+    stage4_subdir: str = "stage4_output",
+    dataset_group: str | None = None,
 ) -> dict:
     """dataset group 을 구성하고 build_report.json 을 저장한다.
 
@@ -339,6 +346,11 @@ def build_dataset_groups(
             노트북에서 Drive 경로로 선택 후 로컬 SSD 경로로 리매핑해 전달.
         preselected_defect_pairs_pruned: 미리 선택된 (src_path, dst_filename) 쌍 목록.
             제공 시 aroma_pruned 의 _collect_defect_paths 호출을 건너뛴다.
+        stage4_subdir: Stage 4 출력 디렉터리 이름 (기본 "stage4_output").
+            Phase 2 에서는 "stage4_diffusion_output" 을 지정한다.
+        dataset_group: None 이면 기존 동작(baseline/aroma_full/aroma_pruned 세 그룹).
+            문자열 지정 시 해당 이름의 단일 그룹만 생성 (예: "aroma_diffusion").
+            stage4_subdir 에서 defect 이미지를 수집하고 pruning_ratio 를 품질 pre-filter 로 적용.
 
     Returns:
         build_report dict. build_report.json 으로도 저장.
@@ -350,7 +362,10 @@ def build_dataset_groups(
         baseline 이 skip 된 경우 good_count 는 기존 디렉터리에서 산출한다.
     """
     _ALL_GROUPS = ["baseline", "aroma_full", "aroma_pruned"]
-    target_groups: set[str] = set(groups) if groups is not None else set(_ALL_GROUPS)
+    if dataset_group is not None:
+        target_groups: set[str] = {dataset_group}
+    else:
+        target_groups = set(groups) if groups is not None else set(_ALL_GROUPS)
 
     cat_path = Path(cat_dir)
     aug_dir = cat_path / "augmented_dataset"
@@ -372,12 +387,17 @@ def build_dataset_groups(
     # ── 캐시된 report 로드 ───────────────────────────────────────────────
     cached: dict = json.loads(report_path.read_text()) if report_path.exists() else {}
 
-    stage4_dir = cat_path / "stage4_output"
+    stage4_dir = cat_path / stage4_subdir
     stage4_now_exists = stage4_dir.exists() and any(stage4_dir.iterdir())
 
     # ── 그룹별 skip 판단 ─────────────────────────────────────────────────
     def _group_done(group: str) -> bool:
         """현재 파라미터로 그룹이 이미 완성되어 있으면 True."""
+        if group not in {"baseline", "aroma_full", "aroma_pruned"}:
+            # custom group (e.g. aroma_diffusion)
+            defect_dir = aug_dir / group / "train" / "defect"
+            return defect_dir.exists() and any(defect_dir.iterdir())
+
         if group == "baseline":
             good_dir = aug_dir / "baseline" / "train" / "good"
             if not good_dir.exists() or not any(good_dir.iterdir()):
@@ -426,7 +446,7 @@ def build_dataset_groups(
 
     # ── Stage 4 완료 전제 조건 검증 ────────────────────────────────────────
     stage4_status, stage4_seeds_total, stage4_seeds_with_defects = (
-        _check_stage4_status(cat_dir)
+        _check_stage4_status(cat_dir, stage4_subdir=stage4_subdir)
     )
     if stage4_status == "incomplete":
         warnings.warn(
@@ -459,6 +479,12 @@ def build_dataset_groups(
                 1 for p in good_dir.iterdir()
                 if p.suffix.lower() in {".png", ".jpg", ".jpeg"}
             ) if good_dir.exists() else 0
+        if not good_count and dataset_group is not None:
+            # Phase 2 로컬 SSD 환경: Phase 1 baseline 미복사 → image_dir 에서 직접 산출
+            good_count = sum(
+                1 for p in Path(image_dir).iterdir()
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ) if Path(image_dir).exists() else 0
     else:
         # ── baseline 빌드 ─────────────────────────────────────────────────
         if split_ratio is not None:
@@ -516,6 +542,7 @@ def build_dataset_groups(
                 augmentation_ratio=ratio_full,
                 good_count=good_count,
                 balance_defect_types=balance_defect_types,
+                stage4_subdir=stage4_subdir,
             )
         if not full_defect_pairs:
             detail = (
@@ -565,6 +592,7 @@ def build_dataset_groups(
                 augmentation_ratio=ratio_pruned,
                 good_count=good_count,
                 balance_defect_types=balance_defect_types,
+                stage4_subdir=stage4_subdir,
             )
         from tqdm import tqdm
         pruned_defect_dst = aug_dir / "aroma_pruned" / "train" / "defect"
@@ -581,6 +609,55 @@ def build_dataset_groups(
                 with ThreadPoolExecutor(max_workers=num_workers) as ex:
                     list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
                               desc="  aroma_pruned/train/defect", leave=False))
+
+    # ── custom dataset_group 빌드 (Phase 2: aroma_diffusion 등) ──────────
+    custom_defect_pairs: list = []
+    if dataset_group is not None and dataset_group in build_groups:
+        from tqdm import tqdm
+        good_dst = aug_dir / dataset_group / "train" / "good"
+        if not good_dst.exists() or not any(good_dst.iterdir()):
+            if split_ratio is not None:
+                _copy_file_list(train_good_paths, good_dst,
+                                num_workers, desc=f"{dataset_group}/train/good (split)")
+            else:
+                _copy_images(Path(image_dir), good_dst,
+                             num_workers, desc=f"{dataset_group}/train/good")
+
+        if preselected_defect_pairs_full is not None:
+            custom_defect_pairs = preselected_defect_pairs_full
+        else:
+            custom_defect_pairs = _collect_defect_paths(
+                cat_dir,
+                pruning_ratio=pruning_ratio,
+                augmentation_ratio=ratio_full,
+                good_count=good_count,
+                balance_defect_types=balance_defect_types,
+                stage4_subdir=stage4_subdir,
+            )
+        if not custom_defect_pairs:
+            detail = (
+                f"{stage4_subdir} 미존재"
+                if not stage4_dir.exists()
+                else f"{stage4_subdir} 존재하나 defect 이미지 0건"
+            )
+            warnings.warn(
+                f"{dataset_group} defect 이미지 0건 ({detail}): {cat_dir}",
+                stacklevel=2,
+            )
+        else:
+            custom_defect_dst = aug_dir / dataset_group / "train" / "defect"
+            if custom_defect_dst.exists():
+                shutil.rmtree(str(custom_defect_dst))
+            custom_defect_dst.mkdir(parents=True, exist_ok=True)
+            tasks = [(src, str(custom_defect_dst / dst_name))
+                     for src, dst_name in custom_defect_pairs]
+            if num_workers <= 1:
+                for t in tqdm(tasks, desc=f"  {dataset_group}/train/defect", leave=False):
+                    _copy_worker(t)
+            else:
+                with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                    list(tqdm(ex.map(_copy_worker, tasks), total=len(tasks),
+                              desc=f"  {dataset_group}/train/defect", leave=False))
 
     # ── report 갱신 (기존 캐시와 머지) ──────────────────────────────────
     report = dict(cached)
@@ -604,6 +681,9 @@ def build_dataset_groups(
     if "aroma_pruned" in build_groups:
         report["aroma_pruned"] = {"good_count": good_count,
                                   "defect_count": len(pruned_defect_pairs)}
+    if dataset_group is not None and dataset_group in build_groups:
+        report[dataset_group] = {"good_count": good_count,
+                                 "defect_count": len(custom_defect_pairs)}
 
     aug_dir.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2))

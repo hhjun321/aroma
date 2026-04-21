@@ -73,9 +73,13 @@ Stage 3 (레이아웃 로직) 출력은 Phase 1 과 동일하게 사용한다.
 **병렬:** GPU 단일 점유 → 카테고리 순차 처리 (MPB의 IMG_THREADS 없음)
 **CASDA 검증 파라미터:** `strength=0.7` · `guidance_scale=7.5` · `num_inference_steps=30` · `conditioning_scale=0.7`
 
+> **로컬 SSD 캐시:** `image_dir` (배경 이미지)를 `/content/tmp_stage4` 에 복사 후 추론,
+> 결과는 로컬에 쓰고 Drive 에 업로드. Drive FUSE I/O 병목 해소.
+
 ```python
-import json, sys
+import json, sys, shutil, time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from tqdm.auto import tqdm
 
 sys.path.insert(0, "/content/aroma")
@@ -86,7 +90,7 @@ CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
 CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
-LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]  # → "MVTec AD"
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 
 # Diffusion 파라미터 (CASDA 검증값)
 CONTROLNET_MODEL    = None    # None → pretrained lllyasviel/sd-controlnet-canny 사용
@@ -98,6 +102,22 @@ STRENGTH            = 0.7
 GUIDANCE_SCALE      = 7.5
 CONDITIONING_SCALE  = 0.7    # 학습 1.0 → 추론 0.7 (아티팩트 방지)
 SEED                = 42
+
+LOCAL_TMP = Path("/content/tmp_stage4")
+_LOCAL_DOMAIN_PATH = {
+    "isp":   LOCAL_TMP / "isp" / "unsupervised",
+    "mvtec": LOCAL_TMP / "mvtec",
+    "visa":  LOCAL_TMP / "visa",
+}[DOMAIN_FILTER]
+
+def _parallel_copy(src_dst_pairs, max_workers=4):
+    def _copy(pair):
+        src, dst = Path(pair[0]), Path(pair[1])
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(_copy, src_dst_pairs))
 
 # 카테고리 단위로 묶기
 categories = {}
@@ -139,12 +159,21 @@ else:
     failed = []
 
     for cat_dir, image_dir, seed_pm_pairs in tqdm(all_cats, desc=f"Stage4-Diffusion {LABEL}"):
+        local_cat    = _LOCAL_DOMAIN_PATH / cat_dir.name
+        local_imgdir = local_cat / "train" / "good"
+        local_output = local_cat / "stage4_diffusion_output"
+        t0 = time.time()
         try:
+            # 로컬 SSD 복사: image_dir만 (stage1b seed_path는 Drive 직접 읽기 — seed당 1회)
+            _parallel_copy([(image_dir, local_imgdir)], max_workers=4)
+            copy_sec = time.time() - t0
+
+            t1 = time.time()
             run_synthesis_batch(
-                image_dir           = image_dir,
+                image_dir           = str(local_imgdir),
                 seed_placement_maps = seed_pm_pairs,
-                output_root         = str(cat_dir / "stage4_diffusion_output"),
-                cat_dir             = str(cat_dir),
+                output_root         = str(local_output),
+                cat_dir             = str(cat_dir),   # stage1b_output 경로용 (Drive)
                 format              = "cls",
                 controlnet_model    = CONTROLNET_MODEL,
                 device              = DEVICE,
@@ -155,10 +184,25 @@ else:
                 conditioning_scale  = CONDITIONING_SCALE,
                 seed                = SEED,
             )
+            infer_sec = time.time() - t1
+
+            # Drive 업로드
+            t2 = time.time()
+            drive_output = cat_dir / "stage4_diffusion_output"
+            if drive_output.exists():
+                shutil.rmtree(str(drive_output))
+            shutil.copytree(str(local_output), str(drive_output))
+            upload_sec = time.time() - t2
+
+            print(f"  ✓ {cat_dir.name}: 캐시 {copy_sec:.0f}s + 추론 {infer_sec:.0f}s"
+                  f" + 업로드 {upload_sec:.0f}s = {time.time()-t0:.0f}s")
         except Exception as e:
             failed.append({"category": cat_dir.name,
                            "error": str(e), "type": type(e).__name__})
+        finally:
+            shutil.rmtree(str(local_cat), ignore_errors=True)
 
+    shutil.rmtree(str(LOCAL_TMP), ignore_errors=True)
     print("\n" + (f"✓ {LABEL} 완료" if not failed else f"✗ {len(failed)}건 실패"))
     for f in failed:
         print(f"  [{f['category']}] {f['type']}: {f['error'][:120]}")
@@ -248,17 +292,19 @@ else:
 
 ---
 
-## Stage 6: 증강 데이터셋 구성 (aroma_diffusion 그룹 추가)
+## Stage 6: 증강 데이터셋 구성 (aroma_diffusion 그룹 — 로컬 SSD 캐시)
 
-**Sentinel:** `{cat_dir}/augmented_dataset/aroma_diffusion/train/defect` 존재 (pruning_ratio 일치)
-**병렬:** 카테고리 단위 `ThreadPoolExecutor` (I/O-bound Drive 파일 복사)
+**Sentinel:** `{cat_dir}/augmented_dataset/aroma_diffusion/train/defect` 존재
+**병렬:** 카테고리 단위 — 로컬 SSD에서 구성 후 Drive 에 `aroma_diffusion` 만 업로드
 
-> `aroma_mpb` 그룹 (Phase 1 결과)은 이미 `augmented_dataset/` 에 존재.
-> Phase 2 에서는 `aroma_diffusion` 그룹을 추가로 생성한다.
-> `run_dataset_builder` 에 `stage4_subdir="stage4_diffusion_output"` 파라미터를 전달한다.
+> `baseline` / `aroma_mpb` 그룹은 Phase 1 에서 생성됨 — 건드리지 않는다.
+> Phase 2 에서는 `aroma_diffusion` 그룹만 추가 생성한다.
+> Drive FUSE I/O 병목 해소: `stage4_diffusion_output` · `image_dir` 를 로컬 SSD 에 복사 후
+> 데이터셋을 구성하고 `aroma_diffusion` 결과만 Drive 에 업로드한다.
+> 도메인 추출 로직이 경로 구조에 의존하므로 `LOCAL_TMP/{domain}/{cat}` 구조 유지.
 
 ```python
-import json, sys
+import json, sys, shutil, time
 from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -271,20 +317,41 @@ REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
 DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
-LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 
 # 병렬 설정
-NUM_IO_THREADS = 8  # 카테고리 내부 파일 복사 스레드 수 (I/O-bound → Thread 유리)
-CAT_THREADS    = 2  # 카테고리 단위 동시 처리 수 (Drive 동시 쓰기 안정성 고려)
-PRUNING_RATIO = 0.5  # aroma_pruned: quality_score 상위 50% rank 기반 선택
-SPLIT_RATIO           = 0.8
-SPLIT_SEED            = 42
-BALANCE_DEFECT_TYPES  = True
+CAT_THREADS    = 2   # 카테고리 동시 처리 (Drive 동시 읽기/쓰기 안정성 고려)
+NUM_IO_THREADS = 8   # 카테고리 내부 파일 복사 스레드
+PRUNING_RATIO        = 0.5
+SPLIT_RATIO          = 0.8
+SPLIT_SEED           = 42
+BALANCE_DEFECT_TYPES = True
+LOCAL_TMP = Path("/content/tmp_stage6")
 
 # Phase 2: Diffusion 출력 디렉터리 지정
 STAGE4_SUBDIR = "stage4_diffusion_output"   # stage4_output (MPB) 과 병존
 DATASET_GROUP = "aroma_diffusion"           # augmented_dataset 하위 그룹명
+
+# 도메인 경로 구조 보존 (dataset_builder 도메인 추출 로직 호환)
+_LOCAL_DOMAIN_PATH = {
+    "isp":   LOCAL_TMP / "isp" / "unsupervised",
+    "mvtec": LOCAL_TMP / "mvtec",
+    "visa":  LOCAL_TMP / "visa",
+}[DOMAIN_FILTER]
+
+def parallel_copytree(src_dst_pairs, max_workers=4):
+    """여러 (src, dst) 디렉터리 쌍을 ThreadPoolExecutor 로 병렬 복사."""
+    def _copy_one(pair):
+        src, dst = Path(pair[0]), Path(pair[1])
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+            return str(dst)
+        return None
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        results = list(ex.map(_copy_one, src_dst_pairs))
+    return [r for r in results if r is not None]
 
 # cat_dir 단위로 묶기
 cat_map: dict[str, str] = {}
@@ -293,14 +360,12 @@ for key, entry in CONFIG.items():
     if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
-    cat_dir   = str(Path(seed_dirs_list[0]).parents[1])
-    if CAT_ONLY and Path(cat_dir).name not in CAT_ONLY:
+    cat_dir_path = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir_path.name not in CAT_ONLY:
         continue
     image_dir = entry["image_dir"]
-    if cat_dir in cat_map and cat_map[cat_dir] != image_dir:
-        raise ValueError(f"image_dir 불일치: {cat_dir}")
-    cat_map[cat_dir] = image_dir
-    cat_seed_dirs[cat_dir].extend(seed_dirs_list)
+    cat_map.setdefault(str(cat_dir_path), image_dir)
+    cat_seed_dirs[str(cat_dir_path)].extend(seed_dirs_list)
 
 all_cats, skip = [], 0
 for cat_dir, image_dir in cat_map.items():
@@ -311,39 +376,80 @@ for cat_dir, image_dir in cat_map.items():
         all_cats.append((cat_dir, image_dir, cat_seed_dirs[cat_dir]))
 
 if not all_cats:
-    print(f"✓ {LABEL} 모든 작업 완료")
+    print(f"✓ {LABEL} 모든 작업 완료 (skip {skip}건)")
 else:
     print(f"{LABEL}: {len(all_cats)} categories 처리 예정 (skip {skip}건)")
     failed = []
 
     def _run_stage6(args):
-        cat_dir, image_dir, seed_dirs = args
-        run_dataset_builder(
-            cat_dir              = cat_dir,
-            image_dir            = image_dir,
-            seed_dirs            = seed_dirs,
-            pruning_ratio        = PRUNING_RATIO,
-            split_ratio          = SPLIT_RATIO,
-            split_seed           = SPLIT_SEED,
-            workers              = NUM_IO_THREADS,
-            balance_defect_types = BALANCE_DEFECT_TYPES,
-            stage4_subdir        = STAGE4_SUBDIR,    # Phase 2 추가 파라미터
-            dataset_group        = DATASET_GROUP,    # Phase 2 추가 파라미터
-        )
-        return Path(cat_dir).name
+        cat_dir_str, image_dir, seed_dirs = args
+        cat_dir = Path(cat_dir_str)
+        t0 = time.time()
+
+        local_cat    = _LOCAL_DOMAIN_PATH / cat_dir.name
+        local_imgdir = local_cat / "train" / "good"
+        local_stage4 = local_cat / STAGE4_SUBDIR
+
+        try:
+            # 로컬 SSD 복사: stage4_diffusion_output + image_dir
+            copy_pairs = []
+            if (cat_dir / STAGE4_SUBDIR).exists():
+                copy_pairs.append((cat_dir / STAGE4_SUBDIR, local_stage4))
+            copy_pairs.append((Path(image_dir), local_imgdir))
+            parallel_copytree(copy_pairs, max_workers=4)
+            copy_sec = time.time() - t0
+
+            # 로컬에서 aroma_diffusion 그룹 구성
+            t1 = time.time()
+            result = run_dataset_builder(
+                cat_dir              = str(local_cat),
+                image_dir            = str(local_imgdir),
+                seed_dirs            = seed_dirs,       # baseline 미생성 → Drive 경로 그대로
+                pruning_ratio        = PRUNING_RATIO,
+                split_ratio          = SPLIT_RATIO,
+                split_seed           = SPLIT_SEED,
+                workers              = NUM_IO_THREADS,
+                balance_defect_types = BALANCE_DEFECT_TYPES,
+                stage4_subdir        = STAGE4_SUBDIR,
+                dataset_group        = DATASET_GROUP,
+            )
+            build_sec = time.time() - t1
+
+            # Drive 업로드: aroma_diffusion 그룹만
+            t2 = time.time()
+            drive_group = cat_dir / "augmented_dataset" / DATASET_GROUP
+            if drive_group.exists():
+                shutil.rmtree(str(drive_group))
+            shutil.copytree(
+                str(local_cat / "augmented_dataset" / DATASET_GROUP),
+                str(drive_group),
+            )
+            upload_sec = time.time() - t2
+
+            total_sec = time.time() - t0
+            defect_count = result.get(DATASET_GROUP, {}).get("defect_count", "?")
+            print(
+                f"  ✓ {cat_dir.name}: 캐시 {copy_sec:.0f}s + 구성 {build_sec:.0f}s"
+                f" + 업로드 {upload_sec:.0f}s = {total_sec:.0f}s  [defect={defect_count}]"
+            )
+        finally:
+            shutil.rmtree(str(local_cat), ignore_errors=True)
+
+        return cat_dir.name
 
     with tqdm(total=len(all_cats), desc=f"Stage6-Diffusion {LABEL}") as bar:
         with ThreadPoolExecutor(max_workers=CAT_THREADS) as ex:
             futs = {ex.submit(_run_stage6, t): t for t in all_cats}
             for fut in as_completed(futs):
-                cat_dir, *_ = futs[fut]
+                cat_dir_str, *_ = futs[fut]
                 try:
                     fut.result()
                 except Exception as e:
-                    failed.append({"category": Path(cat_dir).name,
+                    failed.append({"category": Path(cat_dir_str).name,
                                    "error": str(e), "type": type(e).__name__})
                 bar.update(1)
 
+    shutil.rmtree(str(LOCAL_TMP), ignore_errors=True)
     print("\n" + (f"✓ {LABEL} 완료" if not failed else f"✗ {len(failed)}건 실패"))
     for f in failed:
         print(f"  [{f['category']}] {f['type']}: {f['error'][:120]}")
@@ -640,7 +746,7 @@ else:
 | Stage 1b | `NUM_WORKERS=4` | 없음 | seed 단위 독립, CPU-bound |
 | Stage 2  | `SEED_THREADS=2` | `IMG_WORKERS=-1` | 변형 생성 CPU 집약, 내부 병렬로 코어 포화 |
 | Stage 3  | 순차 | GPU 배치 | GPU 인스턴스 공유 불가 |
-| Stage 4  | 카테고리 단위 순차 | 없음 | GPU 단일 점유 Diffusion 추론 (MPB의 IMG_THREADS 없음) |
+| Stage 4  | 카테고리 단위 순차 | 없음 | GPU 단일 점유; image_dir 로컬 SSD 캐시 + 업로드 |
 | Stage 5  | `SEED_THREADS=4` | `IMG_WORKERS=-1` | I/O + CPU 혼합, seed 단위 독립 |
 | Stage 6  | `CAT_THREADS=2` | `NUM_IO_THREADS=8` | I/O-bound Drive 복사, Thread 유리 |
 | Stage 7  | 순차 (카테고리) | 없음 | GPU 단일 점유, `resume=True` 중단 재개 |

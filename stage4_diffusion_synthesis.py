@@ -114,6 +114,8 @@ def _synthesize_one(
     bg_path: str,
     placements: List[dict],
     seed_profile: dict,
+    control_pil: "Image.Image",
+    prompt_gen: "PromptGenerator",
     output_dir: str,
     fmt: str,
     resolution: int,
@@ -139,14 +141,7 @@ def _synthesize_one(
     roi_mask = _make_roi_mask(scaled, resolution, resolution)
     mask_pil = Image.fromarray(roi_mask)
 
-    # ControlNet control image: Stage 1b 원본 seed 이미지에서 Canny 추출 (CASDA 방식)
-    # Stage 2 변형 이미지(elastic warp)는 왜곡된 형태이므로 ControlNet 입력으로 부적합.
-    # seed_profile["seed_path"]는 Stage 1b가 저장한 원본 결함 이미지 절대 경로.
-    original_seed_path = seed_profile.get("seed_path", "")
-    control_pil = _canny_control_image(original_seed_path, (resolution, resolution))
-
     # 텍스트 프롬프트: Stage 1b seed_profile → PromptGenerator (CASDA 방식)
-    prompt_gen = PromptGenerator(style="technical")
     defect_metrics = {
         "linearity": seed_profile.get("linearity", 0.5),
         "solidity": seed_profile.get("solidity", 0.5),
@@ -237,6 +232,12 @@ def run_synthesis(
 
     pipe = _get_pipeline(controlnet_model, device)
 
+    # Canny와 PromptGenerator는 seed당 1회만 계산 (이미지마다 재계산 방지)
+    control_pil = _canny_control_image(
+        seed_profile.get("seed_path", ""), (resolution, resolution)
+    )
+    prompt_gen = PromptGenerator(style="technical")
+
     for i, entry in enumerate(entries):
         image_id: str = entry["image_id"]
         placements: List[dict] = entry.get("placements", [])
@@ -250,6 +251,8 @@ def run_synthesis(
             bg_path=str(bg_path),
             placements=placements,
             seed_profile=seed_profile,
+            control_pil=control_pil,
+            prompt_gen=prompt_gen,
             output_dir=output_dir,
             fmt=format,
             resolution=resolution,
@@ -297,6 +300,12 @@ def run_synthesis_batch(
         img_dir = Path(image_dir)
         seed_out = Path(output_root) / seed_id
 
+        # Canny와 PromptGenerator는 seed당 1회만 계산 (이미지마다 재계산 방지)
+        control_pil = _canny_control_image(
+            seed_profile.get("seed_path", ""), (resolution, resolution)
+        )
+        prompt_gen = PromptGenerator(style="technical")
+
         for i, entry in enumerate(entries):
             image_id: str = entry["image_id"]
             placements: List[dict] = entry.get("placements", [])
@@ -310,6 +319,8 @@ def run_synthesis_batch(
                 bg_path=str(bg_path),
                 placements=placements,
                 seed_profile=seed_profile,
+                control_pil=control_pil,
+                prompt_gen=prompt_gen,
                 output_dir=str(seed_out),
                 fmt=format,
                 resolution=resolution,
