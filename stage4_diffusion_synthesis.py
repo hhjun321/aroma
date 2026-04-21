@@ -165,9 +165,10 @@ def _synthesize_one(
 
     # SD Inpainting + ControlNet 추론
     device_type = str(pipe.device).split(":")[0]
-    generator = torch.Generator(device=str(pipe.device)).manual_seed(seed)
+    # Generator는 CPU에서 생성 후 파이프라인에 전달 — GPU 메모리 누수 방지
+    generator = torch.Generator(device="cpu").manual_seed(seed)
 
-    with torch.autocast(device_type):
+    with torch.no_grad(), torch.autocast(device_type):
         result_pil = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -180,6 +181,10 @@ def _synthesize_one(
             controlnet_conditioning_scale=conditioning_scale,
             generator=generator,
         ).images[0]
+
+    # 추론 후 중간 텐서 즉시 해제
+    del bg_resized, mask_pil, generator
+    torch.cuda.empty_cache()
 
     # grayscale 후처리: 불필요한 RGB 아티팩트 제거 후 RGB 복원
     result_pil = result_pil.convert("L").convert("RGB")
