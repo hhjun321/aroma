@@ -7,6 +7,12 @@ MPB 블러 문제 근본 해결:
     MPB: 픽셀 복사·붙여넣기 → Poisson 경계 보정 → 미세 블러 발생
     Diffusion: Latent 인코딩 → ROI 영역 Denoising → 픽셀 디코딩 (블러 없음)
 
+CASDA 방식 준수 — ControlNet 입력 설계:
+    Stage 2 변형 이미지(elastic warp)를 ControlNet 입력으로 사용하지 않는다.
+    CASDA는 실제 결함 이미지(Stage 1b seed_path)를 입력으로 검증하였으므로,
+    동일하게 Stage 1b 원본 seed 이미지에서 Canny 엣지를 추출한다.
+    Stage 2 변형 이미지는 placement_map의 ROI 위치·크기 계산에만 사용된다.
+
 CASDA 검증 파라미터:
     strength=0.7, guidance_scale=7.5, num_inference_steps=30
     controlnet_conditioning_scale=0.7 (학습 1.0 → 추론 0.7, 아티팩트 방지)
@@ -133,9 +139,11 @@ def _synthesize_one(
     roi_mask = _make_roi_mask(scaled, resolution, resolution)
     mask_pil = Image.fromarray(roi_mask)
 
-    # ControlNet control image: 첫 placement의 Stage 2 defect patch에서 Canny 추출
-    first_defect = placements[0].get("defect_path", "") if placements else ""
-    control_pil = _canny_control_image(first_defect, (resolution, resolution))
+    # ControlNet control image: Stage 1b 원본 seed 이미지에서 Canny 추출 (CASDA 방식)
+    # Stage 2 변형 이미지(elastic warp)는 왜곡된 형태이므로 ControlNet 입력으로 부적합.
+    # seed_profile["seed_path"]는 Stage 1b가 저장한 원본 결함 이미지 절대 경로.
+    original_seed_path = seed_profile.get("seed_path", "")
+    control_pil = _canny_control_image(original_seed_path, (resolution, resolution))
 
     # 텍스트 프롬프트: Stage 1b seed_profile → PromptGenerator (CASDA 방식)
     prompt_gen = PromptGenerator(style="technical")

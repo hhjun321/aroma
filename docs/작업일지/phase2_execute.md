@@ -9,6 +9,7 @@
 ## 규칙
 
 - **`DOMAIN_FILTER`** 를 `"isp"` / `"mvtec"` / `"visa"` 로 바꿔 각 도메인 실행
+- **`CAT_ONLY`** 로 특정 카테고리만 실행 — `["bottle"]` = bottle만, `None` = 전체
 - **skip 로직** 내장 — sentinel 파일이 있으면 자동으로 건너뜀 (resume 가능)
 - **병렬 설정** 은 셀 상단 `# 병렬 설정` 블록에서 조절
 - `failed` 리스트로 실패 항목 추적 — 전체 실행 후 한 번에 확인 가능
@@ -44,6 +45,26 @@ Stage 0 (리사이즈), Stage 1 (ROI 추출), Stage 1b (Seed 특성 분석), Sta
 Stage 3 (레이아웃 로직) 출력은 Phase 1 과 동일하게 사용한다.
 해당 셀은 `phase1_execute.md` 를 참조하여 실행한다.
 
+### Stage 2 / Stage 3 재사용 범위 및 제한
+
+| 출력물 | Phase 2 사용 방식 | 비고 |
+|--------|-----------------|------|
+| `stage2_output/{seed_id}/variant_*.png` | **ROI 위치·크기 계산에만 사용** | `placement_map.json`의 `defect_path` → `_make_roi_mask()` 에서 패치 크기(ph, pw) 참조 |
+| `stage3_output/{seed_id}/placement_map.json` | **그대로 재사용** | x, y 좌표·scale은 원본 seed 기준으로도 동일하게 유효 |
+| `stage1b_output/{seed_id}/seed_profile.json` | **ControlNet 입력 소스** | `seed_path` 필드 → 원본 결함 이미지 → Canny 엣지 추출 |
+
+> **설계 원칙 (CASDA 방식 준수)**
+> CASDA 검증 파라미터(`strength=0.7` 등)는 **실제 결함 이미지**를 ControlNet 입력으로
+> 실험하여 얻은 값이다. Stage 2 변형 이미지(elastic warp)에서 추출한 Canny 엣지는
+> 원본 결함 형태가 왜곡되어 ControlNet 구조적 가이던스 품질이 저하된다.
+> Phase 2의 핵심 질문("합성 방식 MPB vs Diffusion")을 순수하게 검증하려면
+> Diffusion 경로에 MPB 고유 요소(Stage 2 변형)가 개입되어서는 안 된다.
+
+> **경로 주의**
+> `placement_map.json`의 `defect_path` 는 Stage 2 파일의 절대 경로를 저장한다.
+> Colab Drive 마운트 경로가 Phase 1 실행 시와 동일해야 하며,
+> 다를 경우 `smoke_test_3cat.md` 셀 7 방식의 경로 치환이 필요하다.
+
 ---
 
 ## Stage 4: Diffusion 합성
@@ -63,8 +84,9 @@ from stage4_diffusion_synthesis import run_synthesis_batch
 REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
-LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]  # → "MVTec AD"
 
 # Diffusion 파라미터 (CASDA 검증값)
 CONTROLNET_MODEL    = None    # None → pretrained lllyasviel/sd-controlnet-canny 사용
@@ -84,6 +106,8 @@ ENTRIES = [(k, v) for k, v in CONFIG.items()
 for key, entry in ENTRIES:
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+        continue
     categories.setdefault(str(cat_dir), (cat_dir, entry["image_dir"]))
 
 all_cats, skip_total = [], 0
@@ -159,7 +183,8 @@ from stage5_quality_scoring import run_quality_scoring
 REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
 LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 
 # 병렬 설정
@@ -174,6 +199,8 @@ seen_cats = set()
 for key, entry in ENTRIES:
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir    = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+        continue
     if str(cat_dir) in seen_cats:
         continue
     seen_cats.add(str(cat_dir))
@@ -243,7 +270,8 @@ from stage6_dataset_builder import run_dataset_builder
 REPO   = Path("/content/aroma")
 CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
 LABEL = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
 
 # 병렬 설정
@@ -266,6 +294,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir   = str(Path(seed_dirs_list[0]).parents[1])
+    if CAT_ONLY and Path(cat_dir).name not in CAT_ONLY:
+        continue
     image_dir = entry["image_dir"]
     if cat_dir in cat_map and cat_map[cat_dir] != image_dir:
         raise ValueError(f"image_dir 불일치: {cat_dir}")
@@ -344,7 +374,8 @@ sys.path.insert(0, "/content/aroma")
 REPO          = Path("/content/aroma")
 CONFIG        = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG     = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
 EXCLUDE       = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
 GROUPS        = list(BENCH_CFG["dataset_groups"].keys())
 
@@ -354,6 +385,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+        continue
     if str(cat_dir) in seen:
         continue
     seen.add(str(cat_dir))
@@ -399,8 +432,9 @@ from stage7_benchmark import _ensure_test_dir
 REPO          = Path("/content/aroma")
 CONFIG        = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG     = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
-LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]  # → "MVTec AD"
 EXCLUDE       = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
 
 NON_BASELINE_GROUPS = [g for g in BENCH_CFG["dataset_groups"] if g != "baseline"]
@@ -411,6 +445,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+        continue
     if str(cat_dir) in seen or cat_dir.name in EXCLUDE:
         continue
     seen.add(str(cat_dir))
@@ -466,8 +502,9 @@ CONFIG_PATH = str(REPO / "configs" / "benchmark_experiment_phase2.yaml")
 CONFIG      = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
 
-DOMAIN_FILTER = "isp"   # "isp" / "mvtec" / "visa"
-LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD ("isp" / "mvtec" / "visa")
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 실행 (None → 전체 MVTec AD)
+LABEL         = {"isp": "ISP-AD", "mvtec": "MVTec AD", "visa": "VisA"}[DOMAIN_FILTER]  # → "MVTec AD"
 OUTPUT_DIR    = str(REPO / "outputs" / "benchmark_results_phase2")
 
 EXCLUDE = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
@@ -481,6 +518,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
+    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+        continue
     if str(cat_dir) in seen:
         continue
     seen.add(str(cat_dir))
@@ -542,7 +581,8 @@ from pathlib import Path
 
 REPO          = Path("/content/aroma")
 OUTPUT_DIR    = REPO / "outputs" / "benchmark_results_phase2"
-DOMAIN_FILTER = "isp"   # 필터링할 도메인 (없으면 전체 출력)
+DOMAIN_FILTER = "mvtec"   # Phase 2 실험 대상: MVTec AD (없으면 전체 출력)
+CAT_ONLY      = ["bottle"]  # 1차 테스트: bottle만 (None → 전체)
 
 CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
 BENCH_CFG = __import__("yaml").safe_load(
@@ -556,6 +596,8 @@ if DOMAIN_FILTER:
                   if not k.startswith("_") and v["domain"] == DOMAIN_FILTER}
 else:
     valid_cats = None
+if CAT_ONLY:
+    valid_cats = (valid_cats or set()) & set(CAT_ONLY)
 
 rows = []
 for cat_dir in sorted(OUTPUT_DIR.iterdir()):
