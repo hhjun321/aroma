@@ -63,3 +63,4 @@ outputs/benchmark_results/{cat_name}/{model}/{group}/experiment_meta.json
 ### 연구
 - [[12-Research-Phase1]] — 1차: 지능적 배치 유효성 검증 (MVTec·VisA·ISP)
 - [[13-Research-Phase2]] — 2차: Multi-class 분류 + MPB vs GAN/Diffusion 대조 실험
+- [[14-Research-Phase2-Improvement]] — Phase 2 Diffusion 합성 성능 하락 원인 분석 및 개선 방안
