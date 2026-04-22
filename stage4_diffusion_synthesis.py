@@ -187,7 +187,7 @@ def _synthesize_one(
     torch.cuda.empty_cache()
 
     # grayscale 후처리: 불필요한 RGB 아티팩트 제거 후 RGB 복원
-    result_pil = result_pil.convert("L").convert("RGB")
+    # result_pil = result_pil.convert("L").convert("RGB")
 
     # 원본 해상도로 복원
     result_pil = result_pil.resize((orig_w, orig_h), Image.LANCZOS)
