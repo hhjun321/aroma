@@ -35,15 +35,32 @@ dataset:
 synthesis:
   max_images_per_seed: 50   # seed당 최대 합성 이미지 수 (null → 전체 good 이미지)
 
-# Phase 2 비교 그룹: MPB (Phase 1) vs Diffusion (Phase 2)
+# Phase 2 비교 그룹: MPB (Phase 1) vs Diffusion (Phase 2) + aroma_ratio 비율 탐색
 # 핵심 비교 지표: aroma_mpb vs aroma_diffusion — MPB 블러 해소 검증
+# aroma_ratio_*  : 최적 합성 비율 탐색 (H6 가설) — Diffusion 합성 사용
 dataset_groups:
   baseline:
     description: 원본 train/good 만 (pretrained 특징 거리)
   aroma_mpb:
     description: 원본 + Phase 1 MPB 합성 (stage4_output 기반)
   aroma_diffusion:
-    description: 원본 + Phase 2 Diffusion 합성 (stage4_diffusion_output 기반)
+    description: 원본 + Phase 2 Diffusion 합성 (pruning 0.5 + domain 비율)
+  aroma_ratio_10:
+    description: Diffusion 합성 ratio=10% — 합성/(원본+합성), global top-k
+  aroma_ratio_20:
+    description: Diffusion 합성 ratio=20%
+  aroma_ratio_30:
+    description: Diffusion 합성 ratio=30%
+  aroma_ratio_50:
+    description: Diffusion 합성 ratio=50%
+
+# aroma_ratio 비율 실험 설정
+# ratio = 합성/(원본+합성), max_samples = 원본 × ratio/(1-ratio)
+# stratified=False (balance_defect_types=False): 전체 global top-k by quality_score
+# pruning_ratio 사전 필터 없음 (aroma_diffusion과의 차이점)
+aroma_ratio:
+  enabled: true
+  ratios: [0.10, 0.20, 0.30, 0.50]
 
 evaluation:
   metrics:
