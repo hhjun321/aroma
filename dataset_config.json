@@ -226,8 +226,8 @@
   },
   "visa_pcb": {
     "domain": "visa",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb1/train/good",
-    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb1/test/anomaly",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb4/train/good",
+    "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pcb4/test/anomaly",
     "notes": "Run prepare_visa.py first"
   },
   "visa_pipe_fryum": {
