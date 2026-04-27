@@ -218,8 +218,11 @@ def clean_category(
             if dry_run:
                 logger.info("[DRY-RUN] Would delete: %s", target)
             else:
-                shutil.rmtree(target)
-                logger.info("Deleted: %s", target)
+                try:
+                    shutil.rmtree(target)
+                    logger.info("Deleted: %s", target)
+                except OSError as e:
+                    logger.warning("Delete failed (I/O error, skip): %s — %s", target, e)
             deleted.append(str(target))
 
     # ── Sentinel 파일 삭제 ────────────────────────────────────────
