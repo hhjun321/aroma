@@ -34,6 +34,7 @@ dataset:
 
 synthesis:
   max_images_per_seed: 5   # seed당 최대 합성 이미지 수 (null → 전체 good 이미지)
+  seed_ratio: 0.25          # 카테고리 seed 전체 대비 사용 비율 (null → 전체, 고정 seed 랜덤 샘플링)
 
 # Phase 2 비교 그룹: MPB (Phase 1) vs Diffusion (Phase 2) + aroma_ratio 비율 탐색
 # 핵심 비교 지표: aroma_mpb vs aroma_diffusion — MPB 블러 해소 검증

@@ -91,6 +91,7 @@ LOCAL_TMP = Path("/content/tmp_phase2")
 
 # YAML에서 자동 로드 (수정 불필요)
 MAX_IMAGES_PER_SEED = BENCH_CFG.get("synthesis", {}).get("max_images_per_seed", 50)
+SEED_RATIO          = BENCH_CFG.get("synthesis", {}).get("seed_ratio")  # None → 전체
 _ar_cfg             = BENCH_CFG.get("aroma_ratio", {})
 AROMA_RATIOS        = _ar_cfg.get("ratios", []) if _ar_cfg.get("enabled") else []
 AROMA_RATIO_GROUPS  = [f"aroma_ratio_{int(r * 100)}" for r in AROMA_RATIOS]
@@ -184,6 +185,7 @@ print("초기화 완료 → 셀 3 재실행 가능")
 > **skip:** Drive `stage4_diffusion_output/{seed}/defect/*.png` 전체 존재 → 로컬 복사만
 
 ```python
+import random as _random
 import shutil, time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -209,7 +211,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir_path = Path(seed_dirs_list[0]).parents[1]
-    if CAT_ONLY and cat_dir_path.name not in CAT_ONLY:
+    cat_name = key[len(entry["domain"]) + 1:]  # "visa_pcb" → "pcb"
+    if CAT_ONLY and cat_name not in CAT_ONLY:
         continue
     cat_map.setdefault(str(cat_dir_path), entry["image_dir"])
 
@@ -221,12 +224,13 @@ for cat_dir_str, image_dir in cat_map.items():
     stage3_dir   = cat_dir / "stage3_output"
     if not stage3_dir.exists():
         continue
-    seeds_todo = [
-        d for d in sorted(stage3_dir.iterdir())
-        if d.is_dir()
-        and (d / "placement_map.json").exists()
-        and not any((drive_stage4 / d.name / "defect").glob("*.png"))
-    ]
+    _all_seeds = [d for d in sorted(stage3_dir.iterdir())
+                  if d.is_dir() and (d / "placement_map.json").exists()]
+    if SEED_RATIO is not None:
+        _k = max(1, int(len(_all_seeds) * SEED_RATIO))
+        _all_seeds = _random.Random(DIFFUSION_SEED).sample(_all_seeds, min(_k, len(_all_seeds)))
+    seeds_todo = [d for d in _all_seeds
+                  if not any((drive_stage4 / d.name / "defect").glob("*.png"))]
     if not seeds_todo:
         skip += 1
     else:
@@ -260,12 +264,16 @@ else:
 
             # ── 미완료 seed 목록 (로컬 기준) ──────────────────────────────
             stage3_dir = cat_dir / "stage3_output"
+            _all_seeds_local = [d for d in sorted(stage3_dir.iterdir())
+                                 if d.is_dir() and (d / "placement_map.json").exists()]
+            if SEED_RATIO is not None:
+                _k = max(1, int(len(_all_seeds_local) * SEED_RATIO))
+                _all_seeds_local = _random.Random(DIFFUSION_SEED).sample(
+                    _all_seeds_local, min(_k, len(_all_seeds_local)))
             seed_pm_pairs = [
                 (d.name, str(d / "placement_map.json"))
-                for d in sorted(stage3_dir.iterdir())
-                if d.is_dir()
-                and (d / "placement_map.json").exists()
-                and not any((local_stage4 / d.name / "defect").glob("*.png"))
+                for d in _all_seeds_local
+                if not any((local_stage4 / d.name / "defect").glob("*.png"))
             ]
 
             if not seed_pm_pairs:
@@ -336,7 +344,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir_path = Path(seed_dirs_list[0]).parents[1]
-    if CAT_ONLY and cat_dir_path.name not in CAT_ONLY:
+    cat_name = key[len(entry["domain"]) + 1:]  # "visa_pcb" → "pcb"
+    if CAT_ONLY and cat_name not in CAT_ONLY:
         continue
     cat_map.setdefault(str(cat_dir_path), entry["image_dir"])
 
@@ -437,7 +446,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir_path = Path(seed_dirs_list[0]).parents[1]
-    if CAT_ONLY and cat_dir_path.name not in CAT_ONLY:
+    cat_name = key[len(entry["domain"]) + 1:]  # "visa_pcb" → "pcb"
+    if CAT_ONLY and cat_name not in CAT_ONLY:
         continue
     cat_map.setdefault(str(cat_dir_path), entry["image_dir"])
     cat_seed_dirs[str(cat_dir_path)].extend(seed_dirs_list)
