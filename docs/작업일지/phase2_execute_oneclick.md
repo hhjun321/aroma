@@ -456,10 +456,14 @@ all_cats, skip = [], 0
 for cat_dir_str, image_dir in cat_map.items():
     cat_dir    = Path(cat_dir_str)
     groups_all = [DATASET_GROUP] + AROMA_RATIO_GROUPS
-    all_done   = all(
-        (cat_dir / "augmented_dataset" / g / "train" / "defect").exists()
-        and any((cat_dir / "augmented_dataset" / g / "train" / "defect").iterdir())
-        for g in groups_all
+    baseline_test = cat_dir / "augmented_dataset" / "baseline" / "test"
+    all_done   = (
+        baseline_test.exists() and any(baseline_test.iterdir())
+        and all(
+            (cat_dir / "augmented_dataset" / g / "train" / "defect").exists()
+            and any((cat_dir / "augmented_dataset" / g / "train" / "defect").iterdir())
+            for g in groups_all
+        )
     )
     if all_done:
         skip += 1
@@ -474,17 +478,20 @@ else:
 
     def _run_stage6(args):
         cat_dir, image_dir, seed_dirs = args
-        local_cat    = _LOCAL_DOMAIN_PATH / cat_dir.name
+        cat_name     = cat_dir.name
+        local_cat    = _LOCAL_DOMAIN_PATH / cat_name
         local_imgdir = local_cat / "train" / "good"
 
         t_total = time.time()
         try:
             # ── 1단계: good 이미지 수 확인 ───────────────────────────────
+            print(f"  [{cat_name}] 1/6 good 이미지 수 확인...")
             _exts = ("*.png", "*.jpg", "*.jpeg")
             good_count_drive = sum(len(list(Path(image_dir).glob(e))) for e in _exts)
 
             # ── 2단계: 각 그룹의 선택 대상 결정 (Drive quality_scores 기반) ─
-            # aroma_diffusion: pruning 0.5 + domain 비율 + balance_defect_types
+            n_groups = 1 + len(AROMA_RATIOS)
+            print(f"  [{cat_name}] 2/6 defect 경로 수집 ({n_groups}개 그룹, good={good_count_drive})...")
             pairs_diffusion = _collect_defect_paths(
                 str(cat_dir),
                 pruning_ratio        = PRUNING_RATIO,
@@ -493,9 +500,6 @@ else:
                 balance_defect_types = BALANCE_DEFECT_TYPES,
                 stage4_subdir        = STAGE4_SUBDIR,
             )
-
-            # aroma_ratio_*: pruning 0.5 적용 후 유형별 균등 할당
-            # ratio = 합성/(원본+합성) → augmentation_ratio = ratio/(1-ratio)
             aroma_ratio_pairs: dict = {}
             for ratio in AROMA_RATIOS:
                 group_key = f"aroma_ratio_{int(ratio * 100)}"
@@ -509,41 +513,63 @@ else:
                     stage4_subdir        = STAGE4_SUBDIR,
                 )
 
-            # ── 3단계: 필요한 PNG 합집합 → 로컬 SSD 복사 ─────────────────
+            # ── 3단계: 필요한 PNG 합집합 + good 이미지 → 로컬 SSD 병렬 복사 ─
             t = time.time()
             all_src = {src for src, _ in pairs_diffusion}
             for pairs in aroma_ratio_pairs.values():
                 all_src.update(src for src, _ in pairs)
+            file_tasks = [
+                (src, str(local_cat / Path(src).relative_to(cat_dir)))
+                for src in sorted(all_src)
+            ]
+            print(f"  [{cat_name}] 3/6 defect {len(file_tasks)}개 + good {good_count_drive}장 병렬 복사 중...")
 
             def _copy_file(src_dst):
                 src, dst = Path(src_dst[0]), Path(src_dst[1])
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(src), str(dst))
 
-            file_tasks = [
-                (src, str(local_cat / Path(src).relative_to(cat_dir)))
-                for src in sorted(all_src)
-            ]
-            with ThreadPoolExecutor(max_workers=NUM_IO_THREADS) as ex:
-                list(tqdm(ex.map(_copy_file, file_tasks), total=len(file_tasks),
-                          desc=f"  {cat_dir.name} defect PNG", leave=False))
+            def _copy_good():
+                shutil.copytree(str(image_dir), str(local_imgdir), dirs_exist_ok=True)
 
-            shutil.copytree(str(image_dir), str(local_imgdir), dirs_exist_ok=True)
+            # good 복사와 defect PNG 복사를 동시에 실행
+            with ThreadPoolExecutor(max_workers=NUM_IO_THREADS + 1) as ex:
+                good_fut = ex.submit(_copy_good)
+                list(ex.map(_copy_file, file_tasks))
+                good_fut.result()
             copy_sec = time.time() - t
 
             # ── 4단계: 경로 리매핑 (Drive → 로컬 SSD) ────────────────────
+            print(f"  [{cat_name}] 4/6 경로 리매핑...")
             def _remap(pairs):
                 return [
                     (str(local_cat / Path(src).relative_to(cat_dir)), dst_name)
                     for src, dst_name in pairs
                 ]
-
-            pairs_diffusion_local = _remap(pairs_diffusion)
+            pairs_diffusion_local   = _remap(pairs_diffusion)
             aroma_ratio_pairs_local = {k: _remap(v) for k, v in aroma_ratio_pairs.items()}
 
             # ── 5단계: 데이터셋 구성 ─────────────────────────────────────
             t = time.time()
-            # aroma_diffusion
+            # baseline: dataset_group 지정 시 자동 생성되지 않으므로 명시적 빌드
+            baseline_local = local_cat / "augmented_dataset" / "baseline"
+            baseline_rebuilt = not (baseline_local / "test").exists()
+            if baseline_rebuilt:
+                n_build = 2 + len(aroma_ratio_pairs_local)  # baseline 포함
+                print(f"  [{cat_name}] 5/6 데이터셋 구성 중 ({n_build}개 그룹, baseline 포함)...")
+                run_dataset_builder(
+                    cat_dir       = str(local_cat),
+                    image_dir     = str(local_imgdir),
+                    seed_dirs     = seed_dirs,
+                    split_ratio   = SPLIT_RATIO,
+                    split_seed    = SPLIT_SEED,
+                    workers       = NUM_IO_THREADS,
+                    stage4_subdir = STAGE4_SUBDIR,
+                    groups        = ["baseline"],
+                )
+            else:
+                n_build = 1 + len(aroma_ratio_pairs_local)
+                print(f"  [{cat_name}] 5/6 데이터셋 구성 중 ({n_build}개 그룹)...")
             result = run_dataset_builder(
                 cat_dir                       = str(local_cat),
                 image_dir                     = str(local_imgdir),
@@ -558,9 +584,8 @@ else:
                 dataset_group                 = DATASET_GROUP,
                 preselected_defect_pairs_full = pairs_diffusion_local,
             )
-            # aroma_ratio_* 그룹
             for group_key, pairs_local in aroma_ratio_pairs_local.items():
-                ratio    = int(group_key.split("_")[-1]) / 100
+                ratio     = int(group_key.split("_")[-1]) / 100
                 aug_ratio = ratio / (1 - ratio)
                 run_dataset_builder(
                     cat_dir                       = str(local_cat),
@@ -578,29 +603,33 @@ else:
                 )
             build_sec = time.time() - t
 
-            # ── 6단계: Drive 업로드 (aroma_diffusion + aroma_ratio_* 그룹) ─
+            # ── 6단계: Drive 업로드 (baseline + aroma_diffusion + aroma_ratio_* 그룹, 병렬) ─
             t = time.time()
-            for grp in [DATASET_GROUP] + list(aroma_ratio_pairs_local.keys()):
+            grp_list = ([("baseline")] if baseline_rebuilt else []) + \
+                       [DATASET_GROUP] + list(aroma_ratio_pairs_local.keys())
+            print(f"  [{cat_name}] 6/6 Drive 업로드 중 ({len(grp_list)}개 그룹 병렬)...")
+
+            def _upload_grp(grp):
                 drive_grp = cat_dir / "augmented_dataset" / grp
                 if drive_grp.exists():
                     shutil.rmtree(str(drive_grp))
-                shutil.copytree(
-                    str(local_cat / "augmented_dataset" / grp),
-                    str(drive_grp),
-                )
+                shutil.copytree(str(local_cat / "augmented_dataset" / grp), str(drive_grp))
+
+            with ThreadPoolExecutor(max_workers=len(grp_list)) as ex:
+                list(ex.map(_upload_grp, grp_list))
             up_sec = time.time() - t
 
-            defect_count  = result.get(DATASET_GROUP, {}).get("defect_count", "?")
-            ratio_counts  = {k: len(v) for k, v in aroma_ratio_pairs_local.items()}
+            defect_count = result.get(DATASET_GROUP, {}).get("defect_count", "?")
+            ratio_counts = {k: len(v) for k, v in aroma_ratio_pairs_local.items()}
             print(
-                f"  ✓ {cat_dir.name} [{time.time()-t_total:.0f}s 합계]  "
+                f"  ✓ [{cat_name}] 완료 [{time.time()-t_total:.0f}s]  "
                 f"복사:{copy_sec:.0f}s  구성:{build_sec:.0f}s  업로드:{up_sec:.0f}s  "
-                f"[diffusion={defect_count}, ratio={ratio_counts}]"
+                f"diffusion={defect_count}  ratio={ratio_counts}"
             )
         finally:
             shutil.rmtree(str(local_cat), ignore_errors=True)
 
-        return cat_dir.name
+        return cat_name
 
     with tqdm(total=len(all_cats), desc=f"Stage6 {LABEL}") as bar:
         with ThreadPoolExecutor(max_workers=CAT_THREADS) as ex:
@@ -645,7 +674,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
-    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+    cat_name = key[len(entry["domain"]) + 1:]  # "visa_pcb" → "pcb"
+    if CAT_ONLY and cat_name not in CAT_ONLY:
         continue
     if str(cat_dir) in seen:
         continue
@@ -776,7 +806,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
-    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+    cat_name = key[len(entry["domain"]) + 1:]  # "visa_pcb" → "pcb"
+    if CAT_ONLY and cat_name not in CAT_ONLY:
         continue
     if str(cat_dir) in seen or cat_dir.name in EXCLUDE:
         continue
@@ -808,7 +839,8 @@ for key, entry in CONFIG.items():
         continue
     seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
     cat_dir = Path(seed_dirs_list[0]).parents[1]
-    if CAT_ONLY and cat_dir.name not in CAT_ONLY:
+    cat_name = key[len(entry["domain"]) + 1:]  # "visa_pcb" → "pcb"
+    if CAT_ONLY and cat_name not in CAT_ONLY:
         continue
     if str(cat_dir) in seen:
         continue
