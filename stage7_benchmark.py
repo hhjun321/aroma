@@ -800,7 +800,14 @@ def run_benchmark(
     domain = Path(cat_dir).parent.name
     use_pixel = domain in config["evaluation"].get("pixel_auroc_domains", [])
 
-    all_groups = groups or list(config["dataset_groups"].keys())
+    if groups is not None:
+        all_groups = groups
+    else:
+        _ar = config.get("aroma_ratio", {})
+        all_groups = list(config["dataset_groups"].keys()) + (
+            [f"aroma_ratio_{int(r*100)}" for r in _ar.get("ratios", [])]
+            if _ar.get("enabled") else []
+        )
     all_models = models or list(config["models"].keys())
 
     results: dict = {}
