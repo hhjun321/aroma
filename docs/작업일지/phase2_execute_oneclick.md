@@ -87,6 +87,10 @@ DATASET_GROUP        = "aroma_diffusion"
 
 # 로컬 SSD 루트 (Stage 4-6 통합 캐시)
 LOCAL_TMP = Path("/content/tmp_phase2")
+
+# Stage 7 선택 실행 (None → 전체)
+STAGE7_MODELS = None   # 예: ["yolo11"] / ["efficientdet_d0"] / None → 전체
+STAGE7_GROUPS = None   # 예: ["baseline", "aroma_diffusion"] / ["aroma_ratio_50"] / None → 전체
 # ─────────────────────────────────────────────────────────────────────
 
 # YAML에서 자동 로드 (수정 불필요)
@@ -134,15 +138,21 @@ print_report(results)
 > `stage4_diffusion_output/` (Drive 체크포인트) 와 `augmented_dataset/aroma_diffusion/` (Stage 6 출력) 을 제거.
 
 ```python
-import shutil, json
+import shutil, json, yaml
 from pathlib import Path
 
-REPO   = Path("/content/aroma")
-CONFIG = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+REPO      = Path("/content/aroma")
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
 
-DOMAIN_FILTER      = "mvtec"     # 셀 1과 동일하게 맞출 것
-CAT_ONLY           = ["bottle"]  # 초기화할 카테고리
-AROMA_RATIO_GROUPS_ = ["aroma_ratio_10", "aroma_ratio_20", "aroma_ratio_30", "aroma_ratio_50"]
+DOMAIN_FILTER = "mvtec"     # 셀 1과 동일하게 맞출 것
+CAT_ONLY      = ["bottle"]  # 초기화할 카테고리
+
+_ar = BENCH_CFG.get("aroma_ratio", {})
+AROMA_RATIO_GROUPS_ = (
+    [f"aroma_ratio_{int(r*100)}" for r in _ar.get("ratios", [])]
+    if _ar.get("enabled") else []
+)
 
 seen = set()
 for key, entry in CONFIG.items():
@@ -702,6 +712,77 @@ for key, entry in CONFIG.items():
 
 ---
 
+## 셀 6-1: Stage 4 합성 이미지 수 확인 (선택)
+
+> `aroma_ratio_*` 그룹이 동일한 defect 수를 보이면, 합성 풀이 요청량보다 적어 상한에 걸리거나
+> pruning_ratio 적용 후 모두 같은 수가 선택된 것.
+> 실제 학습 good 수(baseline/train/good) 기준으로 ratio별 필요량과 공급량을 비교한다.
+
+```python
+import yaml, json
+from pathlib import Path
+
+REPO      = Path("/content/aroma")
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+
+# ── 설정 ─────────────────────────────────────────────────────────────
+DOMAIN_FILTER   = "visa"        # 확인할 도메인
+CAT_ONLY        = ["pcb4"]      # None → 전체
+STAGE4_SUBDIR   = "stage4_diffusion_output"
+# ─────────────────────────────────────────────────────────────────────
+
+_ar  = BENCH_CFG.get("aroma_ratio", {})
+RATIOS        = _ar.get("ratios", []) if _ar.get("enabled") else []
+PRUNING_RATIO = BENCH_CFG["dataset"].get("pruning_ratio", 1.0)
+
+seen = set()
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
+    cat_name = key[len(entry["domain"]) + 1:]
+    if CAT_ONLY and cat_name not in CAT_ONLY:
+        continue
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+
+    # good 수: Stage 6의 good_count_drive와 동일한 image_dir (split 전 원본)
+    image_dir = Path(entry["image_dir"])
+    _exts = ("*.png", "*.jpg", "*.jpeg")
+    n_good = sum(len(list(image_dir.glob(e))) for e in _exts) if image_dir.exists() else 0
+
+    # stage4 합성 이미지 수 (seed별 집계)
+    stage4_root = cat_dir / STAGE4_SUBDIR
+    seed_counts = {}
+    if stage4_root.exists():
+        for seed_dir in sorted(stage4_root.iterdir()):
+            defect_dir = seed_dir / "defect"
+            n = len(list(defect_dir.glob("*.png"))) if defect_dir.exists() else 0
+            if n > 0:
+                seed_counts[seed_dir.name] = n
+    total_synth = sum(seed_counts.values())
+    # pruning_ratio 적용 후 실제 선택 가능한 수
+    after_pruning = int(total_synth * PRUNING_RATIO)
+
+    print(f"\n{'='*60}")
+    print(f"{cat_dir.name}  |  good={n_good}  |  합성 총계={total_synth}  |  pruning 후={after_pruning}  (pruning_ratio={PRUNING_RATIO})")
+    print(f"  seed별: {seed_counts}")
+
+    # ratio별 필요량 vs pruning 후 공급량
+    if RATIOS and n_good > 0:
+        print(f"\n  {'ratio':>6}  {'필요량(aug×good)':>18}  {'pruning 후 공급':>16}  {'상한 걸림':>10}")
+        for r in RATIOS:
+            aug_ratio = r / (1 - r)
+            needed    = int(aug_ratio * n_good)
+            capped    = "⚠ YES" if after_pruning < needed else "  no"
+            print(f"  {r:>6.0%}  {needed:>18}  {after_pruning:>16}  {capped:>10}")
+```
+
+---
+
 ## 셀 6-0: Stage 7 초기화 (선택)
 
 > 특정 카테고리·그룹의 벤치마크를 처음부터 재실행할 때 사용.
@@ -769,12 +850,15 @@ CONFIG_PATH = str(REPO / "configs" / "benchmark_experiment_phase2.yaml")
 BENCH_CFG   = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
 
 EXCLUDE             = set(BENCH_CFG.get("category_filter", {}).get("exclude", {}).get(DOMAIN_FILTER, []))
-MODELS              = list(BENCH_CFG["models"].keys())
 _ar = BENCH_CFG.get("aroma_ratio", {})
-GROUPS              = list(BENCH_CFG["dataset_groups"].keys()) + (
+_all_models = list(BENCH_CFG["models"].keys())
+_all_groups = list(BENCH_CFG["dataset_groups"].keys()) + (
     [f"aroma_ratio_{int(r*100)}" for r in _ar.get("ratios", [])] if _ar.get("enabled") else []
 )
+MODELS              = [m for m in _all_models if STAGE7_MODELS is None or m in STAGE7_MODELS]
+GROUPS              = [g for g in _all_groups if STAGE7_GROUPS is None or g in STAGE7_GROUPS]
 NON_BASELINE_GROUPS = [g for g in GROUPS if g != "baseline"]
+print(f"모델: {MODELS}  /  그룹: {GROUPS}")
 
 # Drive 저장 경로: experiment_meta.json + benchmark_results.json/csv 모두 여기에 저장
 # yaml의 results_dir 값을 사용 (benchmark_experiment_phase2.yaml → experiment.results_dir)
@@ -909,6 +993,8 @@ else:
             results = run_benchmark(
                 config_path = CONFIG_PATH,
                 cat_dir     = str(local_cat),
+                groups      = GROUPS,
+                models      = MODELS,
                 resume      = True,
                 output_dir  = str(local_out),
                 results_dir = DRIVE_OUTPUT_DIR,

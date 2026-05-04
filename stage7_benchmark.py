@@ -146,6 +146,7 @@ def _save_results_summary(
                 record.update({
                     "image_auroc":        val.get("image_auroc"),
                     "image_f1":           val.get("image_f1"),
+                    "image_best_f1":      val.get("image_best_f1"),
                     "pixel_auroc":        val.get("pixel_auroc"),
                     "total_time_seconds": val.get("total_time_seconds"),
                     "timestamp":          val.get("timestamp"),
@@ -183,7 +184,7 @@ def _save_results_summary(
     csv_path = results_root / "benchmark_comparison.csv"
     _fields = [
         "category", "model", "group",
-        "image_auroc", "image_f1", "pixel_auroc",
+        "image_auroc", "image_f1", "image_best_f1", "pixel_auroc",
         "total_time_seconds", "timestamp",
         "training_pipeline", "use_amp", "error",
     ]
@@ -244,7 +245,7 @@ def _reset_category(out_dir: Path, results_root: Path, cat_name: str) -> None:
     csv_path = results_root / "benchmark_comparison.csv"
     _fields = [
         "category", "model", "group",
-        "image_auroc", "image_f1", "pixel_auroc",
+        "image_auroc", "image_f1", "image_best_f1", "pixel_auroc",
         "total_time_seconds", "timestamp",
         "training_pipeline", "use_amp", "error",
     ]

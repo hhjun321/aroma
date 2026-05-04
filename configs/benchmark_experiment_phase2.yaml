@@ -9,20 +9,14 @@ dataset:
   split_ratio: 0.8   # 전체 good 이미지의 80% train, 20% test
   split_seed: 42
 
-  # 도메인별 증강 비율 (domain → {full, pruned})
+  # 도메인별 증강 비율 (aroma_diffusion 그룹에 적용)
   augmentation_ratio_by_domain:
     isp:
       full: 1.0
-      pruned: 0.5
     mvtec:
       full: 2.0
-      pruned: 1.5
     visa:
       full: 2.0
-      pruned: 1.5
-
-  augmentation_ratio_full: null
-  augmentation_ratio_pruned: null
 
   defect_type_balance: true
 
@@ -50,16 +44,17 @@ dataset_groups:
 
 # aroma_ratio 비율 실험 설정
 # ratio = 합성/(원본+합성), max_samples = 원본 × ratio/(1-ratio)
-# stratified=False (balance_defect_types=False): 전체 global top-k by quality_score
-# pruning_ratio 사전 필터 없음 (aroma_diffusion과의 차이점)
+# aroma_diffusion과 동일하게 pruning_ratio 사전 필터 적용됨
+# 합성 풀이 부족하면 여러 ratio가 동일 결과 → 셀 6-1로 사전 확인 권장
 aroma_ratio:
   enabled: true
-  ratios: [0.10, 0.20, 0.30, 0.50]
+  ratios: [0.10]
 
 evaluation:
   metrics:
     - image_auroc
-    - image_f1
+    - image_f1        # threshold=0.5 고정 (분류기 그룹 전용)
+    - image_best_f1   # 최적 threshold F1 — baseline ↔ 분류기 그룹 공정 비교
     - pixel_auroc
   pixel_auroc_domains:
     - mvtec
