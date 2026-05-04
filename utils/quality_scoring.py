@@ -121,11 +121,10 @@ def _score_sharpness(gray: np.ndarray, mask: np.ndarray | None = None) -> float:
         num_pixels = gray.shape[0] * gray.shape[1]
 
     # Laplacian variance — 선명한 이미지일수록 높음
+    # np.var는 이미 픽셀 수로 정규화된 값(분산)이므로 해상도 비례 스케일링 불필요.
+    # 1000.0은 ISP-AD ASM 512×512 기준 경험적 상수.
     lap_var = float(np.var(lap_vals))
-    # 해상도 비례 정규화: 기준 해상도(256×256) 대비 픽셀 비율로 스케일링
-    _REF_PIXELS = 256 * 256
-    scale = num_pixels / _REF_PIXELS
-    lap_score = float(np.clip(lap_var / (1000.0 * scale), 0.0, 1.0))
+    lap_score = float(np.clip(lap_var / 1000.0, 0.0, 1.0))
 
     # Gradient contrast: P90 / P50 비율
     p50 = float(np.percentile(mag_vals, 50))
