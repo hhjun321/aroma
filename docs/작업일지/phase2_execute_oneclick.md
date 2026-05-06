@@ -15,7 +15,9 @@
 7. **런타임 → 모두 실행** 또는 셀 순서대로 실행
 
 **재실행이 필요한 경우:**
-- Stage 4-5-6 재실행: **셀 3-0** (해당 카테고리 합성·데이터셋 초기화)
+- Stage 4-5-6 전체 재실행: **셀 3-0** (합성 이미지 + 데이터셋 전체 초기화)
+- Stage 5만 재실행 (quality_scores.json 버그 수정 등): **셀 4-0** (quality_scores.json만 삭제, 합성 이미지 보존)
+- Stage 6만 재실행 (데이터셋 구성 재실행): **셀 5-0** (augmented_dataset 그룹 삭제)
 - Stage 7 재실행: **셀 6-0** (`RESET_GROUPS` 지정 후 experiment_meta.json 삭제)
 
 ## 설계 원칙
@@ -73,8 +75,10 @@ CONDITIONING_SCALE  = 0.7   # 학습 1.0 → 추론 0.7 (아티팩트 방지)
 DIFFUSION_SEED      = 42
 
 # Stage 5 병렬
-SEED_THREADS = 4    # seed 단위 동시 처리
-IMG_WORKERS  = -1   # run_quality_scoring 내부 이미지 단위 병렬 수
+SEED_THREADS = 4    # seed 단위 동시 처리 (ThreadPoolExecutor)
+IMG_WORKERS  = 0    # 이미지 단위: 반드시 0(순차) — ThreadPoolExecutor 내부에서
+                    # ProcessPoolExecutor를 추가 생성하면 Linux fork 시 deadlock 발생
+                    # (다른 스레드가 보유한 C 레벨 락이 자식 프로세스에 잠긴 채 복사됨)
 
 # Stage 6 설정
 PRUNING_RATIO        = 0.5
@@ -332,6 +336,58 @@ else:
 
 ---
 
+## 셀 4-0: Stage 5 초기화 (선택)
+
+> `quality_scores.json`만 삭제. Stage 4 합성 이미지는 보존.
+> `_score_sharpness` 버그 수정 후 재계산 시 사용.
+
+```python
+import json, yaml
+from pathlib import Path
+
+REPO      = Path("/content/aroma")
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+
+# ── 초기화 범위 설정 ──────────────────────────────────────────────────
+DOMAIN_FILTER = "mvtec"     # 셀 1과 동일하게 맞출 것
+CAT_ONLY      = ["bottle"]  # None → 전체
+STAGE4_SUBDIR = "stage4_diffusion_output"
+# ─────────────────────────────────────────────────────────────────────
+
+deleted, missing = 0, 0
+seen = set()
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
+    cat_name = key[len(entry["domain"]) + 1:]
+    if CAT_ONLY and cat_name not in CAT_ONLY:
+        continue
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+
+    stage4_root = cat_dir / STAGE4_SUBDIR
+    if not stage4_root.exists():
+        print(f"  없음 (skip): {stage4_root}")
+        continue
+    for seed_dir in sorted(stage4_root.iterdir()):
+        if not seed_dir.is_dir():
+            continue
+        qs = seed_dir / "quality_scores.json"
+        if qs.exists():
+            qs.unlink()
+            print(f"  삭제: {cat_dir.name}/{STAGE4_SUBDIR}/{seed_dir.name}/quality_scores.json")
+            deleted += 1
+        else:
+            missing += 1
+
+print(f"\n초기화 완료: 삭제 {deleted}개, 없음(skip) {missing}개 → 셀 4 재실행 가능")
+```
+
+---
+
 ## 셀 4: Stage 5 — 품질 점수
 
 > **skip:** Drive `stage4_diffusion_output/{seed}/quality_scores.json` 전체 존재 → 카테고리 skip
@@ -392,10 +448,12 @@ else:
                 if d.is_dir() and not (d / "quality_scores.json").exists()
             ]
 
-            def _run_s5(seed_id):
+            # IMG_WORKERS=0 필수 — ThreadPoolExecutor 스레드 내에서 ProcessPoolExecutor를
+            # 추가 생성하면 Linux fork 시 deadlock 발생 (셀 1 주석 참고)
+            def _run_s5(seed_id, _stage4=drive_stage4):
                 run_quality_scoring(
-                    stage4_seed_dir = str(drive_stage4 / seed_id),
-                    workers         = IMG_WORKERS,
+                    stage4_seed_dir = str(_stage4 / seed_id),
+                    workers         = IMG_WORKERS,  # 반드시 0
                 )
                 return seed_id
 
@@ -407,7 +465,7 @@ else:
                         fut.result()
             score_sec = time.time() - t_score
 
-            print(f"  ✓ {cat_dir.name} [{time.time()-t_total:.0f}s]  점수:{score_sec:.0f}s")
+            print(f"  ✓ {cat_dir.name} [{time.time()-t_total:.0f}s]  점수:{score_sec:.0f}s  ({len(seeds_s5)}seed)")
 
         except Exception as e:
             import traceback
@@ -417,6 +475,62 @@ else:
     print("\n" + (f"✓ {LABEL} Stage 5 완료" if not failed else f"✗ {len(failed)}건 실패"))
     for f in failed:
         print(f"  [{f['category']}] {f['type']}: {f['error'][:120]}")
+```
+
+---
+
+## 셀 5-0: Stage 6 초기화 (선택)
+
+> `augmented_dataset/{group}` 삭제. Stage 4-5 결과는 보존.
+> 기본값은 `aroma_diffusion` + `aroma_ratio_*` 삭제 (baseline 제외).
+> `RESET_BASELINE=True` 로 test set 포함 baseline도 삭제 가능.
+
+```python
+import shutil, json, yaml
+from pathlib import Path
+
+REPO      = Path("/content/aroma")
+CONFIG    = json.loads((REPO / "dataset_config.json").read_text(encoding="utf-8"))
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
+
+# ── 초기화 범위 설정 ──────────────────────────────────────────────────
+DOMAIN_FILTER  = "mvtec"     # 셀 1과 동일하게 맞출 것
+CAT_ONLY       = ["bottle"]  # None → 전체
+RESET_GROUPS   = None        # None → aroma_diffusion + aroma_ratio_* 전체 (baseline 제외)
+RESET_BASELINE = False       # True → baseline도 삭제 (test set 포함)
+# ─────────────────────────────────────────────────────────────────────
+
+_ar = BENCH_CFG.get("aroma_ratio", {})
+_ratio_groups = (
+    [f"aroma_ratio_{int(r*100)}" for r in _ar.get("ratios", [])]
+    if _ar.get("enabled") else []
+)
+groups_to_reset = RESET_GROUPS or (["aroma_diffusion"] + _ratio_groups)
+if RESET_BASELINE:
+    groups_to_reset = ["baseline"] + groups_to_reset
+
+seen = set()
+for key, entry in CONFIG.items():
+    if key.startswith("_") or entry["domain"] != DOMAIN_FILTER:
+        continue
+    seed_dirs_list = entry.get("seed_dirs") or [entry["seed_dir"]]
+    cat_dir = Path(seed_dirs_list[0]).parents[1]
+    cat_name = key[len(entry["domain"]) + 1:]
+    if CAT_ONLY and cat_name not in CAT_ONLY:
+        continue
+    if str(cat_dir) in seen:
+        continue
+    seen.add(str(cat_dir))
+
+    for g in groups_to_reset:
+        target = cat_dir / "augmented_dataset" / g
+        if target.exists():
+            shutil.rmtree(str(target))
+            print(f"  삭제: {cat_dir.name}/augmented_dataset/{g}")
+        else:
+            print(f"  없음 (skip): {cat_dir.name}/augmented_dataset/{g}")
+
+print("\n초기화 완료 → 셀 5 재실행 가능")
 ```
 
 ---
@@ -787,25 +901,33 @@ for key, entry in CONFIG.items():
 
 > 특정 카테고리·그룹의 벤치마크를 처음부터 재실행할 때 사용.
 > Drive `DRIVE_OUTPUT_DIR/{cat}/{model}/{group}/experiment_meta.json` 을 삭제.
-> `CAT_ONLY` / `RESET_GROUPS` 로 범위를 한정할 것.
+> `CAT_ONLY_RESET` / `RESET_GROUPS` 로 범위를 한정할 것.
 
 ```python
-import shutil
+import yaml
 from pathlib import Path
 
-# ── 초기화 범위 설정 ──────────────────────────────────────────────────
-CAT_ONLY_RESET    = ["bottle"]          # None → 전체 카테고리
-RESET_GROUPS      = ["aroma_diffusion"] # None → 전체 그룹 (baseline 포함 주의)
-RESET_MODELS      = None                # None → 전체 모델
+REPO      = Path("/content/aroma")
+BENCH_CFG = yaml.safe_load((REPO / "configs" / "benchmark_experiment_phase2.yaml").read_text())
 
-# 셀 7의 DRIVE_OUTPUT_DIR 와 동일하게 맞출 것
+# ── 초기화 범위 설정 ──────────────────────────────────────────────────
+CAT_ONLY_RESET = ["bottle"]          # None → 전체 카테고리
+RESET_GROUPS   = ["aroma_diffusion"] # None → 전체 그룹 (baseline 포함 주의)
+RESET_MODELS   = None                # None → 전체 모델
+# ─────────────────────────────────────────────────────────────────────
+
 DRIVE_OUTPUT_DIR_ = (
     BENCH_CFG["experiment"].get("results_dir")
     or "/content/drive/MyDrive/data/Aroma/benchmark_results_phase2"
 )
+_ar = BENCH_CFG.get("aroma_ratio", {})
+_all_groups = list(BENCH_CFG["dataset_groups"].keys()) + (
+    [f"aroma_ratio_{int(r*100)}" for r in _ar.get("ratios", [])] if _ar.get("enabled") else []
+)
 _models = RESET_MODELS or list(BENCH_CFG["models"].keys())
-_groups = RESET_GROUPS or list(BENCH_CFG["dataset_groups"].keys())
+_groups = RESET_GROUPS if RESET_GROUPS is not None else _all_groups
 
+deleted = 0
 drive_root = Path(DRIVE_OUTPUT_DIR_)
 for cat_dir in sorted(drive_root.iterdir()):
     if not cat_dir.is_dir():
@@ -818,8 +940,9 @@ for cat_dir in sorted(drive_root.iterdir()):
             if meta.exists():
                 meta.unlink()
                 print(f"  삭제: {cat_dir.name}/{model}/{group}/experiment_meta.json")
+                deleted += 1
 
-print("초기화 완료 → 셀 7 재실행 가능")
+print(f"\n초기화 완료 ({deleted}개 삭제) → 셀 7 재실행 가능")
 ```
 
 ---
