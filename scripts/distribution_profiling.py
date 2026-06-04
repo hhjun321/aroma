@@ -597,7 +597,7 @@ class DistributionProfiler:
             elif n_valleys == 1:
                 policy = "otsu"
                 distribution = "bimodal"
-                v_range = values.ptp() + 1e-6
+                v_range = (values.max() - values.min()) + 1e-6
                 norm = ((values - values.min()) / v_range * 255).astype(np.uint8)
                 thresh, _ = cv2.threshold(norm, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 otsu_val = float(values.min() + (thresh / 255.0) * v_range)
