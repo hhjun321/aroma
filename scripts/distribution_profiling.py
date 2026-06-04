@@ -305,11 +305,18 @@ def _context_worker(task: dict) -> List[dict]:
 
 
 def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
-    """Return (n_valleys, valley_x_positions) via inverted-histogram peak detection."""
+    """Return (n_valleys, valley_x_positions) via inverted-histogram peak detection.
+
+    Prominence = max(2 * noise_floor, counts.max() * VALLEY_PROMINENCE_RATIO)
+    noise_floor = sqrt(n_samples / n_bins) — sampling noise estimate (1σ per bin).
+    The 2× factor requires a valley to exceed 2σ noise (95% confidence).
+    VALLEY_PROMINENCE_RATIO acts as a floor for large datasets where ratio dominates.
+    """
     bins = min(HISTOGRAM_BINS, max(len(values) - 1, 2))
     counts, bin_edges = np.histogram(values, bins=bins)
     inverted = counts.max() - counts
-    prominence = max(counts.max() * VALLEY_PROMINENCE_RATIO, 1)
+    noise_floor = np.sqrt(len(values) / bins)
+    prominence = max(noise_floor * 2, counts.max() * VALLEY_PROMINENCE_RATIO)
     peaks, _ = scipy.signal.find_peaks(inverted, prominence=prominence)
     valley_positions = [float((bin_edges[int(p)] + bin_edges[int(p) + 1]) / 2) for p in peaks]
     return len(peaks), valley_positions
