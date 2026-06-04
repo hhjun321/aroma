@@ -310,15 +310,33 @@ def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
     Prominence = max(2 * noise_floor, counts.max() * VALLEY_PROMINENCE_RATIO)
     noise_floor = sqrt(n_samples / n_bins) — sampling noise estimate (1σ per bin).
     The 2× factor requires a valley to exceed 2σ noise (95% confidence).
-    VALLEY_PROMINENCE_RATIO acts as a floor for large datasets where ratio dominates.
+
+    Right-skewed distributions (p90/p10 > 4) are log1p-transformed before histogram
+    so that long-tail features (e.g. aspect_ratio) are linearised for valley detection.
+    Valley positions are then back-transformed to original scale via expm1.
     """
-    bins = min(HISTOGRAM_BINS, max(len(values) - 1, 2))
-    counts, bin_edges = np.histogram(values, bins=bins)
+    p10, p90 = np.percentile(values, [10, 90])
+    skew_ratio = (p90 / p10) if p10 > 1e-9 else np.inf
+    log_transform = skew_ratio > 4.0
+
+    work = np.log1p(values) if log_transform else values
+    bins = min(HISTOGRAM_BINS, max(len(work) - 1, 2))
+    counts, bin_edges = np.histogram(work, bins=bins)
     inverted = counts.max() - counts
-    noise_floor = np.sqrt(len(values) / bins)
+    noise_floor = np.sqrt(len(work) / bins)
     prominence = max(noise_floor * 2, counts.max() * VALLEY_PROMINENCE_RATIO)
     peaks, _ = scipy.signal.find_peaks(inverted, prominence=prominence)
-    valley_positions = [float((bin_edges[int(p)] + bin_edges[int(p) + 1]) / 2) for p in peaks]
+
+    if log_transform:
+        valley_positions = [
+            float(np.expm1((bin_edges[int(p)] + bin_edges[int(p) + 1]) / 2))
+            for p in peaks
+        ]
+    else:
+        valley_positions = [
+            float((bin_edges[int(p)] + bin_edges[int(p) + 1]) / 2)
+            for p in peaks
+        ]
     return len(peaks), valley_positions
 
 
