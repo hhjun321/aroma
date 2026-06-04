@@ -129,11 +129,11 @@ def _find_mask_path(domain: str, image_path: Path, defect_type: str) -> Optional
             return candidate
 
     elif domain == "visa":
-        # .../category/test/anomaly/img.JPG  (after prepare_visa.py)
-        # → .../category/test/mask/img.png
-        base = image_path.parent.parent / "mask"
+        # prepare_visa.py creates masks at: {category}/ground_truth/anomaly/{stem}.png
+        # image_path: .../visa/{category}/test/anomaly/{stem}.JPG
+        category_dir = image_path.parent.parent.parent  # .../visa/{category}/
         for ext in (".png", ".PNG", ".jpg", ".JPG"):
-            candidate = base / f"{stem}{ext}"
+            candidate = category_dir / "ground_truth" / "anomaly" / f"{stem}{ext}"
             if candidate.exists():
                 return candidate
 
