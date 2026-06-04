@@ -315,9 +315,12 @@ def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
     so that long-tail features (e.g. aspect_ratio) are linearised for valley detection.
     Valley positions are then back-transformed to original scale via expm1.
     """
-    p10, p90 = np.percentile(values, [10, 90])
-    skew_ratio = (p90 / p10) if p10 > 1e-9 else np.inf
-    log_transform = skew_ratio > 4.0
+    p10, p50, p90 = np.percentile(values, [10, 50, 90])
+    upper_range = p90 - p50
+    lower_range = p50 - p10 + 1e-9
+    # Log-transform only when upper tail is > 2× longer than lower tail (right-skewed scale)
+    # p90/p10 ratio alone misclassifies uniform [0,1] features (e.g. linearity, circularity)
+    log_transform = (upper_range / lower_range > 2.0) and (p10 > 1e-9)
 
     work = np.log1p(values) if log_transform else values
     bins = min(HISTOGRAM_BINS, max(len(work) - 1, 2))
