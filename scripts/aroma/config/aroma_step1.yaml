@@ -1,0 +1,35 @@
+# AROMA Step 1 — compute_complexity.py 설정
+# normalization expected_range는 수학적 경계에서 도출 (도메인 지식 아님)
+
+mci:
+  normalization: minmax          # minmax | zscore
+  weights: equal                 # equal | entropy_heavy | cluster_heavy
+  expected_range:
+    entropy:       [0.0, 4.0]    # log2(k); k<=16 가정 → max 4 bits
+    valley_count:  [0.0, 18.0]   # 6 features × max 3 valleys each
+    cluster_count: [1.0, 8.0]    # GMM max_k=8 상한과 정합
+
+cci:
+  normalization: minmax
+  weights: equal
+  expected_range:
+    texture_entropy:   [0.0, 8.0]    # 8-bit patch entropy 상한
+    cluster_count_ctx: [1.0, 8.0]
+    freq_complexity:   [0.0, 1.0]    # frequency_energy 분산 (정규화됨)
+    orient_variance:   [0.0, 1.0]    # orientation_consistency 분산
+  context_gmm:
+    max_k: 5
+    max_patches: 20000
+
+distribution:
+  min_samples: 10
+  valley_threshold: 1              # total_valleys <= 1 → otsu; > 1 → gmm
+  kurtosis_heavy_tail: 3.0         # Fisher excess kurtosis >= 3.0 → log_gmm 후보
+
+policy:
+  stability_margin: 0.05           # |Δsilhouette| < margin → stability tie-break
+  high_complexity_mci: 0.6         # MCI >= 0.6 → hierarchical 후보 추가
+  prune_low_mci: 0.3               # MCI < 0.3 → hierarchical/log_gmm 제거
+  max_candidates: 3                # pruning 후 최대 평가 후보 수
+  n_bootstrap: 5                   # stability analysis 재샘플 횟수
+  max_k: 8                         # morphology 정책 적용 시 클러스터 상한

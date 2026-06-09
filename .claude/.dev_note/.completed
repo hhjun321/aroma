@@ -1,1 +1,6 @@
-1.0.0_distribution_profiling.md
+aroma_project_roadmap.md
+aroma_step1_complexity-analysis.md
+aroma_step2_prompt-generation.md
+aroma_step3_roi-selection.md
+aroma_step4_generate-defects.md
+aroma_step1_colab-guide.md
