@@ -23,7 +23,9 @@ import json
 import logging
 import math
 import os
+import shutil
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -175,6 +177,47 @@ def load_config(path: Optional[str] = None) -> dict:
     else:
         logger.warning("Config not found: %s — using defaults", path)
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Local staging (Colab Drive latency mitigation)
+# ---------------------------------------------------------------------------
+
+_PHASE0_FILES = [
+    "distribution_analysis.json",
+    "morphology_clusters.json",
+    "morphology_features.csv",
+    "context_features.csv",
+]
+
+
+def _stage_to_local(profiling_dir: str, staging_root: Optional[str] = None) -> str:
+    """Copy Phase 0 output files from profiling_dir (e.g. Google Drive) to a
+    local temp directory to avoid repeated Drive I/O during processing.
+
+    Returns the local staging directory path.
+    """
+    src = Path(profiling_dir)
+    if staging_root:
+        root = Path(staging_root)
+    elif Path("/content").exists():  # Colab environment
+        root = Path("/content/tmp/aroma_staging")
+    else:
+        root = Path(tempfile.gettempdir()) / "aroma_staging"
+    dst = root / src.name
+    dst.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    for fname in _PHASE0_FILES:
+        src_file = src / fname
+        if src_file.exists():
+            shutil.copy2(str(src_file), str(dst / fname))
+            copied += 1
+        else:
+            logger.debug("Staging: %s not found, skipping", fname)
+
+    logger.info("Staged %d/%d files: %s → %s", copied, len(_PHASE0_FILES), src, dst)
+    return str(dst)
 
 
 # ---------------------------------------------------------------------------
@@ -440,20 +483,29 @@ def compute_mci(
 
 
 def _fit_gmm_bic(X: np.ndarray, max_k: int, seed: int = 0):
-    """GMM + BIC model selection. Returns (gmm, best_k)."""
+    """GMM + BIC model selection. Returns (gmm, best_k).
+
+    Two-phase strategy: BIC search with n_init=1 (fast) then refit best k
+    with n_init=3 (quality). Reduces total GMM fits from max_k*3 to max_k+3.
+    """
     if not HAS_SKLEARN or GaussianMixture is None:
         return None, 1
-    best_bic, best_gmm, best_k = np.inf, None, 1
+    best_bic, best_k = np.inf, 1
     for k in range(1, max_k + 1):
         try:
-            gmm = GaussianMixture(n_components=k, random_state=seed, n_init=3)
+            gmm = GaussianMixture(n_components=k, random_state=seed, n_init=1)
             gmm.fit(X)
             bic = gmm.bic(X)
             if bic < best_bic:
-                best_bic, best_gmm, best_k = bic, gmm, k
+                best_bic, best_k = bic, k
         except Exception:
-            break
-    return best_gmm, best_k
+            continue  # skip this k; higher k may still converge
+    try:
+        best_gmm = GaussianMixture(n_components=best_k, random_state=seed, n_init=3)
+        best_gmm.fit(X)
+        return best_gmm, best_k
+    except Exception:
+        return None, 1
 
 
 def _cluster_context(
@@ -739,11 +791,19 @@ def run(
     output_dir: str,
     cfg: dict,
     weight_mode: Optional[str] = None,
+    local_staging: bool = False,
+    staging_root: Optional[str] = None,
 ) -> dict:
     """
     Full Step 1 pipeline:
     load Phase 0 outputs → compute MCI/CCI → Meta Policy → save report.
+
+    local_staging: if True, copy Phase 0 files to local temp dir first
+                   (reduces Drive read latency in Colab).
+    staging_root:  override staging base directory (default /content/tmp/aroma_staging).
     """
+    if local_staging:
+        profiling_dir = _stage_to_local(profiling_dir, staging_root=staging_root)
     logger.info("Loading Phase 0 outputs from: %s", profiling_dir)
     phase0 = load_phase0_outputs(profiling_dir)
 
@@ -829,6 +889,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--weight_mode", choices=list(_WEIGHT_PRESETS), default=None,
         help="Weight preset for MCI/CCI ablation (overrides config)",
     )
+    p.add_argument(
+        "--local_staging", action="store_true", default=False,
+        help="Copy input files to /content/tmp/aroma_staging/ before processing "
+             "(reduces Google Drive read latency in Colab)",
+    )
+    p.add_argument(
+        "--staging_root", default=None,
+        help="Override local staging base directory (default: /content/tmp/aroma_staging)",
+    )
     return p.parse_args(argv)
 
 
@@ -840,6 +909,8 @@ def main(argv=None) -> None:
         output_dir=args.output_dir,
         cfg=cfg,
         weight_mode=args.weight_mode,
+        local_staging=args.local_staging,
+        staging_root=args.staging_root,
     )
 
 

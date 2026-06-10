@@ -19,6 +19,18 @@ notebooks/
 
 ---
 
+## 실행 환경
+
+| 연산 | 자원 | 비고 |
+|------|------|------|
+| 형태학/컨텍스트 특징 추출 | **CPU** | `--num_workers` 병렬 |
+| SAM 세그멘테이션 (fallback) | **GPU** (선택적) | GPU 없으면 Otsu 자동 사용 |
+| MCI/CCI 계산, 정책 평가 | **CPU** | 단일 프로세스 |
+
+> **권장 런타임**: T4 GPU (SAM 사용 시) / CPU 런타임 (SAM 미사용 시)
+
+---
+
 ## 노트북 셀 구성
 
 | 셀 | 내용 |
@@ -27,11 +39,11 @@ notebooks/
 | 1. Google Drive 마운트 | `from google.colab import drive` |
 | 2. 저장소 클론 | AROMA (Phase 0) + AROMA_PLUS (Step 1-4) |
 | 3. 의존성 설치 | scikit-learn, numpy, pyyaml, pillow |
-| 4. 환경변수 설정 | AROMA_REF, AROMA_SCRIPTS, AROMA_OUT 등 |
+| 4. GPU 감지 및 환경변수 설정 | `torch.cuda.is_available()` + AROMA_REF 등 |
 | 5. 데이터셋 키 선택 | `DATASET_KEY = 'isp_LSM_1'` |
-| 6. Phase 0 실행 | `!python $AROMA_REF/...` |
+| 6. Phase 0 실행 | `!python $AROMA_REF/... --num_workers $NUM_WORKERS` |
 | 7. Phase 0 출력 확인 | 생성 파일 목록 확인 |
-| 8. Step 1 실행 | `!python $AROMA_SCRIPTS/compute_complexity.py ...` |
+| 8. Step 1 실행 | `!python $AROMA_SCRIPTS/compute_complexity.py ... --num_workers $NUM_WORKERS` |
 | 9. 결과 확인 | complexity_report.json 출력 |
 | 10. Ablation (선택) | --weight_mode equal/entropy_heavy/cluster_heavy |
 
@@ -41,6 +53,15 @@ notebooks/
 
 ```python
 import os
+import torch
+
+# GPU 감지 및 workers 설정
+USE_GPU = torch.cuda.is_available()
+NUM_WORKERS = 4 if not USE_GPU else 2  # GPU 런타임은 CPU 코어 적음
+DEVICE = 'cuda' if USE_GPU else 'cpu'
+os.environ['NUM_WORKERS'] = str(NUM_WORKERS)
+os.environ['DEVICE']      = DEVICE
+print(f"device={DEVICE}, num_workers={NUM_WORKERS}")
 
 # aroma (Phase 0) 스크립트
 os.environ['AROMA_REF']       = '/content/AROMA'

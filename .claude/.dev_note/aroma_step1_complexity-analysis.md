@@ -14,6 +14,21 @@ Step 1은 이 스크립트를 Phase 0으로 호출한 후, 출력을 읽어 **MC
 
 ---
 
+## 실행 환경
+
+| 단계 | 연산 | 자원 | 비고 |
+|------|------|------|------|
+| Phase 0 — 형태학 특징 추출 | OpenCV morphology, numpy | **CPU** | ProcessPoolExecutor (`--num_workers`) |
+| Phase 0 — 컨텍스트 특징 추출 | patch FFT, entropy, gradient | **CPU** | ProcessPoolExecutor 동일 pool |
+| Phase 0 — SAM 세그멘테이션 (fallback) | SAM ViT inference | **GPU** (선택적) | GPU 없으면 Otsu fallback 자동 적용 |
+| Phase 0 — 분포 분석 / 클러스터링 | scipy KDE, sklearn GMM/BIC | **CPU** | 단일 스레드 (샘플 수 소규모) |
+| Step 1 — MCI/CCI 계산 | numpy z-score, 가중평균 | **CPU** | 단일 스레드 |
+| Step 1 — 정책 평가 | sklearn silhouette | **CPU** | 단일 스레드 |
+
+> **Colab 권장 런타임**: T4 GPU (SAM 사용 시). SAM 미사용 시 CPU 런타임으로 충분.
+
+---
+
 ## 영향도 분석
 
 ### 이 기능이 변경하는 상태
@@ -150,11 +165,17 @@ Best Policy
 
 ```python
 !python $AROMA_SCRIPTS/analyze_complexity.py \
-    --image_dir $TRAIN_IMAGES \
-    --train_csv $TRAIN_CSV \
-    --config $AROMA_CONFIG \
-    --output_dir $AROMA_OUT
+    --image_dir  $TRAIN_IMAGES \
+    --train_csv  $TRAIN_CSV \
+    --config     $AROMA_CONFIG \
+    --output_dir $AROMA_OUT \
+    --num_workers 4
 ```
+
+인자:
+- `--num_workers` (int, 기본 1): Phase 0 결과를 읽어 MCI/CCI를 dataset별로 병렬 계산할 때 사용. `ProcessPoolExecutor(max_workers=num_workers)` 적용.
+  - CPU 전용 연산이므로 `os.cpu_count()` 이하 값 권장 (Colab 기준 2–4).
+  - `1` 지정 시 단일 프로세스 실행 (디버그 용도).
 
 출력: MCI(float), CCI(float), morphology_policy, context_policy, complexity_report(dict)
 - 입력 이미지/CSV 로드 실패 → 컨텍스트(파일 경로 포함) 로그 후 해당 샘플 skip, 전체 파이프라인 중단 금지
@@ -180,6 +201,11 @@ distribution:
 
 policy:
   stability_margin: 0.05  # 상위 1·2위 점수 차이 < margin → 경계 케이스 로깅
+
+execution:
+  num_workers: 1          # MCI/CCI 병렬 계산 프로세스 수 (CLI --num_workers 우선)
+  device: auto            # auto | cpu | cuda  (SAM 세그멘테이션 장치 선택)
+                          # auto: torch.cuda.is_available() 결과 따름
 ```
 
 ---
@@ -244,10 +270,11 @@ os.environ['AROMA_OUT']     = f"{os.environ['DRIVE']}/aroma/step1"
 정상 실행:
 ```python
 !python $AROMA_SCRIPTS/analyze_complexity.py \
-    --image_dir $TRAIN_IMAGES \
-    --train_csv $TRAIN_CSV \
-    --config $AROMA_CONFIG \
-    --output_dir $AROMA_OUT
+    --image_dir  $TRAIN_IMAGES \
+    --train_csv  $TRAIN_CSV \
+    --config     $AROMA_CONFIG \
+    --output_dir $AROMA_OUT \
+    --num_workers 4
 ```
 
 단위 검증 (~10건 fixture):

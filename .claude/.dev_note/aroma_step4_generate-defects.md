@@ -2,6 +2,19 @@
 
 ## 사용할 skills: feature-dev
 
+## 실행 환경
+
+| method | 자원 | Workers 지원 |
+|--------|------|-------------|
+| `copy_paste` | **CPU** (PIL + numpy) | `--num_workers` (ProcessPoolExecutor) |
+| `controlnet` | **GPU** 필수 (diffusers SDXL) | 단일 GPU, workers 미사용 |
+| `inpainting` | **GPU** 필수 (diffusers) | 단일 GPU, workers 미사용 |
+
+> copy_paste는 ROI당 독립 연산이므로 ProcessPoolExecutor로 병렬화 가능.
+> GPU method는 단일 CUDA 장치 순차 처리 (Colab T4 기준 멀티 GPU 없음).
+
+---
+
 ## 개요
 
 Step 3 ROI 목록을 읽어 결함 이미지를 정상 배경 위에 합성한다.
@@ -47,11 +60,15 @@ Copy-Paste 방식을 기본 구현, ControlNet/Inpainting은 인터페이스 stu
 2. `controlnet_synthesis(...)` → `NotImplementedError`
 3. `inpainting_synthesis(...)` → `NotImplementedError`
 
-4. `run(roi_dir, normal_dir, output_dir, method, n_per_roi, ...)` → dict
+4. `run(roi_dir, normal_dir, output_dir, method, n_per_roi, num_workers, ...)` → dict
    - normal_dir 없으면 dry_run 모드 (이미지 없이 annotation만 기록)
    - `n_per_roi`: ROI당 생성 개수 (기본 3)
+   - `num_workers`: copy_paste 병렬 처리 수 (기본 1, GPU method 시 무시)
 
-5. CLI: `--roi_dir`, `--normal_dir`, `--output_dir`, `--method`, `--n_per_roi`, `--blend_mode`, `--feather_px`, `--seed`
+5. CLI: `--roi_dir`, `--normal_dir`, `--output_dir`, `--method`, `--n_per_roi`, `--blend_mode`, `--feather_px`, `--seed`, `--num_workers`, `--device`
+
+> `--device`: copy_paste는 무시됨. controlnet/inpainting에서 `cuda` | `cpu` 선택.
+> `--num_workers`: copy_paste 전용. GPU method에서 지정하면 경고 후 무시.
 
 ---
 
