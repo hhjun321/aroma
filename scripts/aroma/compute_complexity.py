@@ -452,16 +452,16 @@ def compute_mci(
     )
 
     raw = {
-        "entropy":       entropy,
-        "valley_count":  float(_total_valley_count(dist_analysis)),
-        "cluster_count": float(phase0.get("n_morph_clusters", 1)),
-        "silhouette":    silhouette,
+        "entropy":         entropy,
+        "valley_count":    float(_total_valley_count(dist_analysis)),
+        "cluster_count":   float(phase0.get("n_morph_clusters", 1)),
+        "inv_silhouette":  _clamp01(1.0 - silhouette),  # keys match normalized
     }
     normalized = {
-        "entropy":        _normalize_scalar(raw["entropy"],       *rng["entropy"],       norm_mode),
-        "valley_count":   _normalize_scalar(raw["valley_count"],  *rng["valley_count"],  norm_mode),
-        "cluster_count":  _normalize_scalar(raw["cluster_count"], *rng["cluster_count"], norm_mode),
-        "inv_silhouette": _clamp01(1.0 - raw["silhouette"]),
+        "entropy":        _normalize_scalar(raw["entropy"],        *rng["entropy"],       norm_mode),
+        "valley_count":   _normalize_scalar(raw["valley_count"],   *rng["valley_count"],  norm_mode),
+        "cluster_count":  _normalize_scalar(raw["cluster_count"],  *rng["cluster_count"], norm_mode),
+        "inv_silhouette": _clamp01(1.0 - silhouette),
     }
     assert len(weights) == len(normalized), (
         f"MCI weight/component count mismatch: {len(weights)} != {len(normalized)}"
@@ -469,11 +469,12 @@ def compute_mci(
     mci = float(np.dot(weights, list(normalized.values())))
 
     return mci, {
-        "raw":           raw,
-        "normalized":    normalized,
-        "weights":       weights,
-        "weight_mode":   wmode,
-        "normalization": norm_mode,
+        "raw":             raw,
+        "normalized":      normalized,
+        "weights":         weights,
+        "weight_mode":     wmode,
+        "normalization":   norm_mode,
+        "silhouette_score": silhouette,  # diagnostic: actual silhouette (not inverted)
     }
 
 
