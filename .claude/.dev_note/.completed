@@ -7,3 +7,5 @@ aroma_step1_colab-guide.md
 aroma_phase0_histogram-bins-dynamic.md
 aroma_phase0_data-driven-anchor.md
 aroma_phase0_valley-overdetection-fix.md
+aroma_step1_cci-subsampling-perclass-valley.md
+aroma_step1_cci-bootstrap-sampling.md

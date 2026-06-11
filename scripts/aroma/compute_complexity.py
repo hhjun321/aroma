@@ -308,6 +308,7 @@ def load_phase0_outputs(profiling_dir: str) -> Dict[str, Any]:
         "morph_X":          morph_X,
         "morph_ids":        morph_ids,
         "morph_labels":     morph_labels,
+        "morph_rows_raw":   morph_rows,
         "context_X":        context_X,
         "dist_analysis":    dist_analysis,
         "n_morph_clusters": n_morph_clusters,
@@ -394,6 +395,67 @@ def _total_valley_count(dist_analysis: dict) -> int:
     )
 
 
+def _perclass_valley_count(
+    morph_rows: List[Dict[str, str]],
+    aggregation: str = "mean",
+) -> float:
+    """
+    Per-class valley count aggregated across defect types.
+
+    Groups morphology feature values by defect_type, computes total valley count
+    per class (summed across all features), then returns mean or median across
+    classes. Removes class-count bias: datasets with many defect types no longer
+    score higher just because they have more classes.
+
+    Falls back to 0.0 if scipy is unavailable or morph_rows is empty.
+    """
+    try:
+        from scipy.signal import find_peaks as _find_peaks
+    except ImportError:
+        return 0.0
+
+    if not morph_rows:
+        return 0.0
+
+    from collections import defaultdict
+    class_rows: Dict[str, List] = defaultdict(list)
+    for r in morph_rows:
+        dt = r.get("defect_type") or "unknown"
+        class_rows[dt].append(r)
+
+    class_counts = []
+    for rows in class_rows.values():
+        total_valleys = 0
+        for feat in MORPH_FEATURES:
+            vals = []
+            for r in rows:
+                try:
+                    vals.append(float(r[feat]))
+                except (KeyError, ValueError, TypeError):
+                    continue
+            if len(vals) < 3:
+                continue
+            arr = np.array(vals, dtype=np.float64)
+            bins = min(50, len(arr) - 1)
+            counts, _ = np.histogram(arr, bins=bins)
+            peak_count = counts.max()
+            if peak_count == 0:
+                continue
+            inverted = peak_count - counts
+            noise_floor = np.sqrt(len(arr) / bins)
+            prominence = max(noise_floor * 2, peak_count * 0.1)
+            peaks, _ = _find_peaks(inverted, prominence=prominence)
+            total_valleys += len(peaks)
+        class_counts.append(total_valleys)
+
+    if not class_counts:
+        return 0.0
+
+    if aggregation == "median":
+        return float(np.median(class_counts))
+    return float(np.mean(class_counts))
+
+
 def _compute_silhouette(
     X: np.ndarray,
     labels: np.ndarray,
@@ -451,9 +513,15 @@ def compute_mci(
         else 0.0
     )
 
+    morph_rows_raw: List[Dict[str, str]] = phase0.get("morph_rows_raw", [])
+    if morph_rows_raw:
+        valley_count = _perclass_valley_count(morph_rows_raw, aggregation="mean")
+    else:
+        valley_count = float(_total_valley_count(dist_analysis))
+
     raw = {
         "entropy":         entropy,
-        "valley_count":    float(_total_valley_count(dist_analysis)),
+        "valley_count":    valley_count,
         "cluster_count":   float(phase0.get("n_morph_clusters", 1)),
         "inv_silhouette":  _clamp01(1.0 - silhouette),  # keys match normalized
     }
@@ -559,7 +627,16 @@ def compute_cci(
     rng = cfg["cci"]["expected_range"]
     weights = list(_WEIGHT_PRESETS.get(wmode, _WEIGHT_PRESETS["equal"]))
 
-    context_X: np.ndarray = phase0.get("context_X", np.empty((0, 5)))
+    context_X_full: np.ndarray = phase0.get("context_X", np.empty((0, 5)))
+    max_patches = int(cfg["cci"]["context_gmm"].get("max_patches", 20000))
+    n_ctx = len(context_X_full)
+    if n_ctx == 0:
+        context_X = context_X_full
+    else:
+        _sub_rng = np.random.default_rng(0)
+        replace = n_ctx < max_patches  # bootstrap when fewer patches than target
+        _sub_idx = _sub_rng.choice(n_ctx, max_patches, replace=replace)
+        context_X = context_X_full[_sub_idx]
     n_ctx_clusters, _, _ = _cluster_context(context_X, cfg)
 
     def _col_mean(feat: str) -> float:
@@ -596,11 +673,13 @@ def compute_cci(
     cci = float(np.dot(weights, list(normalized.values())))
 
     return cci, {
-        "raw":           raw,
-        "normalized":    normalized,
-        "weights":       weights,
-        "weight_mode":   wmode,
-        "normalization": norm_mode,
+        "raw":                       raw,
+        "normalized":                normalized,
+        "weights":                   weights,
+        "weight_mode":               wmode,
+        "normalization":             norm_mode,
+        "n_context_patches_used":    len(context_X),
+        "n_context_patches_total":   len(context_X_full),
     }
 
 
