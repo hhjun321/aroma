@@ -33,11 +33,13 @@
 |---------|----------|------------|------------|
 | linearity | 5 | 7 | 9 |
 | solidity | 3 | 3 | 3 |
-| extent | 7 | 6 | 6 |
+| extent | 1 | 1 | 0 |
 | aspect_ratio | 3 | 4 | 3 |
-| eccentricity | 3 | 7 | **11** ⚠️ |
-| circularity | 6 | **12** ⚠️ | 5 |
-| **합계** | **27** | **39** | **37** |
+| eccentricity | 1 | 0 | 0 |
+| circularity | 0 | 1 | 0 |
+| **합계** | **13** | **16** | **15** |
+
+> bounded feature prominence 수정 적용 후 (circularity, eccentricity, extent 과감지 억제)
 
 ### 2.2 Expected Range 천장 문제
 
@@ -263,20 +265,22 @@ n_datasets ≥ 100:  anchor = percentile(dataset_values, 95)
 
 ### 6.4 시뮬레이션 결과 (valley_count 기준)
 
-입력: valley_counts = [27, 39, 37] (isp / cable / cashew)  
-anchor = max(39) × 1.2 = **46.8**
+입력: valley_counts = [13, 16, 15] (isp / cable / cashew)  
+anchor = max(16) × 1.2 = **19.2**
 
-| 데이터셋 | valley_count | norm (÷46.8) | 기존 norm (÷18) |
+| 데이터셋 | valley_count | norm (÷19.2) | 기존 norm (÷18) |
 |---------|-------------|-------------|---------------|
-| isp_LSM_1 | 27 | **0.577** | 1.000 |
-| mvtec_cable | 39 | **0.833** | 1.000 |
-| visa_cashew | 37 | **0.791** | 1.000 |
+| isp_LSM_1 | 13 | **0.677** | 1.000 |
+| mvtec_cable | 16 | **0.833** | 1.000 |
+| visa_cashew | 15 | **0.781** | 1.000 |
 
 기존 판별력 0 → 3종 간 상대 순위 복원.  
 8종 defect cable이 2종 isp보다 높게 측정 — 직관과 일치.
 
+> 과감지 수정 적용 후 실측값 기준 (bounded feature CV 기반 prominence 동적 조정)
+
 ### 6.5 미해결 이슈
 
-1. **histogram bins fix 선행 조건**: valley_count anchor 산출 전 과감지 버그(Sturges' rule bins 수정) 완료 필요. 현재 39가 아닌 실제 값으로 anchor 재계산 예정.
+1. ~~**histogram bins fix 선행 조건**~~ → ✅ **완료**: bounded feature CV 기반 prominence 동적 조정 적용. anchor 19.2로 확정.
 2. **threshold_n=100 현실성**: 현재 보유 데이터셋 3종 → n<100 경로만 사용. p95 경로는 향후 대규모 실험 후 검증 필요.
 3. **entropy/FreqComplexity 단위**: 실측값 범위 미확인. Step 1 실행 후 `distribution_analysis.json`에서 entropy 분포 확인 후 anchor 추가 기입 필요.
