@@ -85,6 +85,9 @@ GRID_SIZE = 64
 N_CONTEXT_BINS = 3          # P33 / P66 → bins 0, 1, 2
 MAX_HISTOGRAM_BINS = 50
 VALLEY_PROMINENCE_RATIO = 0.1
+BOUNDED_FEATURES = {"circularity", "eccentricity", "extent"}
+FLAT_CV_THRESHOLD = 0.5          # counts CV below this → treat as flat distribution
+BOUNDED_VALLEY_PROMINENCE_RATIO = 0.3  # higher ratio for flat bounded features
 
 _MORPH_CSV_FIELDS = [
     "image_id", "image_path", "defect_type", "domain", "mask_source",
@@ -304,16 +307,20 @@ def _context_worker(task: dict) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
+def _detect_valleys(values: np.ndarray, feature_name: str = None) -> Tuple[int, List[float]]:
     """Return (n_valleys, valley_x_positions) via inverted-histogram peak detection.
 
     Bin count is chosen via Sturges' rule: ceil(log2(n)) + 1, capped at
     MAX_HISTOGRAM_BINS. For typical defect datasets (92-100 samples) this gives
     ~8 bins instead of the former fixed 50, preventing sparse-bin noise peaks.
 
-    Prominence = max(2 * noise_floor, counts.max() * VALLEY_PROMINENCE_RATIO)
+    Prominence = max(2 * noise_floor, counts.max() * effective_ratio)
     noise_floor = sqrt(n_samples / n_bins) — sampling noise estimate (1σ per bin).
     The 2× factor requires a valley to exceed 2σ noise (95% confidence).
+
+    For bounded features (circularity, eccentricity, extent) with flat distributions
+    (histogram CV < FLAT_CV_THRESHOLD), effective_ratio is raised to
+    BOUNDED_VALLEY_PROMINENCE_RATIO to suppress noise valleys in uniform regions.
 
     Right-skewed distributions (p90/p10 > 4) are log1p-transformed before histogram
     so that long-tail features (e.g. aspect_ratio) are linearised for valley detection.
@@ -332,7 +339,12 @@ def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
     counts, bin_edges = np.histogram(work, bins=bins)
     inverted = counts.max() - counts
     noise_floor = np.sqrt(len(work) / bins)
-    prominence = max(noise_floor * 2, counts.max() * VALLEY_PROMINENCE_RATIO)
+    # CV on raw values (pre-log) so FLAT_CV_THRESHOLD is consistent regardless of log_transform
+    raw_counts, _ = np.histogram(values, bins=bins)
+    cv = raw_counts.std() / (raw_counts.mean() + 1e-9)
+    is_bounded_flat = (feature_name in BOUNDED_FEATURES) and (cv < FLAT_CV_THRESHOLD)
+    effective_ratio = BOUNDED_VALLEY_PROMINENCE_RATIO if is_bounded_flat else VALLEY_PROMINENCE_RATIO
+    prominence = max(noise_floor * 2, counts.max() * effective_ratio)
     peaks, _ = scipy.signal.find_peaks(inverted, prominence=prominence)
 
     if log_transform:
@@ -621,7 +633,7 @@ class DistributionProfiler:
             percentiles = {
                 f"p{p}": float(np.percentile(values, p)) for p in [10, 25, 50, 75, 90]
             }
-            n_valleys, valley_pos = _detect_valleys(values)
+            n_valleys, valley_pos = _detect_valleys(values, feat)
 
             if n_valleys >= 2 and HAS_SKLEARN:
                 policy = "gmm"
