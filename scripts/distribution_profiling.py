@@ -334,15 +334,21 @@ def _detect_valleys(values: np.ndarray, feature_name: str = None) -> Tuple[int, 
     log_transform = (upper_range / lower_range > 2.0) and (p10 > 1e-9)
 
     work = np.log1p(values) if log_transform else values
-    bins = max(int(np.ceil(np.log2(len(work)))) + 1, 5)
-    bins = min(bins, min(MAX_HISTOGRAM_BINS, len(work) - 1))
+    is_bounded = feature_name in BOUNDED_FEATURES
+    if is_bounded:
+        # Sturges bins for bounded features: coarser histogram smooths Poisson noise,
+        # enabling reliable CV-based flat-distribution detection
+        bins = max(int(np.ceil(np.log2(len(work)))) + 1, 5)
+        bins = min(bins, min(MAX_HISTOGRAM_BINS, len(work) - 1))
+    else:
+        bins = min(MAX_HISTOGRAM_BINS, len(work) - 1)
     counts, bin_edges = np.histogram(work, bins=bins)
     inverted = counts.max() - counts
     noise_floor = np.sqrt(len(work) / bins)
     # CV on raw values (pre-log) so FLAT_CV_THRESHOLD is consistent regardless of log_transform
     raw_counts, _ = np.histogram(values, bins=bins)
     cv = raw_counts.std() / (raw_counts.mean() + 1e-9)
-    is_bounded_flat = (feature_name in BOUNDED_FEATURES) and (cv < FLAT_CV_THRESHOLD)
+    is_bounded_flat = is_bounded and (cv < FLAT_CV_THRESHOLD)
     effective_ratio = BOUNDED_VALLEY_PROMINENCE_RATIO if is_bounded_flat else VALLEY_PROMINENCE_RATIO
     prominence = max(noise_floor * 2, counts.max() * effective_ratio)
     peaks, _ = scipy.signal.find_peaks(inverted, prominence=prominence)
