@@ -83,7 +83,7 @@ CONTEXT_FEATURES = [
 ]
 GRID_SIZE = 64
 N_CONTEXT_BINS = 3          # P33 / P66 → bins 0, 1, 2
-HISTOGRAM_BINS = 50
+MAX_HISTOGRAM_BINS = 50
 VALLEY_PROMINENCE_RATIO = 0.1
 
 _MORPH_CSV_FIELDS = [
@@ -307,6 +307,10 @@ def _context_worker(task: dict) -> List[dict]:
 def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
     """Return (n_valleys, valley_x_positions) via inverted-histogram peak detection.
 
+    Bin count is chosen via Sturges' rule: ceil(log2(n)) + 1, capped at
+    MAX_HISTOGRAM_BINS. For typical defect datasets (92-100 samples) this gives
+    ~8 bins instead of the former fixed 50, preventing sparse-bin noise peaks.
+
     Prominence = max(2 * noise_floor, counts.max() * VALLEY_PROMINENCE_RATIO)
     noise_floor = sqrt(n_samples / n_bins) — sampling noise estimate (1σ per bin).
     The 2× factor requires a valley to exceed 2σ noise (95% confidence).
@@ -323,7 +327,8 @@ def _detect_valleys(values: np.ndarray) -> Tuple[int, List[float]]:
     log_transform = (upper_range / lower_range > 2.0) and (p10 > 1e-9)
 
     work = np.log1p(values) if log_transform else values
-    bins = min(HISTOGRAM_BINS, max(len(work) - 1, 2))
+    bins = max(int(np.ceil(np.log2(len(work)))) + 1, 5)
+    bins = min(bins, min(MAX_HISTOGRAM_BINS, len(work) - 1))
     counts, bin_edges = np.histogram(work, bins=bins)
     inverted = counts.max() - counts
     noise_floor = np.sqrt(len(work) / bins)
