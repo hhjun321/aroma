@@ -444,7 +444,7 @@ def run(
             if not normal_images:
                 annotations.append({
                     "image_path":    final_out_path,
-                    "source_roi":    roi_entry.get("image_id", ""),
+                    "source_roi":    roi_entry.get("image_path", ""),
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),
@@ -470,7 +470,7 @@ def run(
                 n_ok += 1
                 annotations.append({
                     "image_path":    final_out_path,
-                    "source_roi":    roi_entry.get("image_id", ""),
+                    "source_roi":    roi_entry.get("image_path", ""),
                     "normal_image":  normal_path,
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
