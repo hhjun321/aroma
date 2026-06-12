@@ -41,18 +41,19 @@
 
 > bounded feature prominence 수정 적용 후 (circularity, eccentricity, extent 과감지 억제)
 
-### 2.2 Expected Range 천장 문제
+### 2.2 Expected Range 천장 문제 → 해결
 
-현재 설정: `expected_range[valley_count] = [0, 18]`  
-근거: "6 features × max 3 valleys" 가정 (aroma_step1.yaml 주석)
+초기 설정: `expected_range[valley_count] = [0, 18]` (6 features × max 3 valleys 가정)
 
-**3종 모두 초과 → norm=1.0 고정 → MCI 판별력 없음**
-
+과감지 수정(bounded feature CV 기반 prominence 조정) 후 pooled 기준 실측값:
 ```
-isp_LSM_1:   27/18 = 1.50 → norm = 1.000
-mvtec_cable: 39/18 = 2.17 → norm = 1.000
-visa_cashew: 37/18 = 2.06 → norm = 1.000
+isp_LSM_1:   13  (2종)
+mvtec_cable: 16  (8종)
+visa_cashew: 15  (1종)
 ```
+
+**확정 range: `[0.0, 41.0]`**  
+근거: 중간 과정에서 per-class mean 최대값 34 × 1.2 = 40.8 → 41로 설정 후 유지 (pooled 복귀 후에도 보수적 상한으로 유지, 향후 대규모 데이터셋 대비)
 
 ### 2.3 과감지 의심 Feature
 
@@ -64,16 +65,16 @@ visa_cashew: 37/18 = 2.06 → norm = 1.000
 
 [0,1] 범위 feature(circularity, eccentricity)는 분포가 평탄한 구간에서도 GMM이 valley를 잡는 경향. 노이즈 prominance 임계값이 상대적으로 낮기 때문.
 
-### 2.4 Expected Range 재보정 시뮬레이션
+### 2.4 Expected Range 재보정 시뮬레이션 (참고용, 과거 분석)
 
-| 데이터셋 | defect 종류 | [0,18] 현재 | [0,30] | [0,45] | [0,60] |
+> ⚠️ 아래는 과감지 수정 전 (valley_count 27/39/37) 기준 시뮬레이션 — 참고용 보존.  
+> **확정 range: `[0.0, 41.0]`** (Section 6.4 실측 결과 참조)
+
+| 데이터셋 | defect 종류 | [0,18] 구버전 | [0,30] | [0,45] | [0,60] |
 |---------|-----------|-----------|--------|--------|--------|
-| isp_LSM_1 | 2종 | 1.000 | 0.900 | **0.600** | 0.450 |
-| visa_cashew | 1종(다양) | 1.000 | 1.000 | **0.822** | 0.617 |
-| mvtec_cable | 8종 | 1.000 | 1.000 | **0.867** | 0.650 |
-
-**`[0, 45]` 권장**: isp_LSM_1(단순 2종)과 나머지를 구분하면서, 3종 모두 표현 가능.  
-단, 과감지 문제 선결 없이 range만 바꾸면 노이즈 valley가 MCI를 과장할 수 있음.
+| isp_LSM_1 | 2종 | 1.000 | 0.900 | 0.600 | 0.450 |
+| visa_cashew | 1종(다양) | 1.000 | 1.000 | 0.822 | 0.617 |
+| mvtec_cable | 8종 | 1.000 | 1.000 | 0.867 | 0.650 |
 
 ---
 
@@ -153,52 +154,69 @@ SAM으로 재실행 시 클러스터 품질 및 valley 분포 변화 예상.
 
 ---
 
-## 5. MCI 예측 및 개선 방향
+## 5. Step 1 확정 결과 (2026-06-12)
 
-### 5.1 현재 expected_range 기준 MCI 예측
+### 5.1 MCI 설계 확정
 
-valley_count 3종 모두 norm=1.0 → valley_count 컴포넌트가 MCI를 지배.  
-차이는 `inv_silhouette` (= 1 - silhouette) 에서만 발생.
+**4-component 등가중치**:
 
 ```
-예상 MCI 순서 (expected_range [0,18]):
-  isp_LSM_1 ≥ mvtec_cable ≈ visa_cashew
-
-이유:
-  - isp_LSM_1: inv_silhouette 높음 (클러스터 분리 불량) → MCI 오히려 높을 수 있음
-  - visa_cashew: linear_scratch 분리 우수 → silhouette 높음 → inv_silhouette 낮음 → MCI 낮음
+MCI = 0.25 × Entropy_norm
+    + 0.25 × ValleyCount_norm
+    + 0.25 × ClassDiversity_norm
+    + 0.25 × InvSilhouette
 ```
 
-**역설**: 단순한(2종) 데이터셋이 Otsu 노이즈로 인해 복잡한 데이터셋보다 MCI가 높게 나올 수 있음.
+| 컴포넌트 | 정규화 방법 | 범위 |
+|---------|----------|------|
+| Entropy | minmax [0, 4.0] | |
+| ValleyCount | minmax [0, 41.0] | pooled 전체 인스턴스 기준 |
+| ClassDiversity | log-scale: ln(Neff)/ln(8) | Neff=e^H, N_max=8 |
+| InvSilhouette | 1 - silhouette | silhouette ∈ [-1,1] → clamp01 |
 
-### 5.2 개선 방향
+**ClassDiversity (Hill 다양성 지수)**:  
+Neff = e^H (Shannon 엔트로피 기반 유효 클래스 수). 클래스 분포가 균일할수록 Neff → K.  
+로그 스케일 정규화: 2번째 defect 종류 추가 시 복잡도 증가폭이 8번째 추가 시보다 훨씬 큼.
 
-**단기 (expected_range 재보정)**
+### 5.2 MCI 확정 결과
 
-```yaml
-# aroma_step1.yaml 수정 제안
-mci:
-  expected_range:
-    valley_count: [0.0, 45.0]   # 기존 18.0 → 45.0
-```
+| 데이터셋 | Entropy (raw/norm) | ValleyCount (raw/norm) | ClassDiversity (Neff/norm) | InvSilhouette | **MCI** |
+|---------|-------------------|----------------------|--------------------------|---------------|---------|
+| isp_LSM_1 | 2.202 / 0.551 | 13 / 0.317 | 1.999 / 0.333 | 0.572 | **0.4432** |
+| mvtec_cable | 1.071 / 0.268 | 16 / 0.390 | 7.940 / 0.996 | 1.000 | **0.6636** |
+| visa_cashew | 1.923 / 0.481 | 15 / 0.366 | 1.000 / 0.000 | 0.687 | **0.3834** |
 
-효과:
-- isp_LSM_1 valley norm: 1.000 → 0.600
-- mvtec_cable valley norm: 1.000 → 0.867  
-- visa_cashew valley norm: 1.000 → 0.822
-- defect 종류 수 차이(2종 vs 8종)를 MCI로 구분 가능해짐
+**MCI 순서**: `mvtec_cable (0.664) > isp_LSM_1 (0.443) > visa_cashew (0.383)` ✓ 직관 일치
 
-**중기 (valley 과감지 개선)**
+cable이 최고인 이유: 8종 defect → ClassDiversity ≈ 1.0, InvSilhouette=1.0 (silhouette=-0.179)
 
-과감지 우선 검토 대상:
-1. `circularity`: prominence 임계값 상향 또는 최대 valleys/feature 제한
-2. `eccentricity`: [0,1] bounded feature 전용 감도 파라미터 분리
+### 5.3 CCI 확정 결과
 
-**장기 (isp 도메인 SAM 재실행)**
+20,000 패치 bootstrap 서브샘플링 적용 (해상도 공정성).
 
-isp_LSM_1을 SAM으로 재실행 후 비교:
-- points 결함 circularity 복구 확인
-- 클러스터 분리도 개선 여부 확인
+| 데이터셋 | TextureEntropy (raw/norm) | ClusterCount_ctx (raw/norm) | FreqComplexity (raw/norm) | OrientVariance (raw/norm) | **CCI** |
+|---------|--------------------------|----------------------------|--------------------------|--------------------------|---------|
+| isp_LSM_1 | 2.403 / 0.300 | 5.0 / 0.571 | 0.0145 / 0.014 | 1.337 / 0.835 | **0.4304** |
+| mvtec_cable | 2.825 / 0.353 | 5.0 / 0.571 | 0.0013 / 0.001 | 0.079 / 0.049 | **0.2438** |
+| visa_cashew | 3.253 / 0.407 | 5.0 / 0.571 | 0.0082 / 0.008 | 0.011 / 0.007 | **0.2483** |
+
+CCI 서브샘플 수: isp=20,000/58,848, cable=20,000/57,344, cashew=20,000/28,800
+
+### 5.4 정책 결정
+
+| 데이터셋 | MCI | CCI | Morphology Policy | Context Policy |
+|---------|-----|-----|-------------------|----------------|
+| isp_LSM_1 | 0.443 | 0.430 | **otsu** (stability tie-break) | gmm |
+| mvtec_cable | 0.664 | 0.244 | **hierarchical** (MCI>0.6) | gmm |
+| visa_cashew | 0.383 | 0.248 | **otsu** | gmm |
+
+cable: MCI=0.664 → hierarchical 정책 (다중 수준 임계값)  
+isp/cashew: MCI<0.5 → otsu 정책 (단순 이진 임계값)
+
+### 5.5 향후 과제
+
+- isp_LSM_1 SAM 재실행 후 재평가 (Otsu 노이즈로 inv_silhouette 과대 추정 가능성)
+- valley_count range [0,41] 타당성: 현재 pooled max=16 → 보수적 상한. 더 많은 데이터셋 추가 후 anchor 갱신 예정
 
 ---
 
@@ -206,12 +224,14 @@ isp_LSM_1을 SAM으로 재실행 후 비교:
 
 | 평가 항목 | isp_LSM_1 | mvtec_cable | visa_cashew |
 |---------|----------|------------|------------|
-| valley_count | 27 (현재 범위 초과) | 39 (최고) | 37 |
-| 과감지 의심 | extent=7 | circularity=12 | eccentricity=11 |
+| valley_count (pooled) | **13** | **16** | **15** |
+| defect 종류 수 | 2 | 8 | 1 |
+| ClassDiversity Neff | 1.999 | 7.940 | 1.000 |
 | 클러스터 품질 | 낮음 (Otsu) | 중상 | **높음** |
 | GT mask | ❌ Otsu | ✅ | ✅ |
-| MCI 신뢰도 | 낮음 | 높음 | 높음 |
-| **재보정 후 예상 복잡도** | 낮음 (2종) | **높음** (8종) | 중간 (1종 다양) |
+| **MCI** | 0.443 | **0.664** | 0.383 |
+| **CCI** | **0.430** | 0.244 | 0.248 |
+| **정책** | otsu | **hierarchical** | otsu |
 
 ---
 
@@ -250,34 +270,40 @@ n_datasets ≥ 100:  anchor = percentile(dataset_values, 95)
   "n_datasets": 3,
   "anchors": {
     "valley_count": {
+      "method": "conservative_max",
+      "value": 41.0,
+      "raw_max": 16.0,
+      "note": "per-class 과정에서 관측된 max=34 × 1.2 = 41 (pooled 복귀 후 보수적 상한 유지)"
+    },
+    "orient_variance": {
       "method": "max_x1.2",
-      "value": 46.8,
-      "raw_max": 39.0
+      "value": 1.6,
+      "raw_max": 1.337
     },
     "entropy": {
-      "method": "max_x1.2",
-      "value": "<TODO: 실측 후 기입>",
-      "raw_max": "<TODO>"
+      "method": "fixed",
+      "value": 4.0,
+      "note": "이론적 최대값 (6 features × log2 bins 기준)"
+    },
+    "texture_entropy": {
+      "method": "fixed",
+      "value": 8.0,
+      "note": "이론적 최대값"
     }
   }
 }
 ```
 
-### 6.4 시뮬레이션 결과 (valley_count 기준)
+### 6.4 확정 normalization 결과 (Step 1 실측)
 
-입력: valley_counts = [13, 16, 15] (isp / cable / cashew)  
-anchor = max(16) × 1.2 = **19.2**
+| 데이터셋 | valley_count (raw) | norm (÷41.0) | orient_var (raw) | norm (÷1.6) |
+|---------|-------------------|-------------|-----------------|------------|
+| isp_LSM_1 | 13 | **0.317** | 1.337 | **0.835** |
+| mvtec_cable | 16 | **0.390** | 0.079 | **0.049** |
+| visa_cashew | 15 | **0.366** | 0.011 | **0.007** |
 
-| 데이터셋 | valley_count | norm (÷19.2) | 기존 norm (÷18) |
-|---------|-------------|-------------|---------------|
-| isp_LSM_1 | 13 | **0.677** | 1.000 |
-| mvtec_cable | 16 | **0.833** | 1.000 |
-| visa_cashew | 15 | **0.781** | 1.000 |
-
-기존 판별력 0 → 3종 간 상대 순위 복원.  
-8종 defect cable이 2종 isp보다 높게 측정 — 직관과 일치.
-
-> 과감지 수정 적용 후 실측값 기준 (bounded feature CV 기반 prominence 동적 조정)
+valley_count [0,41]로 3종 간 순위 복원.  
+orient_variance: isp가 현저히 높음 (다양한 결함 방향) → CCI isp=0.430 > cable/cashew의 주요 요인.
 
 ### 6.5 미해결 이슈
 
