@@ -20,8 +20,12 @@ import json, os
 from pathlib import Path
 from collections import Counter, defaultdict
 
-DATASET_KEYS = ['isp_LSM_1', 'mvtec_cable', 'visa_cashew']
-AROMA_OUT    = os.environ['AROMA_OUT']
+AROMA_OUT       = os.environ['AROMA_OUT']
+DATASET_CONFIG  = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
+
+with open(DATASET_CONFIG) as f:
+    _cfg = json.load(f)
+DATASET_KEYS = [k for k in _cfg if not k.startswith('_')]
 
 all_ann = {}
 for dk in DATASET_KEYS:

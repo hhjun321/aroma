@@ -77,3 +77,83 @@ for r in top_deficit:
 | `roi_candidates.json` | 전체 스코어링 결과 (image_id, cluster_id, cell_key, roi_score, deficit, prompt) |
 | `roi_selected.json` | 선택된 top_k개 ROI 목록 |
 | `roi_summary.md` | 마크다운 테이블 |
+
+
+---
+
+## 전체 데이터셋 일괄 실행 (병렬)
+
+`dataset_config.json`에서 datasets 목록 자동 로드, step2 출력(`prompts/{ds}/prompts.json`)이 없는 데이터셋은 skip.  
+`!python` 매직은 IPython 전용이라 스레드 내에서 동작하지 않으므로 의도적으로 `subprocess.run` 사용.
+
+**셀 1 — 준비 상태 확인:**
+
+```python
+import os, json
+from pathlib import Path
+
+AROMA_OUT      = os.environ['AROMA_OUT']
+DATASET_CONFIG = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
+
+with open(DATASET_CONFIG) as f:
+    cfg = json.load(f)
+datasets = [k for k in cfg if not k.startswith('_')]
+print(f"총 {len(datasets)}개 데이터셋\n")
+
+for ds in datasets:
+    ready = Path(f"{AROMA_OUT}/prompts/{ds}/prompts.json").exists()
+    print(f"{'✓ 준비됨' if ready else '↷ skip(step2 없음)':<22} {ds}")
+```
+
+**셀 2 — 병렬 실행:**
+
+```python
+import os, json, sys, subprocess
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+AROMA_OUT      = os.environ['AROMA_OUT']
+AROMA_SCRIPTS  = os.environ['AROMA_SCRIPTS']
+DATASET_CONFIG = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
+SCRIPT         = f"{AROMA_SCRIPTS}/roi_selection.py"
+MAX_WORKERS    = 3
+
+with open(DATASET_CONFIG) as f:
+    cfg = json.load(f)
+datasets = [k for k in cfg if not k.startswith('_')]
+
+def run_one(ds):
+    if not Path(f"{AROMA_OUT}/prompts/{ds}/prompts.json").exists():
+        return 'skip', ds, 'step2 출력 없음'
+    cmd = [sys.executable, SCRIPT,
+           '--profiling_dir',     f"{AROMA_OUT}/profiling/{ds}",
+           '--prompts_dir',       f"{AROMA_OUT}/prompts/{ds}",
+           '--sampling_strategy', 'deficit_aware',
+           '--top_k',             '200',
+           '--output_dir',        f"{AROMA_OUT}/roi/{ds}"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        tail = '\n'.join(r.stderr.strip().splitlines()[-3:]) if r.stderr else ''
+        return 'fail', ds, tail
+    return 'ok', ds, ''
+
+results = []
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+    futs = {ex.submit(run_one, ds): ds for ds in datasets}
+    for fut in as_completed(futs):
+        status, ds, msg = fut.result()
+        results.append((status, ds, msg))
+        icon = '✓' if status == 'ok' else ('↷' if status == 'skip' else '✗')
+        print(f"{icon} {ds:30s}  {status}")
+        if msg:
+            print(f"    {msg}")
+
+from collections import Counter
+c = Counter(s for s, *_ in results)
+print(f"\n완료: {c['ok']}개  skip: {c['skip']}개  실패: {c['fail']}개")
+if c['fail']:
+    print("\n실패 목록:")
+    for s, ds, msg in results:
+        if s == 'fail':
+            print(f"  {ds}: {msg}")
+```
