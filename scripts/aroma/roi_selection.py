@@ -29,11 +29,10 @@ import argparse
 import csv
 import json
 import logging
-import math
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
 
@@ -143,29 +142,6 @@ def load_inputs(profiling_dir: str, prompts_dir: str) -> Dict[str, Any]:
 # ROI scoring
 # ---------------------------------------------------------------------------
 
-def _context_cell_key(
-    feat_dict: Dict[str, str],
-    bin_edges: Dict[str, List[float]],
-    context_features: List[str],
-    n_bins: int = 3,
-) -> str:
-    """Discretize context features to a cell key like '0_1_2_0_1'."""
-    bins = []
-    for feat in context_features:
-        val = 0.0
-        try:
-            val = float(feat_dict.get(feat, 0.0) or 0.0)
-        except (ValueError, TypeError):
-            pass
-        edges = bin_edges.get(feat, [0.0, 1.0])
-        if len(edges) < 2 or edges[1] <= edges[0]:
-            b = 0
-        else:
-            b = min(int(np.searchsorted(edges, val, side="right")), n_bins - 1)
-        bins.append(str(b))
-    return "_".join(bins)
-
-
 def score_roi(
     morph_prior: float,
     ctx_prior: float,
@@ -186,6 +162,10 @@ def score_roi(
 def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Score all (morph_row × context_bin) candidates.
+
+    Each morphology row is crossed with every occupied context bin in the
+    compatibility matrix (cluster_row.items()), producing N candidates per
+    image where N = number of occupied bins for that cluster.
 
     Each candidate:
         image_id, image_path, cluster_id, cell_key,
@@ -210,13 +190,6 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # --- compatibility matrix ---
     matrix: Dict[str, Dict[str, float]] = compat_json.get("matrix", {})
-    bin_edges: Dict[str, List[float]] = compat_json.get("bin_edges", {})
-    context_features: List[str] = compat_json.get(
-        "context_features",
-        ["local_variance", "edge_density", "texture_entropy",
-         "frequency_energy", "orientation_consistency"],
-    )
-    n_bins = int(compat_json.get("n_context_bins", 3))
 
     # --- cluster priors and deficit ---
     cluster_priors: Dict[str, float] = {
@@ -238,34 +211,37 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if cluster_id is None:
             continue
 
-        cid_str    = str(cluster_id)
+        cid_str     = str(cluster_id)
         morph_prior = cluster_priors.get(cid_str, 0.0)
         morph_label = cluster_labels.get(cluster_id, "")
         cluster_row = matrix.get(cid_str, {})
 
-        cell_key = _context_cell_key(row, bin_edges, context_features, n_bins)
-        ctx_prior = float(cluster_row.get(cell_key, 0.0))
-        deficit   = float(deficit_rows.get(cid_str, {}).get(cell_key, 0.0))
-        roi_score = score_roi(morph_prior, ctx_prior, deficit)
+        # Iterate occupied context bins from the compatibility matrix.
+        # This correctly pairs each image with every (cluster, cell_key)
+        # combination that has observed context coverage.
+        if not cluster_row:
+            logger.warning("cluster %s has no context bins — using 'none' fallback for image %s",
+                           cid_str, image_id)
+        bin_iter = cluster_row.items() if cluster_row else {"none": 0.0}.items()
+        for cell_key, ctx_prior in bin_iter:
+            deficit      = float(deficit_rows.get(cid_str, {}).get(cell_key, 0.0))
+            roi_score    = score_roi(morph_prior, float(ctx_prior), deficit)
+            prompt_key   = f"{cluster_id}_{cell_key}"
+            prompt_entry = prompts.get(prompt_key, {})
 
-        prompt_key = f"{cluster_id}_{cell_key}"
-        prompt_entry = prompts.get(prompt_key, {})
-        prompt_text  = prompt_entry.get("prompt", "")
-        ctx_label    = prompt_entry.get("context_descriptor", "")
-
-        candidates.append({
-            "image_id":    image_id,
-            "image_path":  image_path,
-            "cluster_id":  cluster_id,
-            "cell_key":    cell_key,
-            "roi_score":   round(roi_score, 6),
-            "morph_prior": round(morph_prior, 6),
-            "ctx_prior":   round(ctx_prior, 6),
-            "deficit":     round(deficit, 6),
-            "prompt":      prompt_text,
-            "morph_label": morph_label,
-            "ctx_label":   ctx_label,
-        })
+            candidates.append({
+                "image_id":    image_id,
+                "image_path":  image_path,
+                "cluster_id":  cluster_id,
+                "cell_key":    cell_key,
+                "roi_score":   round(roi_score, 6),
+                "morph_prior": round(morph_prior, 6),
+                "ctx_prior":   round(float(ctx_prior), 6),
+                "deficit":     round(deficit, 6),
+                "prompt":      prompt_entry.get("prompt", ""),
+                "morph_label": morph_label,
+                "ctx_label":   prompt_entry.get("context_descriptor", ""),
+            })
 
     logger.info("Scored %d ROI candidates from %d morph rows", len(candidates), len(morph_rows))
     return candidates
