@@ -147,26 +147,42 @@ for dk, anns in all_ann.items():
 
 ```python
 def show_original_vs_synthetic(anns, dataset_key, n=5, seed=0):
-    """원본 결함 이미지(source_roi)와 합성 결과 나란히 비교."""
+    """원본 결함 이미지(source_roi)와 합성 결과 나란히 비교.
+    source_roi 경로가 없으면 image_id 텍스트로 대체 표시."""
     rng = random.Random(seed)
     real = [a for a in anns
             if not a.get('dry_run')
-            and Path(a.get('image_path', '')).exists()
-            and Path(a.get('source_roi', '')).exists()]
+            and Path(a.get('image_path', '')).exists()]
     samples = rng.sample(real, min(n, len(real)))
 
     if not samples:
-        print(f"{dataset_key}: source_roi 경로를 찾을 수 없음 (image_id만 저장된 경우 skip)")
+        print(f"{dataset_key}: 합성 이미지를 찾을 수 없음")
         return
 
-    fig, axes = plt.subplots(n, 2, figsize=(6, n * 2.8))
+    fig, axes = plt.subplots(len(samples), 2, figsize=(6, len(samples) * 2.8))
+    if len(samples) == 1:
+        axes = [axes]
     fig.suptitle(f"{dataset_key} — 원본 vs 합성", fontsize=12)
 
     for i, s in enumerate(samples):
-        orig = Image.open(s['source_roi']).convert('RGB')
-        syn  = Image.open(s['image_path']).convert('RGB')
-        axes[i][0].imshow(orig); axes[i][0].set_title('원본 결함', fontsize=8); axes[i][0].axis('off')
-        axes[i][1].imshow(syn);  axes[i][1].set_title('합성', fontsize=8);      axes[i][1].axis('off')
+        src_path = s.get('source_roi', '')
+        if src_path and Path(src_path).exists():
+            orig = Image.open(src_path).convert('RGB')
+            axes[i][0].imshow(orig)
+            axes[i][0].set_title('원본 결함', fontsize=8)
+        else:
+            image_id = s.get('image_id') or Path(src_path).name or '알 수 없음'
+            axes[i][0].text(0.5, 0.5, f"image_id:\n{image_id}",
+                            ha='center', va='center', fontsize=7, wrap=True,
+                            transform=axes[i][0].transAxes)
+            axes[i][0].set_facecolor('#e0e0e0')
+            axes[i][0].set_title('원본 없음', fontsize=8)
+        axes[i][0].axis('off')
+
+        syn = Image.open(s['image_path']).convert('RGB')
+        axes[i][1].imshow(syn)
+        axes[i][1].set_title('합성', fontsize=8)
+        axes[i][1].axis('off')
 
     plt.tight_layout()
     plt.show()

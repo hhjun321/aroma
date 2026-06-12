@@ -445,6 +445,7 @@ def run(
                 annotations.append({
                     "image_path":    final_out_path,
                     "source_roi":    roi_entry.get("image_path", ""),
+                    "image_id":      roi_entry.get("image_id", ""),
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),
@@ -471,6 +472,7 @@ def run(
                 annotations.append({
                     "image_path":    final_out_path,
                     "source_roi":    roi_entry.get("image_path", ""),
+                    "image_id":      roi_entry.get("image_id", ""),
                     "normal_image":  normal_path,
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
