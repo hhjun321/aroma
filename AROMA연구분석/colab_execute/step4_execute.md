@@ -23,7 +23,7 @@ os.environ['SYNTHETIC_DIR']   = f"{os.environ['AROMA_OUT']}/synthetic/{DATASET_K
 # isp_LSM_1  → ISP/LSM_1/train/good
 # mvtec_cable → MVTec/cable/train/good
 # visa_cashew → VisA/cashew/train/good
-os.environ['NORMAL_DIR'] = f"{os.environ['AROMA_DATA_BASE']}/ISP/LSM_1/train/good"
+os.environ['NORMAL_DIR'] = f"{os.environ['AROMA_DATA_BASE']}/isp/unsupervised/LSM_1/train/good"
 ```
 
 ## 실행
