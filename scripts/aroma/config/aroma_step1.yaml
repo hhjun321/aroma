@@ -3,11 +3,11 @@
 
 mci:
   normalization: minmax          # minmax | zscore
-  weights: equal                 # equal | entropy_heavy | cluster_heavy
+  weights: equal                 # equal | entropy_heavy | diversity_heavy
   expected_range:
-    entropy:       [0.0, 4.0]    # log2(k); k<=16 가정 → max 4 bits
-    valley_count:  [0.0, 18.0]   # 6 features × max 3 valleys each
-    cluster_count: [1.0, 8.0]    # GMM max_k=8 상한과 정합
+    entropy:         [0.0, 4.0]   # log2(k); k<=16 가정 → max 4 bits
+    valley_count:    [0.0, 41.0]  # anchor = max(pooled) × 1.2; observed max=34 (cashew)
+    class_diversity: [1.0, 9.6]   # Neff = exp(H); anchor = 8 types × 1.2
 
 cci:
   normalization: minmax
@@ -16,7 +16,7 @@ cci:
     texture_entropy:   [0.0, 8.0]    # 8-bit patch entropy 상한
     cluster_count_ctx: [1.0, 8.0]
     freq_complexity:   [0.0, 1.0]    # frequency_energy 분산 (정규화됨)
-    orient_variance:   [0.0, 1.0]    # orientation_consistency 분산
+    orient_variance:   [0.0, 1.6]    # anchor = observed max(1.337) × 1.2
   context_gmm:
     max_k: 5
     max_patches: 20000

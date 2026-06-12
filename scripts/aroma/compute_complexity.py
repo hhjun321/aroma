@@ -109,9 +109,9 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "normalization": "minmax",
         "weights": "equal",
         "expected_range": {
-            "entropy":       [0.0, 4.0],
-            "valley_count":  [0.0, 18.0],
-            "cluster_count": [1.0, 8.0],
+            "entropy":         [0.0, 4.0],
+            "valley_count":    [0.0, 41.0],
+            "class_diversity": [1.0, 9.6],
         },
     },
     "cci": {
@@ -121,7 +121,7 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             "texture_entropy":   [0.0, 8.0],
             "cluster_count_ctx": [1.0, 8.0],
             "freq_complexity":   [0.0, 1.0],
-            "orient_variance":   [0.0, 1.0],
+            "orient_variance":   [0.0, 1.6],
         },
         "context_gmm": {
             "max_k": 5,
@@ -144,9 +144,9 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 _WEIGHT_PRESETS: Dict[str, Tuple[float, float, float, float]] = {
-    "equal":         (0.25, 0.25, 0.25, 0.25),
-    "entropy_heavy": (0.40, 0.20, 0.20, 0.20),
-    "cluster_heavy": (0.20, 0.20, 0.40, 0.20),
+    "equal":            (0.25, 0.25, 0.25, 0.25),
+    "entropy_heavy":    (0.40, 0.20, 0.20, 0.20),
+    "diversity_heavy":  (0.20, 0.20, 0.40, 0.20),
 }
 
 # ---------------------------------------------------------------------------
@@ -395,65 +395,31 @@ def _total_valley_count(dist_analysis: dict) -> int:
     )
 
 
-def _perclass_valley_count(
-    morph_rows: List[Dict[str, str]],
-    aggregation: str = "mean",
-) -> float:
+def _class_diversity_neff(morph_rows: List[Dict[str, str]]) -> float:
     """
-    Per-class valley count aggregated across defect types.
+    Effective number of defect categories estimated from the Shannon entropy
+    of class distributions (Hill diversity index).
 
-    Groups morphology feature values by defect_type, computes total valley count
-    per class (summed across all features), then returns mean or median across
-    classes. Removes class-count bias: datasets with many defect types no longer
-    score higher just because they have more classes.
+    Neff = exp(H)  where H = -sum(p_k * ln(p_k))
 
-    Falls back to 0.0 if scipy is unavailable or morph_rows is empty.
+    For a uniform distribution over K classes: Neff = K.
+    For a dominated distribution: Neff < K.
+    Single class: Neff = 1.0.
     """
-    try:
-        from scipy.signal import find_peaks as _find_peaks
-    except ImportError:
-        return 0.0
-
     if not morph_rows:
-        return 0.0
+        return 1.0
 
-    from collections import defaultdict
-    class_rows: Dict[str, List] = defaultdict(list)
+    counts: Dict[str, int] = {}
     for r in morph_rows:
         dt = r.get("defect_type") or "unknown"
-        class_rows[dt].append(r)
+        counts[dt] = counts.get(dt, 0) + 1
 
-    class_counts = []
-    for rows in class_rows.values():
-        total_valleys = 0
-        for feat in MORPH_FEATURES:
-            vals = []
-            for r in rows:
-                try:
-                    vals.append(float(r[feat]))
-                except (KeyError, ValueError, TypeError):
-                    continue
-            if len(vals) < 3:
-                continue
-            arr = np.array(vals, dtype=np.float64)
-            bins = min(50, len(arr) - 1)
-            counts, _ = np.histogram(arr, bins=bins)
-            peak_count = counts.max()
-            if peak_count == 0:
-                continue
-            inverted = peak_count - counts
-            noise_floor = np.sqrt(len(arr) / bins)
-            prominence = max(noise_floor * 2, peak_count * 0.1)
-            peaks, _ = _find_peaks(inverted, prominence=prominence)
-            total_valleys += len(peaks)
-        class_counts.append(total_valleys)
+    total = sum(counts.values())
+    if total == 0:
+        return 1.0
 
-    if not class_counts:
-        return 0.0
-
-    if aggregation == "median":
-        return float(np.median(class_counts))
-    return float(np.mean(class_counts))
+    H = -sum((c / total) * math.log(c / total) for c in counts.values() if c > 0)
+    return math.exp(H)
 
 
 def _compute_silhouette(
@@ -489,7 +455,7 @@ def compute_mci(
     """
     Morphology Complexity Index.
     MCI = weighted mean of:
-        norm(Entropy), norm(ValleyCount), norm(ClusterCount), norm(1 - Silhouette)
+        norm(Entropy), norm(ValleyCount), norm(ClassDiversity), norm(1 - Silhouette)
     """
     wmode = weight_mode or cfg["mci"]["weights"]
     norm_mode = cfg["mci"]["normalization"]
@@ -514,22 +480,18 @@ def compute_mci(
     )
 
     morph_rows_raw: List[Dict[str, str]] = phase0.get("morph_rows_raw", [])
-    if morph_rows_raw:
-        valley_count = _perclass_valley_count(morph_rows_raw, aggregation="mean")
-    else:
-        valley_count = float(_total_valley_count(dist_analysis))
 
     raw = {
-        "entropy":         entropy,
-        "valley_count":    valley_count,
-        "cluster_count":   float(phase0.get("n_morph_clusters", 1)),
-        "inv_silhouette":  _clamp01(1.0 - silhouette),  # keys match normalized
+        "entropy":          entropy,
+        "valley_count":     float(_total_valley_count(dist_analysis)),
+        "class_diversity":  _class_diversity_neff(morph_rows_raw),
+        "inv_silhouette":   _clamp01(1.0 - silhouette),
     }
     normalized = {
-        "entropy":        _normalize_scalar(raw["entropy"],        *rng["entropy"],       norm_mode),
-        "valley_count":   _normalize_scalar(raw["valley_count"],   *rng["valley_count"],  norm_mode),
-        "cluster_count":  _normalize_scalar(raw["cluster_count"],  *rng["cluster_count"], norm_mode),
-        "inv_silhouette": _clamp01(1.0 - silhouette),
+        "entropy":          _normalize_scalar(raw["entropy"],         *rng["entropy"],         norm_mode),
+        "valley_count":     _normalize_scalar(raw["valley_count"],    *rng["valley_count"],    norm_mode),
+        "class_diversity":  _normalize_scalar(raw["class_diversity"], *rng["class_diversity"], norm_mode),
+        "inv_silhouette":   _clamp01(1.0 - silhouette),
     }
     assert len(weights) == len(normalized), (
         f"MCI weight/component count mismatch: {len(weights)} != {len(normalized)}"
