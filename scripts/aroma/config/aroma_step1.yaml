@@ -5,9 +5,9 @@ mci:
   normalization: minmax          # minmax | zscore
   weights: equal                 # equal | entropy_heavy | diversity_heavy
   expected_range:
-    entropy:         [0.0, 4.0]   # log2(k); k<=16 가정 → max 4 bits
-    valley_count:    [0.0, 41.0]  # anchor = max(pooled) × 1.2; observed max=34 (cashew)
-    class_diversity: [1.0, 9.6]   # Neff = exp(H); anchor = 8 types × 1.2
+    entropy:      [0.0, 4.0]    # log2(k); k<=16 가정 → max 4 bits
+    valley_count: [0.0, 41.0]   # anchor = max(pooled) × 1.2; observed max=34 (cashew)
+  class_diversity_n_max: 8      # N_max for log-scale: ln(Neff)/ln(N_max)
 
 cci:
   normalization: minmax

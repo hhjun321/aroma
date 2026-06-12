@@ -109,10 +109,10 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "normalization": "minmax",
         "weights": "equal",
         "expected_range": {
-            "entropy":         [0.0, 4.0],
-            "valley_count":    [0.0, 41.0],
-            "class_diversity": [1.0, 9.6],
+            "entropy":      [0.0, 4.0],
+            "valley_count": [0.0, 41.0],
         },
+        "class_diversity_n_max": 8,
     },
     "cci": {
         "normalization": "minmax",
@@ -487,11 +487,15 @@ def compute_mci(
         "class_diversity":  _class_diversity_neff(morph_rows_raw),
         "inv_silhouette":   _clamp01(1.0 - silhouette),
     }
+    n_max = float(cfg["mci"].get("class_diversity_n_max", 8.0))
+    log_n_max = math.log(n_max) if n_max > 1.0 else 1.0
+    norm_div = _clamp01(math.log(max(raw["class_diversity"], 1.0)) / log_n_max)
+
     normalized = {
-        "entropy":          _normalize_scalar(raw["entropy"],         *rng["entropy"],         norm_mode),
-        "valley_count":     _normalize_scalar(raw["valley_count"],    *rng["valley_count"],    norm_mode),
-        "class_diversity":  _normalize_scalar(raw["class_diversity"], *rng["class_diversity"], norm_mode),
-        "inv_silhouette":   _clamp01(1.0 - silhouette),
+        "entropy":         _normalize_scalar(raw["entropy"],      *rng["entropy"],      norm_mode),
+        "valley_count":    _normalize_scalar(raw["valley_count"], *rng["valley_count"], norm_mode),
+        "class_diversity": norm_div,
+        "inv_silhouette":  _clamp01(1.0 - silhouette),
     }
     assert len(weights) == len(normalized), (
         f"MCI weight/component count mismatch: {len(weights)} != {len(normalized)}"
