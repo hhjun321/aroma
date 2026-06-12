@@ -1,5 +1,6 @@
 # Step 1 — `compute_complexity.py` Colab 실행
 
+> **실행 환경**: CPU
 > Phase 0 출력을 읽어 MCI / CCI 계산 + 정책 선택.
 > Phase 0 완료 후 실행.
 

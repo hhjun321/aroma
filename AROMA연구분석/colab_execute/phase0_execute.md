@@ -1,5 +1,6 @@
 # Phase 0 — `distribution_profiling.py` Colab 실행
 
+> **실행 환경**: CPU
 > ISP 도메인: GT mask 없음 → Otsu fallback (SAM 미지정 시 자동)
 
 ## 환경변수
