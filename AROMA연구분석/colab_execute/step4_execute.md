@@ -7,23 +7,23 @@
 ## 환경변수
 
 ```python
-import os
+import json, os
 
-os.environ['AROMA_SCRIPTS']   = '/content/AROMA/scripts/aroma'
-os.environ['AROMA_OUT']       = '/content/drive/MyDrive/data/Aroma/aroma_output'
-os.environ['AROMA_DATA_BASE'] = '/content/drive/MyDrive/data/Aroma'
+os.environ['AROMA_SCRIPTS']    = '/content/AROMA/scripts/aroma'
+os.environ['AROMA_OUT']        = '/content/drive/MyDrive/data/Aroma/aroma_output'
+os.environ['DATASET_CONFIG']   = '/content/AROMA/dataset_config.json'
 
 DATASET_KEY = 'isp_LSM_1'   # ← 변경 시 여기만 수정
 
-os.environ['DATASET_KEY']     = DATASET_KEY
-os.environ['ROI_DIR']         = f"{os.environ['AROMA_OUT']}/roi/{DATASET_KEY}"
-os.environ['SYNTHETIC_DIR']   = f"{os.environ['AROMA_OUT']}/synthetic/{DATASET_KEY}"
+os.environ['DATASET_KEY']      = DATASET_KEY
+os.environ['ROI_DIR']          = f"{os.environ['AROMA_OUT']}/roi/{DATASET_KEY}"
+os.environ['SYNTHETIC_DIR']    = f"{os.environ['AROMA_OUT']}/synthetic/{DATASET_KEY}"
 
-# 정상(good) 이미지 경로 — 데이터셋별 조정
-# isp_LSM_1  → ISP/LSM_1/train/good
-# mvtec_cable → MVTec/cable/train/good
-# visa_cashew → VisA/cashew/train/good
-os.environ['NORMAL_DIR'] = f"{os.environ['AROMA_DATA_BASE']}/isp/unsupervised/LSM_1/train/good"
+# NORMAL_DIR: dataset_config.json의 image_dir에서 자동 조회
+with open(os.environ['DATASET_CONFIG']) as f:
+    _cfg = json.load(f)
+os.environ['NORMAL_DIR'] = _cfg[DATASET_KEY]['image_dir']
+print(f"NORMAL_DIR = {os.environ['NORMAL_DIR']}")
 ```
 
 ## 실행
