@@ -35,6 +35,7 @@ import logging
 import math
 import os
 import random
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -265,6 +266,84 @@ _SYNTHESIS_METHODS = {
 
 
 # ---------------------------------------------------------------------------
+# Local staging helpers
+# ---------------------------------------------------------------------------
+
+def _default_staging_dir(roi_dir: str) -> Path:
+    """Return a local staging path. Uses /content/tmp on Colab, sibling dir otherwise."""
+    slug = Path(roi_dir).name
+    colab_tmp = Path("/content/tmp")
+    if colab_tmp.parent.exists():
+        return colab_tmp / f"aroma_step4_{slug}"
+    return Path(roi_dir).parent / f"_staging_tmp_{slug}"
+
+
+def _stage_inputs(
+    selected: List[Dict[str, Any]],
+    normal_images: List[str],
+    staging_dir: Path,
+) -> tuple:
+    """
+    Copy defect and normal images to local staging dir.
+    Returns (staged_selected, staged_normal_images) with updated paths.
+    """
+    defect_dir = staging_dir / "defects"
+    normal_dir_local = staging_dir / "normals"
+    defect_dir.mkdir(parents=True, exist_ok=True)
+    normal_dir_local.mkdir(parents=True, exist_ok=True)
+
+    # Stage defect images (deduplicated)
+    defect_map: Dict[str, str] = {}
+    for entry in selected:
+        orig = entry.get("image_path", "")
+        if orig and orig not in defect_map and Path(orig).exists():
+            p = Path(orig)
+            dst = defect_dir / p.name
+            if dst.exists():
+                dst = defect_dir / f"{p.stem}_{len(defect_map)}{p.suffix}"
+            shutil.copy2(orig, str(dst))
+            defect_map[orig] = str(dst)
+
+    staged_selected = []
+    for entry in selected:
+        e = entry.copy()
+        orig = e.get("image_path", "")
+        if orig in defect_map:
+            e["image_path"] = defect_map[orig]
+        staged_selected.append(e)
+
+    # Stage normal images (deduplicated)
+    normal_map: Dict[str, str] = {}
+    for orig in normal_images:
+        if orig not in normal_map and Path(orig).exists():
+            p = Path(orig)
+            dst = normal_dir_local / p.name
+            if dst.exists():
+                dst = normal_dir_local / f"{p.stem}_{len(normal_map)}{p.suffix}"
+            shutil.copy2(orig, str(dst))
+            normal_map[orig] = str(dst)
+
+    staged_normal = [normal_map.get(p, p) for p in normal_images]
+
+    logger.info(
+        "Staged %d defect images + %d normal images → %s",
+        len(defect_map), len(normal_map), staging_dir,
+    )
+    return staged_selected, staged_normal
+
+
+def _push_outputs(local_img_dir: Path, drive_img_dir: Path) -> int:
+    """Copy synthesized images from local staging to Drive. Returns count copied."""
+    drive_img_dir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for img_path in sorted(local_img_dir.iterdir()):
+        if img_path.is_file():
+            shutil.copy2(str(img_path), str(drive_img_dir / img_path.name))
+            n += 1
+    return n
+
+
+# ---------------------------------------------------------------------------
 # Normal image pool
 # ---------------------------------------------------------------------------
 
@@ -295,19 +374,23 @@ def run(
     blend_mode: str = "alpha",
     feather_px: int = 4,
     seed: int = 42,
+    local_staging: bool = False,
 ) -> Dict[str, Any]:
     """
     Full Step 4 pipeline: load ROIs → synthesize → save annotations.
 
     Args:
-        roi_dir:     Step 3 output directory (roi_selected.json)
-        normal_dir:  Directory of normal (good) background images
-        output_dir:  Destination for synthetic images + annotations.json
-        method:      Synthesis method: copy_paste | controlnet | inpainting
-        n_per_roi:   Number of synthetic images to generate per ROI
-        blend_mode:  Blending mode for copy_paste ('alpha')
-        feather_px:  Edge feather radius for alpha blend
-        seed:        Random seed for reproducibility
+        roi_dir:        Step 3 output directory (roi_selected.json)
+        normal_dir:     Directory of normal (good) background images
+        output_dir:     Destination for synthetic images + annotations.json
+        method:         Synthesis method: copy_paste | controlnet | inpainting
+        n_per_roi:      Number of synthetic images to generate per ROI
+        blend_mode:     Blending mode for copy_paste ('alpha')
+        feather_px:     Edge feather radius for alpha blend
+        seed:           Random seed for reproducibility
+        local_staging:  Copy inputs to /content/tmp before synthesis to avoid
+                        per-image Drive I/O. Outputs are pushed back to Drive
+                        output_dir at the end.
 
     Returns:
         dict with status, n_generated, annotations list
@@ -329,8 +412,18 @@ def run(
     if method not in _SYNTHESIS_METHODS:
         return {"status": f"unknown_method:{method}", "n_generated": 0, "annotations": []}
 
+    # Local staging: copy inputs to fast local disk, run synthesis there
+    staging_dir: Optional[Path] = None
+    work_output_dir = output_dir
+
+    if local_staging and normal_images:
+        staging_dir = _default_staging_dir(roi_dir)
+        selected, normal_images = _stage_inputs(selected, normal_images, staging_dir)
+        work_output_dir = str(staging_dir / "synthetic")
+        logger.info("Synthesis will run in local staging dir: %s", work_output_dir)
+
     synthesis_fn = _SYNTHESIS_METHODS[method]
-    out = Path(output_dir)
+    out = Path(work_output_dir)
     img_dir = out / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
 
@@ -339,15 +432,18 @@ def run(
     n_ok = 0
     n_skip = 0
 
+    drive_img_dir = Path(output_dir) / "images"
+
     for roi_idx, roi_entry in enumerate(selected):
         for rep_idx in range(n_per_roi):
             fname = f"syn_{roi_idx:05d}_{rep_idx:02d}.jpg"
-            out_path = str(img_dir / fname)
+            local_out_path = str(img_dir / fname)
+            # Annotation stores the final Drive path
+            final_out_path = str(drive_img_dir / fname) if local_staging else local_out_path
 
             if not normal_images:
-                # Dry-run: record annotation without image
                 annotations.append({
-                    "image_path":    out_path,
+                    "image_path":    final_out_path,
                     "source_roi":    roi_entry.get("image_id", ""),
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
@@ -365,7 +461,7 @@ def run(
             ok = synthesis_fn(
                 roi_entry=roi_entry,
                 normal_image_path=normal_path,
-                output_path=out_path,
+                output_path=local_out_path,
                 blend_mode=blend_mode,
                 feather_px=feather_px,
                 rng=rng,
@@ -373,7 +469,7 @@ def run(
             if ok:
                 n_ok += 1
                 annotations.append({
-                    "image_path":    out_path,
+                    "image_path":    final_out_path,
                     "source_roi":    roi_entry.get("image_id", ""),
                     "normal_image":  normal_path,
                     "cluster_id":    roi_entry.get("cluster_id"),
@@ -388,8 +484,15 @@ def run(
             else:
                 n_skip += 1
 
-    save_json(annotations, str(out / "annotations.json"))
-    logger.info("Generated %d images (%d skipped) → %s", n_ok, n_skip, out)
+    # Push synthesized images to Drive output_dir if staging was used
+    if local_staging and staging_dir and img_dir.exists():
+        n_copied = _push_outputs(img_dir, drive_img_dir)
+        logger.info("Pushed %d images to Drive → %s", n_copied, drive_img_dir)
+
+    drive_out = Path(output_dir)
+    drive_out.mkdir(parents=True, exist_ok=True)
+    save_json(annotations, str(drive_out / "annotations.json"))
+    logger.info("Generated %d images (%d skipped) → %s", n_ok, n_skip, drive_out)
 
     return {
         "status":       "ok",
@@ -424,8 +527,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Blending mode for copy_paste (default: alpha)")
     p.add_argument("--feather_px",  type=int, default=4,
                    help="Edge feather sigma in pixels (default: 4)")
-    p.add_argument("--seed",        type=int, default=42,
+    p.add_argument("--seed",          type=int, default=42,
                    help="Random seed (default: 42)")
+    p.add_argument("--local_staging", action="store_true",
+                   help="Stage inputs to /content/tmp before synthesis to avoid "
+                        "per-image Drive I/O (recommended on Colab)")
     return p.parse_args(argv)
 
 
@@ -440,6 +546,7 @@ def main(argv=None) -> None:
         blend_mode=args.blend_mode,
         feather_px=args.feather_px,
         seed=args.seed,
+        local_staging=args.local_staging,
     )
     if result.get("status") != "ok":
         sys.exit(1)

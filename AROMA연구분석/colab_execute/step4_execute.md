@@ -29,16 +29,23 @@ os.environ['NORMAL_DIR'] = f"{os.environ['AROMA_DATA_BASE']}/isp/unsupervised/LS
 ## 실행
 
 ```python
-# copy_paste: CPU, --n_per_roi ROI당 합성 이미지 수
+# copy_paste: CPU, --local_staging으로 Drive I/O 최소화 (권장)
 !python $AROMA_SCRIPTS/generate_defects.py \
-    --roi_dir    $ROI_DIR \
-    --normal_dir $NORMAL_DIR \
-    --output_dir $SYNTHETIC_DIR \
-    --method     copy_paste \
-    --n_per_roi  3 \
-    --feather_px 4 \
-    --seed       42
+    --roi_dir       $ROI_DIR \
+    --normal_dir    $NORMAL_DIR \
+    --output_dir    $SYNTHETIC_DIR \
+    --method        copy_paste \
+    --n_per_roi     3 \
+    --feather_px    4 \
+    --seed          42 \
+    --local_staging
 ```
+
+`--local_staging` 동작:
+1. defect 이미지 + normal 이미지 → `/content/tmp/aroma_step4_{dataset}/` 복사
+2. 합성 전 과정 로컬 디스크에서 실행 (Drive I/O 없음)
+3. 완료 후 이미지만 Drive `$SYNTHETIC_DIR/images/` 로 일괄 push
+4. `annotations.json`은 Drive 경로 기준으로 저장
 
 ### 합성 방법 옵션
 
