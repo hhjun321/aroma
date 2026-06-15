@@ -34,14 +34,17 @@ AROMA ROI(`$AROMA_OUT/roi/`)를 덮어쓰지 않도록 **별도 디렉터리**(`
 DATASETS = ["isp_LSM_1", "mvtec_cable", "visa_cashew", "visa_pcb"]
 
 for ds in DATASETS:
+    os.environ['PROFILING_DIR']     = f"{os.environ['AROMA_OUT']}/profiling/{ds}"
+    os.environ['PROMPTS_DIR']       = f"{os.environ['AROMA_OUT']}/prompts/{ds}"
+    os.environ['RANDOM_ROI_DS_DIR'] = f"{os.environ['RANDOM_ROI_DIR']}/{ds}"
     print(f"\n=== {ds} ===")
     !python $AROMA_SCRIPTS/roi_selection.py \
-        --profiling_dir  $AROMA_OUT/profiling/$ds \
-        --prompts_dir    $AROMA_OUT/prompts/$ds \
+        --profiling_dir  $PROFILING_DIR \
+        --prompts_dir    $PROMPTS_DIR \
         --sampling_strategy random \
         --top_k          200 \
         --seed           42 \
-        --output_dir     $RANDOM_ROI_DIR/$ds
+        --output_dir     $RANDOM_ROI_DS_DIR
 ```
 
 **출력 확인:**

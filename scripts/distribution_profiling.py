@@ -847,11 +847,30 @@ class DistributionProfiler:
         if not self.context_bin_edges:
             self.context_bin_edges = bin_edges
 
-        # Global context distribution over all patches
-        global_counts: Dict[str, int] = defaultdict(int)
+        # Global context distribution — image-level mean (same granularity as compatibility_matrix)
+        img_ctx: Dict[str, Dict[str, List[float]]] = defaultdict(
+            lambda: {f: [] for f in CONTEXT_FEATURES}
+        )
         for r in context_rows:
+            iid = r.get("image_id", "")
+            for feat in CONTEXT_FEATURES:
+                v = r.get(feat)
+                if v not in ("", None):
+                    try:
+                        img_ctx[iid][feat].append(float(v))
+                    except ValueError:
+                        pass
+
+        img_mean_ctx: Dict[str, Dict[str, float]] = {
+            iid: {f: float(np.mean(feats[f])) for f in CONTEXT_FEATURES}
+            for iid, feats in img_ctx.items()
+            if all(img_ctx[iid][f] for f in CONTEXT_FEATURES)
+        }
+
+        global_counts: Dict[str, int] = defaultdict(int)
+        for iid, ctx in img_mean_ctx.items():
             try:
-                cell = _context_cell_key(r, bin_edges)
+                cell = _context_cell_key(ctx, bin_edges)
                 global_counts[cell] += 1
             except Exception:
                 pass
