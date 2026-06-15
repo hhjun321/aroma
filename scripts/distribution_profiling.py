@@ -847,11 +847,15 @@ class DistributionProfiler:
         if not self.context_bin_edges:
             self.context_bin_edges = bin_edges
 
-        # Global context distribution — image-level mean (same granularity as compatibility_matrix)
+        # Global context distribution — good (normal) images only, image-level mean.
+        # deficit = max(0, P(cell|good) - P(cell|defect_cluster)):
+        # measures which normal-context cells the cluster under-covers.
         img_ctx: Dict[str, Dict[str, List[float]]] = defaultdict(
             lambda: {f: [] for f in CONTEXT_FEATURES}
         )
         for r in context_rows:
+            if r.get("image_type") != "good":
+                continue
             iid = r.get("image_id", "")
             for feat in CONTEXT_FEATURES:
                 v = r.get(feat)
