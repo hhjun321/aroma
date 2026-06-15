@@ -30,8 +30,10 @@ import argparse
 import csv
 import json
 import logging
+import math
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -252,42 +254,83 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 # Sampling strategies
 # ---------------------------------------------------------------------------
 
-def _rare_pair_deficit_quantile(
+def _pair_aware_allocation(
     candidates: List[Dict[str, Any]],
     top_k: int,
-    quantile: float = 0.75,
 ) -> List[Dict[str, Any]]:
     """
-    Deficit = 1 - Observed/Expected already pre-computed in deficit_analysis.
-    Select top_k candidates weighted toward high-deficit pairs:
-        1. Compute quantile threshold over nonzero-deficit candidates only.
-           When 75%+ of candidates have deficit=0, p75(all)=0 collapses every
-           candidate into the "rare" bucket and nullifies oversampling.
-        2. Candidates above threshold get priority in selection.
-        3. Fill remainder from full pool ranked by roi_score.
+    Pair-aware quota allocation for deficit-aware ROI selection.
+
+    Steps:
+        1. Group candidates by (cluster_id, cell_key) pair.
+           Compute PairDeficit = mean(deficit) for each pair.
+        2. Assign base quota=1 to every pair (coverage guarantee).
+        3. Distribute remaining quota (top_k - n_pairs) proportional to
+           PairDeficit via Hamilton / Largest-Remainder method.
+           Pairs with deficit=0 receive no extra quota beyond the base.
+        4. Within each pair, select candidates by roi_score descending.
+
+    Fallback: if top_k <= n_pairs, return roi_score top-k globally.
+    Slack: if a pair has fewer candidates than its quota, only available
+           candidates are taken — no redistribution to other pairs.
     """
     if not candidates:
         return []
 
-    nonzero_def = [c["deficit"] for c in candidates if c["deficit"] > 0]
-    if not nonzero_def:
-        # No deficit signal — fall back to roi_score ranking.
+    # Step 1: group by (cluster_id, cell_key) pair
+    pair_groups: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
+    for c in candidates:
+        pair_groups[(c["cluster_id"], c["cell_key"])].append(c)
+
+    pairs = list(pair_groups.keys())
+    n_pairs = len(pairs)
+
+    if top_k <= n_pairs:
         return sorted(candidates, key=lambda c: c["roi_score"], reverse=True)[:top_k]
 
-    thr = float(np.quantile(nonzero_def, quantile))
-    rare = [c for c in candidates if c["deficit"] >= thr]
-    rest = [c for c in candidates if c["deficit"] < thr]
+    pair_deficit = {
+        p: float(np.mean([c["deficit"] for c in pair_groups[p]]))
+        for p in pairs
+    }
 
-    rare.sort(key=lambda c: c["roi_score"], reverse=True)
-    rest.sort(key=lambda c: c["roi_score"], reverse=True)
+    # Step 2: base quota=1 per pair
+    quotas: Dict[Any, int] = {p: 1 for p in pairs}
+    remaining = top_k - n_pairs
 
-    # Fill from rare first, pad with rest
-    selected = rare[:top_k]
-    remaining = top_k - len(selected)
-    if remaining > 0:
-        selected += rest[:remaining]
+    # Step 3: Hamilton / Largest-Remainder allocation of remaining quota
+    deficit_pairs = {p: d for p, d in pair_deficit.items() if d > 0}
+    total_deficit = sum(deficit_pairs.values())
 
-    return selected[:top_k]
+    if total_deficit == 0:
+        weight: Dict[Any, float] = {p: 1.0 for p in pairs}
+        total_w = float(n_pairs)
+    else:
+        weight = dict(deficit_pairs)
+        total_w = total_deficit
+
+    ideal = {p: remaining * w / total_w for p, w in weight.items()}
+    floor_q = {p: math.floor(v) for p, v in ideal.items()}
+    shortfall = remaining - sum(floor_q.values())
+    remainders = {p: ideal[p] - floor_q[p] for p in weight}
+    for p in sorted(remainders, key=remainders.__getitem__, reverse=True)[:shortfall]:
+        floor_q[p] += 1
+
+    for p, extra in floor_q.items():
+        quotas[p] += extra
+
+    # Step 4: select roi_score top-quota within each pair
+    selected: List[Dict[str, Any]] = []
+    for p, quota in quotas.items():
+        top_in_pair = sorted(pair_groups[p], key=lambda c: c["roi_score"], reverse=True)
+        selected.extend(top_in_pair[:quota])
+
+    if len(selected) < top_k:
+        logger.info(
+            "pair_aware_allocation: selected %d / %d (slack from under-populated pairs)",
+            len(selected), top_k,
+        )
+
+    return selected
 
 
 def select_rois(
@@ -329,7 +372,7 @@ def select_rois(
         return [candidates[i] for i in sorted(indices.tolist())]
 
     # deficit_aware (default)
-    return _rare_pair_deficit_quantile(candidates, top_k)
+    return _pair_aware_allocation(candidates, top_k)
 
 
 # ---------------------------------------------------------------------------

@@ -124,11 +124,11 @@ def compute_metrics(
     # gives a meaningful comparison: AROMA's deficit-aware strategy should cover more
     # of these under-represented pairs than uniform random selection does.
     #
-    # Note: roi_selection._rare_pair_deficit_quantile uses p75(nonzero) as its
-    # *selection* threshold (oversampling the top-25% deficit candidates), while this
-    # metric evaluates *coverage* of all nonzero-deficit pairs.  The two definitions
-    # are intentionally different: selection focuses on the highest-deficit tail,
-    # evaluation checks whether any under-represented pair was reached at all.
+    # Note: roi_selection._pair_aware_allocation assigns quota proportional to
+    # PairDeficit = mean(deficit) per (cluster, cell_key) pair, with a base
+    # quota=1 for every pair (coverage guarantee).  This metric evaluates whether
+    # any nonzero-deficit pair appeared in the selection — intentionally a broader
+    # check than the per-pair quota weighting used during selection.
     if not candidates:
         rare_pair_cov: float = 0.0
     else:
