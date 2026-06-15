@@ -259,9 +259,9 @@ def _pair_aware_allocation(
     top_k: int,
 ) -> List[Dict[str, Any]]:
     """
-    Pair-aware quota allocation for deficit-aware ROI selection.
+    Two-phase ROI selection: Coverage-first + Quality-second.
 
-    Steps:
+    Phase 1 — Pair-aware allocation (Coverage + Deficit):
         1. Group candidates by (cluster_id, cell_key) pair.
            Compute PairDeficit = mean(deficit) for each pair.
         2. Assign base quota=1 to every pair (coverage guarantee).
@@ -270,14 +270,17 @@ def _pair_aware_allocation(
            Pairs with deficit=0 receive no extra quota beyond the base.
         4. Within each pair, select candidates by roi_score descending.
 
+    Phase 2 — Quality backfill:
+        If Phase 1 selected fewer than top_k candidates (slack from
+        under-populated pairs), fill remaining slots from the unselected
+        pool ranked by global roi_score.
+
     Fallback: if top_k <= n_pairs, return roi_score top-k globally.
-    Slack: if a pair has fewer candidates than its quota, only available
-           candidates are taken — no redistribution to other pairs.
     """
     if not candidates:
         return []
 
-    # Step 1: group by (cluster_id, cell_key) pair
+    # --- Phase 1: pair-aware coverage + deficit allocation ---
     pair_groups: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
     for c in candidates:
         pair_groups[(c["cluster_id"], c["cell_key"])].append(c)
@@ -293,11 +296,9 @@ def _pair_aware_allocation(
         for p in pairs
     }
 
-    # Step 2: base quota=1 per pair
     quotas: Dict[Any, int] = {p: 1 for p in pairs}
     remaining = top_k - n_pairs
 
-    # Step 3: Hamilton / Largest-Remainder allocation of remaining quota
     deficit_pairs = {p: d for p, d in pair_deficit.items() if d > 0}
     total_deficit = sum(deficit_pairs.values())
 
@@ -318,16 +319,25 @@ def _pair_aware_allocation(
     for p, extra in floor_q.items():
         quotas[p] += extra
 
-    # Step 4: select roi_score top-quota within each pair
     selected: List[Dict[str, Any]] = []
     for p, quota in quotas.items():
         top_in_pair = sorted(pair_groups[p], key=lambda c: c["roi_score"], reverse=True)
         selected.extend(top_in_pair[:quota])
 
-    if len(selected) < top_k:
+    # --- Phase 2: quality backfill for slack slots ---
+    slack = top_k - len(selected)
+    if slack > 0:
+        selected_ids = {id(c) for c in selected}
+        rest = sorted(
+            (c for c in candidates if id(c) not in selected_ids),
+            key=lambda c: c["roi_score"],
+            reverse=True,
+        )
+        backfill = rest[:slack]
+        selected += backfill
         logger.info(
-            "pair_aware_allocation: selected %d / %d (slack from under-populated pairs)",
-            len(selected), top_k,
+            "pair_aware_allocation: phase2 backfill %d / %d slack slots",
+            len(backfill), slack,
         )
 
     return selected
