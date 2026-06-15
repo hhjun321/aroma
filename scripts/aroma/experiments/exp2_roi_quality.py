@@ -8,7 +8,7 @@ AROMA의 deficit-aware ROI 선택이 무작위 선택 대비 더 나은
 지표:
     morphology_coverage   unique cluster_id in selected / unique in candidates
     context_coverage      unique cell_key in selected / unique in candidates
-    rare_pair_coverage    deficit≥p75 unique (cluster,cell_key) in selected / total
+    rare_pair_coverage    deficit>0 unique (cluster,cell_key) in selected / total rare pairs in candidates
     entropy               Shannon entropy of cluster_id dist, normalized H/log(n)
     gini                  Gini coefficient of cluster_id frequency distribution
 
@@ -116,27 +116,37 @@ def compute_metrics(
     all_cells = {c["cell_key"] for c in candidates}
     ctx_cov = len(sel_cells) / len(all_cells) if all_cells else 0.0
 
-    # --- rare pair coverage (deficit >= p75 of candidates) ---
+    # --- rare pair coverage (deficit > 0) ---
+    # "Rare" = any (cluster_id, cell_key) pair where deficit > 0, i.e. the normal
+    # context distribution is under-represented by the defect cluster.
+    # When 75%+ of candidates have deficit=0, p75(all)=0 collapses every pair into
+    # "rare" and makes AROMA indistinguishable from Random.  Using deficit>0 directly
+    # gives a meaningful comparison: AROMA's deficit-aware strategy should cover more
+    # of these under-represented pairs than uniform random selection does.
+    #
+    # Note: roi_selection._rare_pair_deficit_quantile uses p75(nonzero) as its
+    # *selection* threshold (oversampling the top-25% deficit candidates), while this
+    # metric evaluates *coverage* of all nonzero-deficit pairs.  The two definitions
+    # are intentionally different: selection focuses on the highest-deficit tail,
+    # evaluation checks whether any under-represented pair was reached at all.
     if not candidates:
         rare_pair_cov: float = 0.0
     else:
-        deficits = np.array([c.get("deficit", 0.0) for c in candidates], dtype=np.float64)
-        p75 = float(np.quantile(deficits, 0.75))
-        if p75 == 0.0:
-            # all deficit=0: no structural rare pairs — treat as fully covered
+        rare_cands = {
+            (c["cluster_id"], c["cell_key"])
+            for c in candidates if c.get("deficit", 0.0) > 0
+        }
+        if not rare_cands:
+            # No deficit signal in candidates — metric is not applicable.
             rare_pair_cov = 1.0
         else:
-            rare_cands = {
-                (c["cluster_id"], c["cell_key"])
-                for c in candidates if c.get("deficit", 0.0) >= p75
-            }
             rare_sel = {
                 (c["cluster_id"], c["cell_key"])
-                for c in selected if c.get("deficit", 0.0) >= p75
+                for c in selected if c.get("deficit", 0.0) > 0
             }
             # intersect to guard against selected not being a strict subset of candidates
             rare_sel = rare_sel & rare_cands
-            rare_pair_cov = len(rare_sel) / len(rare_cands) if rare_cands else 0.0
+            rare_pair_cov = len(rare_sel) / len(rare_cands)
 
     # --- entropy (Shannon, normalized H/log(n_clusters)) ---
     if not selected:

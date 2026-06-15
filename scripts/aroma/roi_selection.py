@@ -260,15 +260,21 @@ def _rare_pair_deficit_quantile(
     """
     Deficit = 1 - Observed/Expected already pre-computed in deficit_analysis.
     Select top_k candidates weighted toward high-deficit pairs:
-        1. Compute deficit quantile threshold
-        2. Candidates above threshold get 2× weight in selection
-        3. Fill remainder from full pool ranked by roi_score
+        1. Compute quantile threshold over nonzero-deficit candidates only.
+           When 75%+ of candidates have deficit=0, p75(all)=0 collapses every
+           candidate into the "rare" bucket and nullifies oversampling.
+        2. Candidates above threshold get priority in selection.
+        3. Fill remainder from full pool ranked by roi_score.
     """
     if not candidates:
         return []
 
-    deficits = np.array([c["deficit"] for c in candidates], dtype=np.float64)
-    thr = float(np.quantile(deficits, quantile))
+    nonzero_def = [c["deficit"] for c in candidates if c["deficit"] > 0]
+    if not nonzero_def:
+        # No deficit signal — fall back to roi_score ranking.
+        return sorted(candidates, key=lambda c: c["roi_score"], reverse=True)[:top_k]
+
+    thr = float(np.quantile(nonzero_def, quantile))
     rare = [c for c in candidates if c["deficit"] >= thr]
     rest = [c for c in candidates if c["deficit"] < thr]
 
