@@ -5,10 +5,11 @@ AROMA Step 3 — ROI Selection
 Scores every (defect image × context bin) candidate using:
     ROI_score = 0.4 × P(M_i) + 0.4 × P(C_j) + 0.2 × Deficit(M_i, C_j)
 
-Then selects ROIs via one of three sampling strategies:
+Then selects ROIs via one of four sampling strategies:
     deficit_aware   Top-K Deficit Quantile oversampling (default)
     top_k           Highest ROI_score first
     weighted        Probability-weighted random draw
+    random          Uniform random draw (baseline for Exp 2)
 
 Usage (Colab):
     !python $AROMA_SCRIPTS/roi_selection.py \
@@ -296,6 +297,7 @@ def select_rois(
         deficit_aware   Top-K Deficit Quantile oversampling (default)
         top_k           Highest roi_score first
         weighted        Probability-weighted random draw
+        random          Uniform random draw (baseline for Exp 2)
     """
     if not candidates:
         return []
@@ -304,6 +306,11 @@ def select_rois(
 
     if strategy == "top_k":
         return sorted(candidates, key=lambda c: c["roi_score"], reverse=True)[:top_k]
+
+    if strategy == "random":
+        rng = np.random.default_rng(seed)
+        indices = rng.choice(len(candidates), size=top_k, replace=False)
+        return [candidates[i] for i in sorted(indices.tolist())]
 
     if strategy == "weighted":
         scores = np.array([c["roi_score"] for c in candidates], dtype=np.float64)
@@ -417,7 +424,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--output_dir",    required=True,
                    help="Directory to write roi_candidates.json and roi_selected.json")
     p.add_argument("--sampling_strategy", default="deficit_aware",
-                   choices=["deficit_aware", "top_k", "weighted"],
+                   choices=["deficit_aware", "top_k", "weighted", "random"],
                    help="ROI sampling strategy (default: deficit_aware)")
     p.add_argument("--top_k", type=int, default=200,
                    help="Number of ROIs to select (default: 200)")
