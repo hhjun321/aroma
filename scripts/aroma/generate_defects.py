@@ -412,6 +412,9 @@ def run(
     if method not in _SYNTHESIS_METHODS:
         return {"status": f"unknown_method:{method}", "n_generated": 0, "annotations": []}
 
+    # Save original Drive paths before staging overwrites them
+    orig_source_roi = [e.get("image_path", "") for e in selected]
+
     # Local staging: copy inputs to fast local disk, run synthesis there
     staging_dir: Optional[Path] = None
     work_output_dir = output_dir
@@ -444,7 +447,7 @@ def run(
             if not normal_images:
                 annotations.append({
                     "image_path":    final_out_path,
-                    "source_roi":    roi_entry.get("image_path", ""),
+                    "source_roi":    orig_source_roi[roi_idx],
                     "image_id":      roi_entry.get("image_id", ""),
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
@@ -471,7 +474,7 @@ def run(
                 n_ok += 1
                 annotations.append({
                     "image_path":    final_out_path,
-                    "source_roi":    roi_entry.get("image_path", ""),
+                    "source_roi":    orig_source_roi[roi_idx],
                     "image_id":      roi_entry.get("image_id", ""),
                     "normal_image":  normal_path,
                     "cluster_id":    roi_entry.get("cluster_id"),

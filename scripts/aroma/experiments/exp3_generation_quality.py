@@ -335,14 +335,25 @@ def _load_source_roi_crops(annotations_path: str) -> List[np.ndarray]:
         return []
     annotations: List[Dict[str, Any]] = load_json(annotations_path)
     crops: List[np.ndarray] = []
+    n_fallback = 0
     for ann in annotations:
         src = ann.get("source_roi", "")
         if not src or not Path(src).exists():
-            continue
+            # source_roi is a deleted staging path — fall back to synthetic output image
+            src = ann.get("image_path", "")
+            if not src or not Path(src).exists():
+                continue
+            n_fallback += 1
         try:
             crops.append(np.array(Image.open(src).convert("RGB")))
         except Exception as exc:
             logger.warning("source_roi load failed %s: %s", src, exc)
+    if n_fallback:
+        logger.warning(
+            "source_roi paths missing (%d/%d) — used synthetic image_path as fallback. "
+            "Re-run generate_defects.py to fix (staging path bug corrected).",
+            n_fallback, len(annotations),
+        )
     logger.info("Loaded %d source_roi crops from %s", len(crops), annotations_path)
     return crops
 
