@@ -13,12 +13,12 @@ import os
 
 # AROMA 기본 환경변수 (기존 셀에서 설정된 경우 생략)
 os.environ['AROMA_OUT']     = f"{os.environ['DRIVE']}/aroma_output"
-os.environ['AROMA_SCRIPTS'] = "/content/CASDA/scripts/aroma"
+os.environ['AROMA_SCRIPTS'] = "/content/Aroma/scripts/aroma"
 os.environ['AROMA_DATA']    = "/content/drive/MyDrive/data/Aroma"
 
 # Exp 3 전용
 os.environ['RANDOM_SYNTH_DIR'] = f"{os.environ['AROMA_OUT']}/synthetic_random"
-os.environ['AROMA_SYNTH_DIR']  = f"{os.environ['AROMA_OUT']}/synthetic_aroma"
+os.environ['AROMA_SYNTH_DIR']  = f"{os.environ['AROMA_OUT']}/synthetic"
 os.environ['EXP3_OUT']         = f"{os.environ['AROMA_OUT']}/exp3"
 
 print("AROMA_DATA       :", os.environ['AROMA_DATA'])
@@ -47,7 +47,7 @@ Random baseline synthetic만 생성한다.
 ```python
 import json
 
-_cfg_path = "/content/CASDA/dataset_config.json"
+_cfg_path = "/content/Aroma/dataset_config.json"
 with open(_cfg_path) as _f:
     DATASET_CONFIG = json.load(_f)
 
@@ -69,11 +69,12 @@ for ds in DATASETS:
         print(f"[SKIP] {ds}: dataset_config.json에 image_dir 없음")
         continue
 
+    os.environ['DS']              = ds
     os.environ['NORMAL_DIR_DS']   = normal_dir
     os.environ['RANDOM_SYNTH_DS'] = f"{os.environ['RANDOM_SYNTH_DIR']}/{ds}"
     print(f"\n=== {ds} ===  normal_dir={normal_dir}")
     !python $AROMA_SCRIPTS/generate_random.py \
-        --candidates_json $AROMA_OUT/roi/$ds/roi_candidates.json \
+        --candidates_json $AROMA_OUT/roi/$DS/roi_candidates.json \
         --normal_dir      $NORMAL_DIR_DS \
         --output_dir      $RANDOM_SYNTH_DS \
         --top_k           200 \
@@ -87,10 +88,10 @@ for ds in DATASETS:
 import pathlib
 
 for ds in DATASETS:
-    for method in ["synthetic_random", "synthetic_aroma"]:
-        p = pathlib.Path(f"{os.environ['AROMA_OUT']}/{method}/{ds}/images")
+    for label, subdir in [("synthetic_random", "synthetic_random"), ("synthetic_aroma", "synthetic")]:
+        p = pathlib.Path(f"{os.environ['AROMA_OUT']}/{subdir}/{ds}/images")
         n = len(list(p.glob("*.jpg")) + list(p.glob("*.png"))) if p.exists() else 0
-        print(f"{method}/{ds}: {n} images")
+        print(f"{label}/{ds}: {n} images")
 ```
 
 ---
