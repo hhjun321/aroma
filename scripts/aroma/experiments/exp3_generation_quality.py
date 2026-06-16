@@ -191,9 +191,9 @@ def _get_image_lists(
         mask_map     = _resolve_visa_masks(test_defect, str(ds / "Masks" / "Anomaly"))
 
     elif dataset_key == "visa_pcb":
-        ds = base / "visa" / "pcb1" / "Data"
+        ds = base / "visa" / "pcb4" / "Data"
         if not ds.exists():
-            logger.warning("visa_pcb (pcb1) not found: %s", ds)
+            logger.warning("visa_pcb (pcb4) not found: %s", ds)
             return None
         all_normal   = _glob_images(str(ds / "Images" / "Normal"))
         train_normal, test_good = _split_normal(all_normal, test_split=test_split, seed=seed)

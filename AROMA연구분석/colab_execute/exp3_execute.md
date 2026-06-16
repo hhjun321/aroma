@@ -42,35 +42,44 @@ print("EXP3_OUT         :", os.environ['EXP3_OUT'])
 AROMA synthetic (`synthetic_aroma/`)은 Step 4에서 이미 완료.  
 Random baseline synthetic만 생성한다.
 
+### dataset_config.json에서 normal_dir 자동 조회
+
 ```python
+import json
+
+_cfg_path = "/content/CASDA/dataset_config.json"
+with open(_cfg_path) as _f:
+    DATASET_CONFIG = json.load(_f)
+
 DATASETS = ["isp_LSM_1", "mvtec_cable", "visa_cashew", "visa_pcb"]
 
+# 조회 결과 확인
 for ds in DATASETS:
-    os.environ['PROFILING_DIR'] = f"{os.environ['AROMA_OUT']}/profiling/{ds}"
-    os.environ['RANDOM_ROI_DIR_DS'] = f"{os.environ['AROMA_OUT']}/roi_random/{ds}"
+    img_dir = DATASET_CONFIG.get(ds, {}).get("image_dir", "(없음)")
+    print(f"{ds:20s} → {img_dir}")
+```
+
+### Random 합성 실행
+
+```python
+for ds in DATASETS:
+    cfg = DATASET_CONFIG.get(ds, {})
+    normal_dir = cfg.get("image_dir", "")
+    if not normal_dir:
+        print(f"[SKIP] {ds}: dataset_config.json에 image_dir 없음")
+        continue
+
+    os.environ['NORMAL_DIR_DS']   = normal_dir
     os.environ['RANDOM_SYNTH_DS'] = f"{os.environ['RANDOM_SYNTH_DIR']}/{ds}"
-    print(f"\n=== {ds} ===")
+    print(f"\n=== {ds} ===  normal_dir={normal_dir}")
     !python $AROMA_SCRIPTS/generate_random.py \
         --candidates_json $AROMA_OUT/roi/$ds/roi_candidates.json \
-        --normal_dir      $AROMA_DATA/isp/unsupervised/LSM_1/train/good \
+        --normal_dir      $NORMAL_DIR_DS \
         --output_dir      $RANDOM_SYNTH_DS \
-        --random_roi_dir  $RANDOM_ROI_DIR_DS \
         --top_k           200 \
         --seed            42 \
         --n_per_roi       3
 ```
-
-> **주의**: `--normal_dir`는 데이터셋별로 경로가 다름.  
-> 루프 내에서 `ds`에 따라 경로를 분기하거나, 데이터셋별로 셀을 분리 실행.
-
-### 데이터셋별 normal_dir 경로
-
-| 데이터셋 | normal_dir |
-|---------|-----------|
-| isp_LSM_1 | `$AROMA_DATA/isp/unsupervised/LSM_1/train/good` |
-| mvtec_cable | `$AROMA_DATA/mvtec/cable/train/good` |
-| visa_cashew | `$AROMA_DATA/visa/cashew/Data/Images/Normal` |
-| visa_pcb | `$AROMA_DATA/visa/pcb1/Data/Images/Normal` |
 
 **이미지 수 확인:**
 
@@ -198,5 +207,5 @@ with open(f"{os.environ['EXP3_OUT']}/exp3_summary.md") as f:
 
 - **AD 모드**: PaDiM 학습 4조건 × 4데이터셋 = 12회 학습. Colab Pro A100 기준 약 30-60분 소요.
 - **FID 소표본 경고**: `fid_unstable: true`이면 real 패치 수가 50개 미만 — 값은 참고용.
-- **visa_pcb**: pcb1 단독 사용 (pcb2-4 미포함).
+- **visa_pcb**: pcb4 단독 사용 (dataset_config.json 및 평가 스크립트 모두 pcb4 기준).
 - **Test set 원칙**: 합성 이미지는 train에만 포함. test/defect는 항상 real 이미지만.
