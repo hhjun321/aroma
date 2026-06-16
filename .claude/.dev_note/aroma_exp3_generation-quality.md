@@ -150,34 +150,40 @@ FID(real_patch, aroma_patch)  → FID_aroma
 
 CLAUDE.md: pytest 금지. Colab 직접 검증.
 
-```python
-# 0단계: 생성 이미지 수 확인
-import os, pathlib
-for method in ["synthetic_random", "synthetic_aroma"]:
-    for ds in ["isp_LSM_1", "mvtec_cable", "visa_cashew", "visa_pcb"]:
-        p = pathlib.Path(f"{os.environ['AROMA_OUT']}/{method}/{ds}/images")
-        n = len(list(p.glob("*.jpg"))) if p.exists() else 0
-        print(f"{method}/{ds}: {n} images")
+### workers 개선 내용 (2026-06-17)
 
-# 1단계: FID
+`--num_workers` 인자 추가 및 ThreadPoolExecutor 도입:
+
+| 함수 | 개선 내용 |
+|------|---------|
+| `_load_real_defect_patches` | 이미지+마스크 I/O 병렬화 |
+| `_load_source_roi_crops` | 이미지 I/O 병렬화 |
+| `_compute_fid_score` | `_resize_to_tensor` 병렬화 (FID metric update는 순차 유지) |
+| `_prepare_ad_dataset_with_masks` | bulk link/copy + defect+mask 쌍 병렬화 |
+| `_run_fid_mode` | `num_workers > 1`이면 데이터셋 수준 병렬 실행 |
+
+```python
+# FID 평가 (num_workers=4)
 !python $AROMA_SCRIPTS/experiments/exp3_generation_quality.py \
     --mode fid \
-    --random_synthetic_dir $AROMA_OUT/synthetic_random \
-    --aroma_synthetic_dir  $AROMA_OUT/synthetic_aroma \
+    --random_synthetic_dir $RANDOM_SYNTH_DIR \
+    --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
     --dataset_keys         isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
-    --output_dir           $AROMA_OUT/exp3
+    --output_dir           $EXP3_OUT \
+    --num_workers          4
 
-# 2단계: AD
+# AD 평가 (GPU 필요)
 !python $AROMA_SCRIPTS/experiments/exp3_generation_quality.py \
     --mode ad \
-    --random_synthetic_dir $AROMA_OUT/synthetic_random \
-    --aroma_synthetic_dir  $AROMA_OUT/synthetic_aroma \
+    --random_synthetic_dir $RANDOM_SYNTH_DIR \
+    --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
     --dataset_keys         isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
-    --output_dir           $AROMA_OUT/exp3
+    --output_dir           $EXP3_OUT \
+    --num_workers          4
 ```
 
 기대:
-- FID: aroma < random
+- FID: aroma < random (Step 4 재실행 후 source_roi 경로 복원 필요)
 - AUROC (image + pixel): aroma > random > baseline

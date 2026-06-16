@@ -3,7 +3,7 @@
 AROMA Exp 3 (논문 Exp 2) — Cross-Domain 생성 품질 평가 (FID + PaDiM)
 
 Random ROI vs AROMA ROI, copy-paste synthesis 동일.
-Datasets: isp_LSM_1, mvtec_cable, visa_cashew, visa_pcb (pcb1)
+Datasets: isp_LSM_1, mvtec_cable, visa_cashew, visa_pcb (pcb4)
 
 Copy-paste limitation:
   Copy-paste synthesis preserves the original defect appearance and therefore
@@ -15,10 +15,11 @@ Usage (Colab):
     !python $AROMA_SCRIPTS/experiments/exp3_generation_quality.py \\
         --mode fid \\
         --random_synthetic_dir $AROMA_OUT/synthetic_random \\
-        --aroma_synthetic_dir  $AROMA_OUT/synthetic_aroma \\
+        --aroma_synthetic_dir  $AROMA_OUT/synthetic \\
         --real_data_dir        $AROMA_DATA \\
         --dataset_keys         isp_LSM_1 mvtec_cable visa_cashew visa_pcb \\
-        --output_dir           $AROMA_OUT/exp3
+        --output_dir           $AROMA_OUT/exp3 \\
+        --num_workers          4
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ import os
 import shutil
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -82,7 +84,7 @@ except Exception:
 #   isp_LSM_1   : {root}/isp/unsupervised/LSM_1/
 #   mvtec_cable : {root}/mvtec/cable/
 #   visa_cashew : {root}/visa/cashew/Data/
-#   visa_pcb    : {root}/visa/pcb1/Data/      (pcb1 only, by design)
+#   visa_pcb    : {root}/visa/pcb4/Data/      (pcb4 only, by design)
 
 def _glob_images(directory: str) -> List[str]:
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
@@ -235,37 +237,59 @@ def _mask_to_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
 def _load_real_defect_patches(
     test_defect_paths: List[str],
     mask_map: Dict[str, str],
+    num_workers: int = 4,
 ) -> List[np.ndarray]:
-    """Crop bbox patch from each defect image using its GT mask."""
+    """Crop bbox patch from each defect image using its GT mask. Parallel I/O."""
     try:
         from PIL import Image
     except ImportError:
         logger.error("PIL not available")
         return []
 
-    patches: List[np.ndarray] = []
-    n_skip = 0
-    for img_p in test_defect_paths:
+    def _load_one(img_p: str) -> Tuple[Optional[np.ndarray], bool]:
         mask_p = mask_map.get(img_p)
         if not mask_p:
-            n_skip += 1
-            continue
+            return None, True
         try:
             img  = np.array(Image.open(img_p).convert("RGB"))
             mask = np.array(Image.open(mask_p).convert("L"))
             bbox = _mask_to_bbox(mask)
             if bbox is None:
-                n_skip += 1
-                continue
+                return None, True
             x1, y1, x2, y2 = bbox
             crop = img[y1:y2, x1:x2]
             if crop.size == 0:
-                n_skip += 1
-                continue
-            patches.append(crop)
+                return None, True
+            return crop, False
         except Exception as exc:
             logger.warning("Patch load failed %s: %s", img_p, exc)
+            return None, True
+
+    slot: List[Optional[Tuple[Optional[np.ndarray], bool]]] = [None] * len(test_defect_paths)
+    future_to_idx: Dict[Any, int] = {}
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        for idx, img_p in enumerate(test_defect_paths):
+            future_to_idx[executor.submit(_load_one, img_p)] = idx
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                slot[idx] = future.result()
+            except Exception as exc:
+                logger.warning("Patch future failed idx=%d: %s", idx, exc)
+                slot[idx] = (None, True)
+
+    patches: List[np.ndarray] = []
+    n_skip = 0
+    for item in slot:
+        if item is None:
             n_skip += 1
+            continue
+        crop, is_skip = item
+        if is_skip or crop is None:
+            n_skip += 1
+        else:
+            patches.append(crop)
 
     if n_skip:
         logger.warning("Skipped %d/%d defect images (no mask or crop fail)",
@@ -275,7 +299,7 @@ def _load_real_defect_patches(
 
 
 # ---------------------------------------------------------------------------
-# FID helpers (verbatim from exp1_casda_comparison.py)
+# FID helpers
 # ---------------------------------------------------------------------------
 
 def _resize_to_tensor(crop: np.ndarray, size: int = 299):
@@ -293,6 +317,7 @@ def _compute_fid_score(
     real_patches: List[np.ndarray],
     synth_patches: List[np.ndarray],
     device: str = "cpu",
+    num_workers: int = 4,
 ) -> Dict[str, Any]:
     try:
         from torchmetrics.image.fid import FrechetInceptionDistance
@@ -306,13 +331,16 @@ def _compute_fid_score(
 
     fid_metric = FrechetInceptionDistance(feature=2048).to(device)
 
-    for crop in real_patches:
-        t = _resize_to_tensor(crop)
+    # resize 병렬 처리; FID metric update는 메인 스레드 순차 (thread-unsafe)
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        real_tensors = list(executor.map(_resize_to_tensor, real_patches))
+    for t in real_tensors:
         if t is not None:
             fid_metric.update(t.to(device), real=True)
 
-    for crop in synth_patches:
-        t = _resize_to_tensor(crop)
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        synth_tensors = list(executor.map(_resize_to_tensor, synth_patches))
+    for t in synth_tensors:
         if t is not None:
             fid_metric.update(t.to(device), real=False)
 
@@ -325,7 +353,10 @@ def _compute_fid_score(
     }
 
 
-def _load_source_roi_crops(annotations_path: str) -> List[np.ndarray]:
+def _load_source_roi_crops(
+    annotations_path: str,
+    num_workers: int = 4,
+) -> List[np.ndarray]:
     try:
         from PIL import Image
     except ImportError:
@@ -334,20 +365,46 @@ def _load_source_roi_crops(annotations_path: str) -> List[np.ndarray]:
         logger.warning("annotations.json not found: %s", annotations_path)
         return []
     annotations: List[Dict[str, Any]] = load_json(annotations_path)
-    crops: List[np.ndarray] = []
-    n_fallback = 0
-    for ann in annotations:
+
+    def _load_one(ann: Dict[str, Any]) -> Tuple[Optional[np.ndarray], bool]:
         src = ann.get("source_roi", "")
+        is_fallback = False
         if not src or not Path(src).exists():
-            # source_roi is a deleted staging path — fall back to synthetic output image
             src = ann.get("image_path", "")
             if not src or not Path(src).exists():
-                continue
-            n_fallback += 1
+                return None, False
+            is_fallback = True
         try:
-            crops.append(np.array(Image.open(src).convert("RGB")))
+            return np.array(Image.open(src).convert("RGB")), is_fallback
         except Exception as exc:
             logger.warning("source_roi load failed %s: %s", src, exc)
+            return None, False
+
+    slot: List[Optional[Tuple[Optional[np.ndarray], bool]]] = [None] * len(annotations)
+    future_to_idx: Dict[Any, int] = {}
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        for idx, ann in enumerate(annotations):
+            future_to_idx[executor.submit(_load_one, ann)] = idx
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                slot[idx] = future.result()
+            except Exception as exc:
+                logger.warning("source_roi future failed idx=%d: %s", idx, exc)
+                slot[idx] = (None, False)
+
+    crops: List[np.ndarray] = []
+    n_fallback = 0
+    for item in slot:
+        if item is None:
+            continue
+        arr, is_fallback = item
+        if arr is not None:
+            crops.append(arr)
+            if is_fallback:
+                n_fallback += 1
+
     if n_fallback:
         logger.warning(
             "source_roi paths missing (%d/%d) — used synthetic image_path as fallback. "
@@ -391,7 +448,7 @@ def _load_synthetic_image_paths(synth_root: str, dataset_key: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# AD helpers (adapted from exp1 — adds mask staging + task auto-downgrade)
+# AD helpers
 # ---------------------------------------------------------------------------
 
 def _prepare_ad_dataset_with_masks(
@@ -401,6 +458,7 @@ def _prepare_ad_dataset_with_masks(
     test_defect_paths: List[str],
     mask_map: Dict[str, str],
     tmpdir: str,
+    num_workers: int = 4,
 ) -> Tuple[str, Optional[str]]:
     """
     Build anomalib Folder-compatible layout in tmpdir.
@@ -415,39 +473,58 @@ def _prepare_ad_dataset_with_masks(
     use_symlink = os.name != "nt"
 
     def _link_or_copy(src: str, dst: str) -> None:
-        Path(dst).parent.mkdir(parents=True, exist_ok=True)
         if use_symlink:
             if not Path(dst).exists():
                 os.symlink(src, dst)
         else:
             shutil.copy2(src, dst)
 
-    train_dir  = Path(tmpdir) / "train" / "good"
-    tgood_dir  = Path(tmpdir) / "test"  / "good"
-    tdef_dir   = Path(tmpdir) / "test"  / "defect"
-    tmask_dir  = Path(tmpdir) / "test"  / "masks"
+    train_dir = Path(tmpdir) / "train" / "good"
+    tgood_dir = Path(tmpdir) / "test"  / "good"
+    tdef_dir  = Path(tmpdir) / "test"  / "defect"
+    tmask_dir = Path(tmpdir) / "test"  / "masks"
 
+    # 디렉터리 생성은 병렬화 전 완료 (race condition 방지)
     for d in (train_dir, tgood_dir, tdef_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    has_masks = any(p in mask_map for p in test_defect_paths)
+    if has_masks:
+        tmask_dir.mkdir(parents=True, exist_ok=True)
+
+    # train_normal + synth + test_good 일괄 병렬 처리
+    bulk_tasks: List[Tuple[str, str]] = []
     for i, p in enumerate(train_normal_paths):
-        _link_or_copy(p, str(train_dir / f"real_{i:05d}{Path(p).suffix}"))
+        bulk_tasks.append((p, str(train_dir / f"real_{i:05d}{Path(p).suffix}")))
     for i, p in enumerate(synth_image_paths):
-        _link_or_copy(p, str(train_dir / f"syn_{i:05d}{Path(p).suffix}"))
-
+        bulk_tasks.append((p, str(train_dir / f"syn_{i:05d}{Path(p).suffix}")))
     for i, p in enumerate(test_good_paths):
-        _link_or_copy(p, str(tgood_dir / f"good_{i:05d}{Path(p).suffix}"))
+        bulk_tasks.append((p, str(tgood_dir / f"good_{i:05d}{Path(p).suffix}")))
 
-    # Stage defect images + paired masks (indexed to avoid MVTec cross-subtype collision)
-    staged_mask_count = 0
-    for i, p in enumerate(test_defect_paths):
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        bulk_futures = [executor.submit(_link_or_copy, src, dst) for src, dst in bulk_tasks]
+        for f in as_completed(bulk_futures):
+            f.result()
+
+    # test_defect: 이미지+마스크 쌍 병렬 처리
+    def _stage_defect(i: int, p: str) -> int:
         dst_name = f"def_{i:05d}{Path(p).suffix}"
         _link_or_copy(p, str(tdef_dir / dst_name))
         if p in mask_map:
-            tmask_dir.mkdir(parents=True, exist_ok=True)
-            mask_dst = tmask_dir / f"def_{i:05d}.png"
-            _link_or_copy(mask_map[p], str(mask_dst))
-            staged_mask_count += 1
+            _link_or_copy(mask_map[p], str(tmask_dir / f"def_{i:05d}.png"))
+            return 1
+        return 0
+
+    mask_results: List[int] = []
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        defect_futures = {
+            executor.submit(_stage_defect, i, p): i
+            for i, p in enumerate(test_defect_paths)
+        }
+        for f in as_completed(defect_futures):
+            mask_results.append(f.result())
+
+    staged_mask_count = sum(mask_results)
 
     mask_dir: Optional[str] = None
     if staged_mask_count > 0:
@@ -471,6 +548,7 @@ def _run_padim_condition(
     checkpoint_dir: str,
     seed: int = 42,
     image_size: int = 256,
+    num_workers: int = 4,
 ) -> Dict[str, Any]:
     """Train PaDiM on normal+synthetic, evaluate on real test set."""
     try:
@@ -500,6 +578,7 @@ def _run_padim_condition(
             test_defect_paths=test_defect_paths,
             mask_map=mask_map,
             tmpdir=tmpdir,
+            num_workers=num_workers,
         )
 
         task = TaskType.SEGMENTATION if mask_dir else TaskType.CLASSIFICATION
@@ -560,40 +639,60 @@ def _run_fid_mode(
     real_data_dir: str,
     device: str = "cpu",
     seed: int = 42,
+    num_workers: int = 4,
 ) -> Dict[str, Any]:
-    results: Dict[str, Any] = {}
 
-    for ds in dataset_keys:
+    def _fid_one_dataset(ds: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         logger.info("=== FID: %s ===", ds)
         lists = _get_image_lists(ds, real_data_dir, seed=seed)
         if lists is None:
             logger.warning("FID skip %s — dataset not found", ds)
-            continue
+            return ds, None
 
-        real_patches = _load_real_defect_patches(lists["test_defect"], lists["mask_map"])
+        real_patches = _load_real_defect_patches(
+            lists["test_defect"], lists["mask_map"], num_workers=num_workers
+        )
         if not real_patches:
             logger.warning("FID skip %s — 0 real patches (check masks)", ds)
-            results[ds] = {"fid": {
+            return ds, {"fid": {
                 "random": {"fid": None, "error": "no_real_patches"},
                 "aroma":  {"fid": None, "error": "no_real_patches"},
             }}
-            continue
 
         fid_ds: Dict[str, Any] = {"n_real_patches": len(real_patches)}
 
         for method in ("random", "aroma"):
             synth_base = random_synthetic_dir if method == "random" else aroma_synthetic_dir
             ann_path = str(Path(synth_base) / ds / "annotations.json")
-            synth_patches = _load_source_roi_crops(ann_path)
+            synth_patches = _load_source_roi_crops(ann_path, num_workers=num_workers)
             if not synth_patches:
                 logger.warning("FID %s %s — 0 synthetic patches", ds, method)
                 fid_ds[method] = {"fid": None, "error": "no_synth_patches"}
                 continue
-            fid_ds[method] = _compute_fid_score(real_patches, synth_patches, device=device)
+            fid_ds[method] = _compute_fid_score(
+                real_patches, synth_patches, device=device, num_workers=num_workers
+            )
             logger.info("  %s FID=%s  unstable=%s",
                         method, fid_ds[method].get("fid"), fid_ds[method].get("fid_unstable"))
 
-        results[ds] = {"fid": fid_ds}
+        logger.info("=== FID done: %s ===", ds)
+        return ds, {"fid": fid_ds}
+
+    results: Dict[str, Any] = {}
+
+    if num_workers > 1:
+        # 데이터셋 수준 병렬: 각 thread가 독립적인 FID metric 인스턴스 생성
+        with ThreadPoolExecutor(max_workers=min(num_workers, len(dataset_keys))) as executor:
+            futures = {executor.submit(_fid_one_dataset, ds): ds for ds in dataset_keys}
+            for future in as_completed(futures):
+                ds, value = future.result()
+                if value is not None:
+                    results[ds] = value
+    else:
+        for ds in dataset_keys:
+            ds_key, value = _fid_one_dataset(ds)
+            if value is not None:
+                results[ds_key] = value
 
     return results
 
@@ -610,6 +709,7 @@ def _run_ad_mode(
     output_dir: str,
     seed: int = 42,
     image_size: int = 256,
+    num_workers: int = 4,
 ) -> Dict[str, Any]:
     _check_gpu()
     results: Dict[str, Any] = {}
@@ -645,6 +745,7 @@ def _run_ad_mode(
                 checkpoint_dir=str(Path(ckpt_base) / cond),
                 seed=seed,
                 image_size=image_size,
+                num_workers=num_workers,
             )
             ad_ds[cond] = res
             logger.info("    image_auroc=%s  pixel_auroc=%s",
@@ -743,6 +844,7 @@ def run(
     seed: int = 42,
     device: str = "cpu",
     image_size: int = 256,
+    num_workers: int = 4,
 ) -> Dict[str, Any]:
     results: Dict[str, Any] = {}
 
@@ -754,6 +856,7 @@ def run(
             real_data_dir=real_data_dir,
             device=device,
             seed=seed,
+            num_workers=num_workers,
         ).items():
             results.setdefault(ds, {}).update(val)
 
@@ -766,6 +869,7 @@ def run(
             output_dir=output_dir,
             seed=seed,
             image_size=image_size,
+            num_workers=num_workers,
         ).items():
             results.setdefault(ds, {}).update(val)
 
@@ -799,11 +903,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="평가할 데이터셋 키 목록")
     p.add_argument("--output_dir",           required=True,
                    help="exp3_results.json + exp3_summary.md 저장 경로")
-    p.add_argument("--seed",       type=int, default=42)
-    p.add_argument("--device",     default="cpu",
+    p.add_argument("--seed",        type=int, default=42)
+    p.add_argument("--device",      default="cpu",
                    help="FID device (cpu or cuda, default cpu)")
-    p.add_argument("--image_size", type=int, default=256,
+    p.add_argument("--image_size",  type=int, default=256,
                    help="PaDiM image resize (default 256)")
+    p.add_argument("--num_workers", type=int, default=4,
+                   help="병렬 처리 스레드 수 (이미지 로딩·파일 스테이징·FID 데이터셋, default=4)")
     return p.parse_args(argv)
 
 
@@ -819,6 +925,7 @@ def main(argv=None) -> None:
         seed=args.seed,
         device=args.device,
         image_size=args.image_size,
+        num_workers=args.num_workers,
     )
     status = result.get("status", "unknown")
     n_ds   = len(result.get("results", {}))
