@@ -613,13 +613,13 @@ def _run_ad_mode(
                     logger.warning("Unknown condition %s — skipping", cond)
                     continue
 
-                # Resume: skip if already completed
-                if cond in existing.get(ds, {}).get(model_name, {}):
-                    cached = existing[ds][model_name][cond]
-                    model_results[cond] = cached
+                # Resume: skip only if already completed with valid image_auroc
+                _cached = existing.get(ds, {}).get(model_name, {}).get(cond)
+                if _cached is not None and _cached.get("image_auroc") is not None:
+                    model_results[cond] = _cached
                     logger.info(
                         "  RESUME skip %s / %s / %s  (cached image_auroc=%s)",
-                        ds, model_name, cond, cached.get("image_auroc"),
+                        ds, model_name, cond, _cached.get("image_auroc"),
                     )
                     continue
 
