@@ -105,7 +105,7 @@ MODEL_REGISTRY: Dict[str, Any] = {}
 
 if _ANOMALIB_AVAILABLE:
     MODEL_REGISTRY = {
-        "patchcore":   lambda: Patchcore(backbone="wide_resnet50_2", layers=["layer2", "layer3"]),
+        "patchcore":   lambda: Patchcore(backbone="resnet18", layers=["layer2", "layer3"]),
         "simplenet":   lambda: Supersimplenet(),
         "efficient_ad": lambda: EfficientAd(model_size="small"),
         "rd_plus_plus": lambda: ReverseDistillation(backbone="resnet18"),
