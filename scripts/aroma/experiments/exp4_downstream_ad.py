@@ -80,12 +80,12 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 try:
-    from anomalib.models import Patchcore, Simplenet, EfficientAd, ReverseDistillation  # type: ignore[import]
+    from anomalib.models import Patchcore, Supersimplenet, EfficientAd, ReverseDistillation  # type: ignore[import]
     _ANOMALIB_AVAILABLE = True
 except ImportError:
     _ANOMALIB_AVAILABLE = False
     Patchcore = None  # type: ignore[assignment,misc]
-    Simplenet = None  # type: ignore[assignment,misc]
+    Supersimplenet = None  # type: ignore[assignment,misc]
     EfficientAd = None  # type: ignore[assignment,misc]
     ReverseDistillation = None  # type: ignore[assignment,misc]
 
@@ -94,7 +94,7 @@ MODEL_REGISTRY: Dict[str, Any] = {}
 if _ANOMALIB_AVAILABLE:
     MODEL_REGISTRY = {
         "patchcore":   lambda: Patchcore(backbone="wide_resnet50_2", layers=["layer2", "layer3"]),
-        "simplenet":   lambda: Simplenet(),
+        "simplenet":   lambda: Supersimplenet(),
         "efficient_ad": lambda: EfficientAd(model_size="small"),
         "rd_plus_plus": lambda: ReverseDistillation(backbone="resnet18"),
     }

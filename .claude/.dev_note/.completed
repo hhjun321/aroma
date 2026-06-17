@@ -23,3 +23,4 @@ aroma_exp1_severstal-casda-comparison.md
 aroma_exp3_generation-quality.md
 aroma_exp3_kid-lpips-addition.md
 aroma_exp4_downstream-ad.md
+aroma_exp3_fid-unit-mismatch-fix.md
