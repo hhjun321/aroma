@@ -12,7 +12,7 @@ import os
 
 # AROMA 기본 환경변수 (기존 셀에서 이미 설정된 경우 생략)
 os.environ['AROMA_OUT']    = f"{os.environ['DRIVE']}/aroma_output"
-os.environ['AROMA_SCRIPTS'] = "/content/CASDA/scripts/aroma"
+os.environ['AROMA_SCRIPTS'] = "/content/AROMA/scripts/aroma"
 
 # Exp 2 전용
 os.environ['RANDOM_ROI_DIR'] = f"{os.environ['AROMA_OUT']}/roi_random"

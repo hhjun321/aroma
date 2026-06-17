@@ -9,8 +9,8 @@
 import os
 
 os.environ['AROMA_REF']      = '/content/AROMA'
-os.environ['DATASET_CONFIG'] = '/content/AROMA/dataset_config.json'
-os.environ['AROMA_OUT']      = '/content/drive/MyDrive/data/Aroma/aroma_output'
+os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
+os.environ['AROMA_OUT']      = f"{os.environ['DRIVE']}/aroma_output"
 
 DATASET_KEY = 'isp_LSM_1'   # ← 변경 시 여기만 수정
 

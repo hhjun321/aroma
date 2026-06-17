@@ -1,5 +1,7 @@
 # AROMA Phase 0 분석 — Data-Driven Anchor 설계 문서화
 
+> WARNING: anchor.json entropy/FreqComplexity/OrientVariance raw_max fields are pending measured values. Needs Phase 0 valley validation first.
+
 ## (사용할 skills: micro-fix)
 
 ## 개요

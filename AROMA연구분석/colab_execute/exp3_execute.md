@@ -13,8 +13,8 @@ import os
 
 # AROMA 기본 환경변수 (기존 셀에서 설정된 경우 생략)
 os.environ['AROMA_OUT']     = f"{os.environ['DRIVE']}/aroma_output"
-os.environ['AROMA_SCRIPTS'] = "/content/Aroma/scripts/aroma"
-os.environ['AROMA_DATA']    = "/content/drive/MyDrive/data/Aroma"
+os.environ['AROMA_SCRIPTS'] = "/content/AROMA/scripts/aroma"
+os.environ['AROMA_DATA']    = f"{os.environ['DRIVE']}/Aroma"
 
 # Exp 3 전용
 os.environ['RANDOM_SYNTH_DIR'] = f"{os.environ['AROMA_OUT']}/synthetic_random"
@@ -32,7 +32,7 @@ print("EXP3_OUT         :", os.environ['EXP3_OUT'])
 ## 패키지 설치 (최초 1회)
 
 ```python
-!pip install torchmetrics[image] anomalib -q
+!pip install torchmetrics[image] anomalib lpips -q
 ```
 
 ---
@@ -47,7 +47,7 @@ Random baseline synthetic만 생성한다.
 ```python
 import json
 
-_cfg_path = "/content/Aroma/dataset_config.json"
+_cfg_path = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 with open(_cfg_path) as _f:
     DATASET_CONFIG = json.load(_f)
 

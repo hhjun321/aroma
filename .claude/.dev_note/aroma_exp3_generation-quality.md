@@ -1,5 +1,12 @@
 # AROMA Exp 3 (논문 Exp 2) — Cross-Domain 생성 품질 평가 (FID + AD)
 
+## Current Implementation Status (2026-06-17)
+- DONE: exp3_generation_quality.py FID + PaDiM AUROC with ThreadPoolExecutor
+- DONE: generate_random.py Random baseline
+- PENDING: FID actual values - Step 4 re-run needed for source_roi path restoration
+- MISSING: KID/LPIPS metrics (paper requirement) - see aroma_exp3_kid-lpips-addition.md
+---
+
 ---
 
 ## (사용할 skills: feature-dev)

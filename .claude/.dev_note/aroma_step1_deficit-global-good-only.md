@@ -1,5 +1,7 @@
 # Step 1 deficit_analysis global_dist — good images만 사용하도록 수정
 
+> WARNING: Verification pending. 4-dataset Phase0->Step3->Exp2 re-run needed to confirm rare_pair_coverage improvement.
+
 ---
 
 ## (사용할 skills: micro-fix)

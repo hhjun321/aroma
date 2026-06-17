@@ -1,5 +1,7 @@
 # CCI sub-sampling + valley_count per-class mean 구현
 
+> WARNING: _perclass_valley_count() implemented here was removed in aroma_step1_mci-redesign-class-diversity.md. Only the CCI sub-sampling part remains valid.
+
 ---
 
 ## (사용할 skills: micro-fix)

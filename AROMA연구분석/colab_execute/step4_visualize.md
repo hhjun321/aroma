@@ -8,7 +8,7 @@
 ```python
 import json, os
 
-os.environ['AROMA_OUT'] = '/content/drive/MyDrive/data/Aroma/aroma_output'
+os.environ['AROMA_OUT'] = f"{os.environ['DRIVE']}/aroma_output"
 ```
 
 ---

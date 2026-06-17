@@ -10,7 +10,7 @@
 import os
 
 os.environ['AROMA_SCRIPTS']  = '/content/AROMA/scripts/aroma'
-os.environ['AROMA_OUT']      = '/content/drive/MyDrive/data/Aroma/aroma_output'
+os.environ['AROMA_OUT']      = f"{os.environ['DRIVE']}/aroma_output"
 
 DATASET_KEY = 'isp_LSM_1'   # ← 변경 시 여기만 수정
 

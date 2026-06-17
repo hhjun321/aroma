@@ -20,8 +20,8 @@
 import os
 
 # AROMA 기본 환경변수 (기존 셀에서 설정된 경우 생략)
-os.environ['AROMA_REF']     = "/content/CASDA"
-os.environ['AROMA_SCRIPTS'] = "/content/CASDA/scripts/aroma"
+os.environ['AROMA_REF']     = "/content/AROMA"
+os.environ['AROMA_SCRIPTS'] = "/content/AROMA/scripts/aroma"
 
 # Severstal 데이터 경로
 os.environ['SEVERSTAL_DATA']    = f"{os.environ['DRIVE']}/severstal"

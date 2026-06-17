@@ -1,5 +1,7 @@
 # Step 3 ROI 선택 전략 재설계 — Pair-aware 2-Stage Allocation
 
+> WARNING: Exp 2 re-run results are pending. rare_pair_cov AROMA > Random is expected but not yet verified with actual measurements.
+
 ---
 
 ## (사용할 skills: feature-dev)

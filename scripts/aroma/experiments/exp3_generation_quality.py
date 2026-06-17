@@ -236,66 +236,38 @@ def _mask_to_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
 
 def _load_real_defect_patches(
     test_defect_paths: List[str],
-    mask_map: Dict[str, str],
     num_workers: int = 4,
 ) -> List[np.ndarray]:
-    """Crop bbox patch from each defect image using its GT mask. Parallel I/O."""
+    """Load full defect images for FID/KID/LPIPS. Parallel I/O.
+
+    Full-image comparison is used because synthetic images (copy-paste) have no
+    mask stored in annotations.json, so patch-level alignment is not possible.
+    Full images capture the ROI placement context that AROMA optimises —
+    this is the correct signal for measuring ROI selection quality.
+    """
     try:
         from PIL import Image
     except ImportError:
         logger.error("PIL not available")
         return []
 
-    def _load_one(img_p: str) -> Tuple[Optional[np.ndarray], bool]:
-        mask_p = mask_map.get(img_p)
-        if not mask_p:
-            return None, True
+    def _load_one(img_p: str) -> Optional[np.ndarray]:
         try:
-            img  = np.array(Image.open(img_p).convert("RGB"))
-            mask = np.array(Image.open(mask_p).convert("L"))
-            bbox = _mask_to_bbox(mask)
-            if bbox is None:
-                return None, True
-            x1, y1, x2, y2 = bbox
-            crop = img[y1:y2, x1:x2]
-            if crop.size == 0:
-                return None, True
-            return crop, False
+            return np.array(Image.open(img_p).convert("RGB"))
         except Exception as exc:
-            logger.warning("Patch load failed %s: %s", img_p, exc)
-            return None, True
-
-    slot: List[Optional[Tuple[Optional[np.ndarray], bool]]] = [None] * len(test_defect_paths)
-    future_to_idx: Dict[Any, int] = {}
+            logger.warning("Image load failed %s: %s", img_p, exc)
+            return None
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        for idx, img_p in enumerate(test_defect_paths):
-            future_to_idx[executor.submit(_load_one, img_p)] = idx
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                slot[idx] = future.result()
-            except Exception as exc:
-                logger.warning("Patch future failed idx=%d: %s", idx, exc)
-                slot[idx] = (None, True)
+        loaded = list(executor.map(_load_one, test_defect_paths))
 
-    patches: List[np.ndarray] = []
-    n_skip = 0
-    for item in slot:
-        if item is None:
-            n_skip += 1
-            continue
-        crop, is_skip = item
-        if is_skip or crop is None:
-            n_skip += 1
-        else:
-            patches.append(crop)
-
+    images = [r for r in loaded if r is not None]
+    n_skip = len(test_defect_paths) - len(images)
     if n_skip:
-        logger.warning("Skipped %d/%d defect images (no mask or crop fail)",
+        logger.warning("Skipped %d/%d defect images (load fail)",
                        n_skip, len(test_defect_paths))
-    logger.info("Loaded %d real defect patches", len(patches))
-    return patches
+    logger.info("Loaded %d real defect images", len(images))
+    return images
 
 
 # ---------------------------------------------------------------------------
@@ -353,10 +325,120 @@ def _compute_fid_score(
     }
 
 
+def _compute_kid_score(
+    real_patches: List[np.ndarray],
+    synth_patches: List[np.ndarray],
+    device: str = "cpu",
+    num_workers: int = 4,
+) -> Dict[str, Any]:
+    try:
+        from torchmetrics.image.kid import KernelInceptionDistance
+    except ImportError:
+        logger.error("torchmetrics required: pip install torchmetrics[image]")
+        return {"error": "torchmetrics_kid_missing"}
+
+    try:
+        ss = min(50, max(1, len(synth_patches)))
+        kid_metric = KernelInceptionDistance(feature=2048, subset_size=ss).to(device)
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            real_tensors = list(executor.map(_resize_to_tensor, real_patches))
+        for t in real_tensors:
+            if t is not None:
+                kid_metric.update(t.to(device), real=True)
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            synth_tensors = list(executor.map(_resize_to_tensor, synth_patches))
+        for t in synth_tensors:
+            if t is not None:
+                kid_metric.update(t.to(device), real=False)
+
+        kid_mean, kid_std = kid_metric.compute()
+        return {
+            "kid": round(float(kid_mean), 6),
+            "kid_std": round(float(kid_std), 6),
+            "n_real_patches": len(real_patches),
+            "n_synth_patches": len(synth_patches),
+            "kid_unstable": len(synth_patches) < 50,
+        }
+    except Exception as e:
+        logger.error("KID computation failed: %s", e)
+        return {"kid": None, "kid_unstable": True, "error": str(e)}
+
+
+def _compute_lpips_score(
+    real_patches: List[np.ndarray],
+    synth_patches: List[np.ndarray],
+    device: str = "cpu",
+    num_workers: int = 4,
+) -> Dict[str, Any]:
+    try:
+        import lpips
+    except ImportError:
+        logger.error("lpips required: pip install lpips")
+        return {"error": "lpips_missing"}
+
+    try:
+        lpips_fn = lpips.LPIPS(net="alex").to(device).eval()
+
+        n_real_sample  = min(20, len(real_patches))
+        n_synth_sample = min(50, len(synth_patches))
+        real_sample  = real_patches[:n_real_sample]
+        synth_sample = synth_patches[:n_synth_sample]
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            real_tensors = list(executor.map(_resize_to_tensor, real_sample))
+        # LPIPS expects [-1, 1]; _resize_to_tensor returns [0, 1] float → convert
+        real_tensors_lpips = [
+            t.float() / 255.0 * 2.0 - 1.0 if t is not None else None
+            for t in real_tensors
+        ]
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            synth_tensors = list(executor.map(_resize_to_tensor, synth_sample))
+        synth_tensors_lpips = [
+            t.float() / 255.0 * 2.0 - 1.0 if t is not None else None
+            for t in synth_tensors
+        ]
+
+        import torch
+        all_scores: List[float] = []
+        with torch.no_grad():
+            for real_t in real_tensors_lpips:
+                if real_t is None:
+                    continue
+                scores = [
+                    float(lpips_fn(real_t.to(device), syn_t.to(device)))
+                    for syn_t in synth_tensors_lpips
+                    if syn_t is not None
+                ]
+                all_scores.extend(scores)
+
+        if not all_scores:
+            return {"lpips": None, "lpips_unstable": True, "error": "no_valid_pairs"}
+
+        mean_lpips = sum(all_scores) / len(all_scores)
+        return {
+            "lpips": round(mean_lpips, 4),
+            "n_real_patches": len(real_patches),
+            "n_synth_patches": len(synth_patches),
+            "lpips_unstable": len(real_patches) < 10,
+        }
+    except Exception as e:
+        logger.error("LPIPS computation failed: %s", e)
+        return {"lpips": None, "lpips_unstable": True, "error": str(e)}
+
+
 def _load_source_roi_crops(
     annotations_path: str,
     num_workers: int = 4,
 ) -> List[np.ndarray]:
+    """Load full synthetic images from annotations.json (image_path field). Parallel I/O.
+
+    Loads the complete synthesized image so that FID/KID/LPIPS captures the
+    ROI placement context (background texture around the defect), which is
+    exactly what AROMA's ROI selection optimises.
+    """
     try:
         from PIL import Image
     except ImportError:
@@ -366,52 +448,25 @@ def _load_source_roi_crops(
         return []
     annotations: List[Dict[str, Any]] = load_json(annotations_path)
 
-    def _load_one(ann: Dict[str, Any]) -> Tuple[Optional[np.ndarray], bool]:
-        src = ann.get("source_roi", "")
-        is_fallback = False
+    def _load_one(ann: Dict[str, Any]) -> Optional[np.ndarray]:
+        src = ann.get("image_path", "")
         if not src or not Path(src).exists():
-            src = ann.get("image_path", "")
-            if not src or not Path(src).exists():
-                return None, False
-            is_fallback = True
+            return None
         try:
-            return np.array(Image.open(src).convert("RGB")), is_fallback
+            return np.array(Image.open(src).convert("RGB"))
         except Exception as exc:
-            logger.warning("source_roi load failed %s: %s", src, exc)
-            return None, False
-
-    slot: List[Optional[Tuple[Optional[np.ndarray], bool]]] = [None] * len(annotations)
-    future_to_idx: Dict[Any, int] = {}
+            logger.warning("Synthetic image load failed %s: %s", src, exc)
+            return None
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        for idx, ann in enumerate(annotations):
-            future_to_idx[executor.submit(_load_one, ann)] = idx
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                slot[idx] = future.result()
-            except Exception as exc:
-                logger.warning("source_roi future failed idx=%d: %s", idx, exc)
-                slot[idx] = (None, False)
+        loaded = list(executor.map(_load_one, annotations))
 
-    crops: List[np.ndarray] = []
-    n_fallback = 0
-    for item in slot:
-        if item is None:
-            continue
-        arr, is_fallback = item
-        if arr is not None:
-            crops.append(arr)
-            if is_fallback:
-                n_fallback += 1
-
-    if n_fallback:
-        logger.warning(
-            "source_roi paths missing (%d/%d) — used synthetic image_path as fallback. "
-            "Re-run generate_defects.py to fix (staging path bug corrected).",
-            n_fallback, len(annotations),
-        )
-    logger.info("Loaded %d source_roi crops from %s", len(crops), annotations_path)
+    crops = [r for r in loaded if r is not None]
+    n_skip = len(annotations) - len(crops)
+    if n_skip:
+        logger.warning("Skipped %d/%d synthetic images (image_path missing or load fail)",
+                       n_skip, len(annotations))
+    logger.info("Loaded %d synthetic images from %s", len(crops), annotations_path)
     return crops
 
 
@@ -650,16 +705,22 @@ def _run_fid_mode(
             return ds, None
 
         real_patches = _load_real_defect_patches(
-            lists["test_defect"], lists["mask_map"], num_workers=num_workers
+            lists["test_defect"], num_workers=num_workers
         )
         if not real_patches:
             logger.warning("FID skip %s — 0 real patches (check masks)", ds)
-            return ds, {"fid": {
-                "random": {"fid": None, "error": "no_real_patches"},
-                "aroma":  {"fid": None, "error": "no_real_patches"},
-            }}
+            no_real = {"fid": None, "error": "no_real_patches"}
+            no_real_kid = {"kid": None, "error": "no_real_patches"}
+            no_real_lpips = {"lpips": None, "error": "no_real_patches"}
+            return ds, {
+                "fid":   {"n_real_patches": 0, "random": no_real,       "aroma": no_real},
+                "kid":   {"random": no_real_kid,   "aroma": no_real_kid},
+                "lpips": {"random": no_real_lpips, "aroma": no_real_lpips},
+            }
 
-        fid_ds: Dict[str, Any] = {"n_real_patches": len(real_patches)}
+        fid_results:   Dict[str, Any] = {"n_real_patches": len(real_patches)}
+        kid_results:   Dict[str, Any] = {}
+        lpips_results: Dict[str, Any] = {}
 
         for method in ("random", "aroma"):
             synth_base = random_synthetic_dir if method == "random" else aroma_synthetic_dir
@@ -667,16 +728,39 @@ def _run_fid_mode(
             synth_patches = _load_source_roi_crops(ann_path, num_workers=num_workers)
             if not synth_patches:
                 logger.warning("FID %s %s — 0 synthetic patches", ds, method)
-                fid_ds[method] = {"fid": None, "error": "no_synth_patches"}
+                fid_results[method]   = {"fid": None, "error": "no_synth_patches"}
+                kid_results[method]   = {"kid": None, "error": "no_synth_patches"}
+                lpips_results[method] = {"lpips": None, "error": "no_synth_patches"}
                 continue
-            fid_ds[method] = _compute_fid_score(
+
+            fid_result = _compute_fid_score(
                 real_patches, synth_patches, device=device, num_workers=num_workers
             )
-            logger.info("  %s FID=%s  unstable=%s",
-                        method, fid_ds[method].get("fid"), fid_ds[method].get("fid_unstable"))
+            kid_result = _compute_kid_score(
+                real_patches, synth_patches, device=device, num_workers=num_workers
+            )
+            lpips_result = _compute_lpips_score(
+                real_patches, synth_patches, device=device, num_workers=num_workers
+            )
+
+            fid_results[method]   = fid_result
+            kid_results[method]   = kid_result
+            lpips_results[method] = lpips_result
+
+            logger.info(
+                "  %s FID=%s unstable=%s | KID=%s(±%s) unstable=%s | LPIPS=%s unstable=%s",
+                method,
+                fid_result.get("fid"), fid_result.get("fid_unstable"),
+                kid_result.get("kid"), kid_result.get("kid_std"), kid_result.get("kid_unstable"),
+                lpips_result.get("lpips"), lpips_result.get("lpips_unstable"),
+            )
 
         logger.info("=== FID done: %s ===", ds)
-        return ds, {"fid": fid_ds}
+        return ds, {
+            "fid":   fid_results,
+            "kid":   kid_results,
+            "lpips": lpips_results,
+        }
 
     results: Dict[str, Any] = {}
 
@@ -795,6 +879,64 @@ def _build_summary(results: Dict[str, Any]) -> str:
             if isinstance(r_fid, float) and isinstance(a_fid, float):
                 delta = round(a_fid - r_fid, 4)
                 lines.append(f"- **{ds}**: FID Δ{delta:+.2f}  (음수 = AROMA 우위)")
+        lines.append("")
+
+    # KID table
+    if any("kid" in v for v in results.values()):
+        lines += [
+            "## KID (낮을수록 좋음)",
+            "",
+            "| 데이터셋 | KID Random | KID AROMA | kid_std_r | kid_std_a | unstable |",
+            "|---------|------------|-----------|-----------|-----------|---------|",
+        ]
+        for ds in sorted(results):
+            kid_data = results[ds].get("kid", {})
+            r_kid = kid_data.get("random", {})
+            a_kid = kid_data.get("aroma",  {})
+            kid_r     = f"{r_kid['kid']:.6f}" if isinstance(r_kid.get("kid"), float) else "N/A"
+            kid_a     = f"{a_kid['kid']:.6f}" if isinstance(a_kid.get("kid"), float) else "N/A"
+            std_r     = f"{r_kid['kid_std']:.6f}" if isinstance(r_kid.get("kid_std"), float) else "N/A"
+            std_a     = f"{a_kid['kid_std']:.6f}" if isinstance(a_kid.get("kid_std"), float) else "N/A"
+            unstable  = r_kid.get("kid_unstable") or a_kid.get("kid_unstable")
+            lines.append(f"| {ds} | {kid_r} | {kid_a} | {std_r} | {std_a} | {'⚠' if unstable else ''} |")
+        lines.append("")
+
+        lines += ["## KID Delta (AROMA - Random)", ""]
+        for ds in sorted(results):
+            kid_data = results[ds].get("kid", {})
+            r_kid_val = kid_data.get("random", {}).get("kid")
+            a_kid_val = kid_data.get("aroma",  {}).get("kid")
+            if isinstance(r_kid_val, float) and isinstance(a_kid_val, float):
+                delta = round(a_kid_val - r_kid_val, 6)
+                lines.append(f"- **{ds}**: KID Δ{delta:+.6f}  (음수 = AROMA 우위)")
+        lines.append("")
+
+    # LPIPS table
+    if any("lpips" in v for v in results.values()):
+        lines += [
+            "## LPIPS (낮을수록 좋음)",
+            "",
+            "| 데이터셋 | LPIPS Random | LPIPS AROMA | unstable |",
+            "|---------|--------------|-------------|---------|",
+        ]
+        for ds in sorted(results):
+            lpips_data = results[ds].get("lpips", {})
+            r_lpips = lpips_data.get("random", {})
+            a_lpips = lpips_data.get("aroma",  {})
+            lpips_r  = f"{r_lpips['lpips']:.4f}" if isinstance(r_lpips.get("lpips"), float) else "N/A"
+            lpips_a  = f"{a_lpips['lpips']:.4f}" if isinstance(a_lpips.get("lpips"), float) else "N/A"
+            unstable = r_lpips.get("lpips_unstable") or a_lpips.get("lpips_unstable")
+            lines.append(f"| {ds} | {lpips_r} | {lpips_a} | {'⚠' if unstable else ''} |")
+        lines.append("")
+
+        lines += ["## LPIPS Delta (AROMA - Random)", ""]
+        for ds in sorted(results):
+            lpips_data = results[ds].get("lpips", {})
+            r_lpips_val = lpips_data.get("random", {}).get("lpips")
+            a_lpips_val = lpips_data.get("aroma",  {}).get("lpips")
+            if isinstance(r_lpips_val, float) and isinstance(a_lpips_val, float):
+                delta = round(a_lpips_val - r_lpips_val, 4)
+                lines.append(f"- **{ds}**: LPIPS Δ{delta:+.4f}  (음수 = AROMA 우위)")
         lines.append("")
 
     # AD table
