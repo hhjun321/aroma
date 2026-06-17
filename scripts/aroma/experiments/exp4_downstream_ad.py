@@ -463,6 +463,84 @@ def _run_model_condition(
 
 
 # ---------------------------------------------------------------------------
+# Local /tmp image cache — pre-copy real images once per dataset
+# ---------------------------------------------------------------------------
+
+def _local_cache_real_images(
+    ds: str,
+    lists: Dict[str, Any],
+    cache_base: str = "/tmp/aroma_exp4_cache",
+    num_workers: int = 4,
+) -> Dict[str, Any]:
+    """Copy real images (train_normal, test_good, test_defect, masks) to local /tmp once.
+
+    Returns updated lists with local paths so DataLoader reads from fast local storage
+    instead of Google Drive symlinks during training.
+    Idempotent: skips files that already exist in cache (resume-safe).
+    """
+    import time
+    cache_ds = Path(cache_base) / ds
+    dirs = {
+        "train_normal": cache_ds / "train_normal",
+        "test_good":    cache_ds / "test_good",
+        "test_defect":  cache_ds / "test_defect",
+        "masks":        cache_ds / "masks",
+    }
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
+
+    def _copy_if_missing(src: str, dst_dir: Path, prefix: str, idx: int) -> str:
+        dst = dst_dir / f"{prefix}_{idx:05d}{Path(src).suffix}"
+        if not dst.exists():
+            shutil.copy2(src, str(dst))
+        return str(dst)
+
+    t0 = time.time()
+    total = len(lists["train_normal"]) + len(lists["test_good"]) + len(lists["test_defect"])
+    logger.info("Local cache: copying %d real images for %s -> %s", total, ds, cache_ds)
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        tn_futures = [
+            executor.submit(_copy_if_missing, p, dirs["train_normal"], "tn", i)
+            for i, p in enumerate(lists["train_normal"])
+        ]
+        tg_futures = [
+            executor.submit(_copy_if_missing, p, dirs["test_good"], "tg", i)
+            for i, p in enumerate(lists["test_good"])
+        ]
+        td_futures = [
+            executor.submit(_copy_if_missing, p, dirs["test_defect"], "td", i)
+            for i, p in enumerate(lists["test_defect"])
+        ]
+        local_tn = [f.result() for f in tn_futures]
+        local_tg = [f.result() for f in tg_futures]
+        local_td = [f.result() for f in td_futures]
+
+    # Rebuild mask_map with local test_defect paths as keys
+    orig_td = lists["test_defect"]
+    local_mask_map: Dict[str, str] = {}
+    for i, (orig_p, local_p) in enumerate(zip(orig_td, local_td)):
+        if orig_p in lists["mask_map"]:
+            mask_src = lists["mask_map"][orig_p]
+            mask_dst = dirs["masks"] / f"mask_{i:05d}.png"
+            if not mask_dst.exists():
+                shutil.copy2(mask_src, str(mask_dst))
+            local_mask_map[local_p] = str(mask_dst)
+
+    elapsed = time.time() - t0
+    logger.info("Local cache ready for %s: %.1fs  (train=%d test_good=%d test_defect=%d)",
+                ds, elapsed, len(local_tn), len(local_tg), len(local_td))
+
+    return {
+        **lists,
+        "train_normal": local_tn,
+        "test_good":    local_tg,
+        "test_defect":  local_td,
+        "mask_map":     local_mask_map,
+    }
+
+
+# ---------------------------------------------------------------------------
 # AD mode — datasets x models x conditions
 # ---------------------------------------------------------------------------
 
@@ -496,6 +574,10 @@ def _run_ad_mode(
         if lists is None:
             logger.warning("AD skip %s — dataset not found", ds)
             continue
+
+        # Pre-stage real images to local /tmp — skipped if already cached (resume-safe)
+        if os.name != "nt":
+            lists = _local_cache_real_images(ds, lists, num_workers=num_workers)
 
         train_normal = lists["train_normal"]
         test_good    = lists["test_good"]
@@ -556,8 +638,8 @@ def _run_ad_mode(
 
                 # Incremental save after each condition
                 if output_path:
+                    ds_results[model_name] = dict(model_results)
                     results[ds] = dict(ds_results)
-                    results[ds][model_name] = dict(model_results)
                     try:
                         save_json(results, output_path)
                     except Exception as _e:
