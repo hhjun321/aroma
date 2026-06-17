@@ -41,6 +41,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("aroma.exp4")
 
+# Suppress anomalib/Lightning/tqdm verbose output
+os.environ.setdefault("TQDM_DISABLE", "1")
+logging.getLogger("lightning.pytorch").setLevel(logging.WARNING)
+logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+logging.getLogger("anomalib").setLevel(logging.WARNING)
+
 # ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
@@ -432,7 +438,12 @@ def _run_model_condition(
             model = MODEL_REGISTRY[model_name]()
 
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-            engine = Engine(default_root_dir=checkpoint_dir, max_epochs=1)
+            engine = Engine(
+                default_root_dir=checkpoint_dir,
+                max_epochs=1,
+                enable_progress_bar=False,
+                enable_model_summary=False,
+            )
 
             engine.fit(model=model, datamodule=datamodule)
             test_results = engine.test(model=model, datamodule=datamodule)
