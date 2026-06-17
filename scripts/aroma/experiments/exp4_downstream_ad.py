@@ -469,7 +469,7 @@ def _run_model_condition(
 def _local_cache_real_images(
     ds: str,
     lists: Dict[str, Any],
-    cache_base: str = "/tmp/aroma_exp4_cache",
+    cache_base: str = "/content/tmp/aroma_exp4_cache",
     num_workers: int = 4,
 ) -> Dict[str, Any]:
     """Copy real images (train_normal, test_good, test_defect, masks) to local /tmp once.

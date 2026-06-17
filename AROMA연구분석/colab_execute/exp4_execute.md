@@ -142,17 +142,17 @@ for ds in sorted(results):
 
 ## 로컬 캐시 (자동)
 
-Colab 실행 시 real 이미지를 `/tmp/aroma_exp4_cache/`에 dataset당 **1회** 자동 복사.  
+Colab 실행 시 real 이미지를 `/content/tmp/aroma_exp4_cache/`에 dataset당 **1회** 자동 복사.  
 이후 모든 모델/조건 학습은 local 경로에서 읽어 Drive I/O 병목 해소.
 
 정상 동작 로그:
 ```
-Local cache: copying 5243 real images for isp_LSM_1 -> /tmp/aroma_exp4_cache/isp_LSM_1
+Local cache: copying 5243 real images for isp_LSM_1 -> /content/tmp/aroma_exp4_cache/isp_LSM_1
 Local cache ready for isp_LSM_1: 42.3s  (train=3678 test_good=1470 test_defect=95)
 ```
 
-> **/tmp 용량 주의**: 4개 데이터셋 전체 캐시 시 ~20GB 사용. Colab Pro /tmp는 ~70GB이므로 통상 문제없음.  
-> 캐시는 Colab 세션 종료 시 자동 소거.
+> **/content/tmp 경로 사용**: Ctrl+C 후 재실행해도 캐시 유지. Runtime 재시작 시만 소거.  
+> 4개 데이터셋 전체 캐시 시 ~20GB 사용. /content/ 디스크는 ~107GB이므로 통상 문제없음.
 
 ---
 
