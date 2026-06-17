@@ -477,6 +477,8 @@ def _run_ad_mode(
     seed: int = 42,
     image_size: int = 256,
     num_workers: int = 4,
+    existing_results: Optional[Dict[str, Any]] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Iterate datasets x models x conditions.
@@ -485,7 +487,8 @@ def _run_ad_mode(
     CRITICAL: Test set NEVER includes synthetic images. Only train set augmented.
     """
     _check_gpu()
-    results: Dict[str, Any] = {}
+    existing = existing_results or {}
+    results: Dict[str, Any] = {k: v for k, v in existing.items()}
 
     for ds in dataset_keys:
         logger.info("=== AD dataset: %s ===", ds)
@@ -517,6 +520,16 @@ def _run_ad_mode(
                     logger.warning("Unknown condition %s — skipping", cond)
                     continue
 
+                # Resume: skip if already completed
+                if cond in existing.get(ds, {}).get(model_name, {}):
+                    cached = existing[ds][model_name][cond]
+                    model_results[cond] = cached
+                    logger.info(
+                        "  RESUME skip %s / %s / %s  (cached image_auroc=%s)",
+                        ds, model_name, cond, cached.get("image_auroc"),
+                    )
+                    continue
+
                 synth_paths = CONDITIONS[cond]
                 logger.info(
                     "  %s / %s / %s  synth=%d",
@@ -540,6 +553,15 @@ def _run_ad_mode(
                     "    image_auroc=%s  pixel_auroc=%s",
                     res.get("image_auroc"), res.get("pixel_auroc"),
                 )
+
+                # Incremental save after each condition
+                if output_path:
+                    results[ds] = dict(ds_results)
+                    results[ds][model_name] = dict(model_results)
+                    try:
+                        save_json(results, output_path)
+                    except Exception as _e:
+                        logger.warning("Incremental save failed: %s", _e)
 
             ds_results[model_name] = model_results
 
@@ -632,7 +654,26 @@ def run(
     seed: int = 42,
     image_size: int = 256,
     num_workers: int = 4,
+    resume: bool = False,
 ) -> Dict[str, Any]:
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    output_path = str(out / "exp4_results.json")
+
+    existing_results: Dict[str, Any] = {}
+    if resume and Path(output_path).exists():
+        try:
+            existing_results = load_json(output_path)
+            n = sum(
+                1
+                for ds in existing_results
+                for m in existing_results[ds]
+                for c in existing_results[ds][m]
+            )
+            logger.info("Resume: loaded %d existing results from %s", n, output_path)
+        except Exception as e:
+            logger.warning("Resume: failed to load existing results: %s — starting fresh", e)
+
     results = _run_ad_mode(
         model_keys=model_keys,
         condition_keys=condition_keys,
@@ -644,11 +685,11 @@ def run(
         seed=seed,
         image_size=image_size,
         num_workers=num_workers,
+        existing_results=existing_results,
+        output_path=output_path,
     )
 
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    save_json(results, str(out / "exp4_results.json"))
+    save_json(results, output_path)
     (out / "exp4_summary.md").write_text(_build_summary(results), encoding="utf-8")
 
     logger.info(
@@ -709,6 +750,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="AD 모델 image resize (default 256)")
     p.add_argument("--num_workers", type=int, default=4,
                    help="병렬 처리 스레드 수 (이미지 로딩·파일 스테이징, default=4)")
+    p.add_argument("--resume", action="store_true",
+                   help="기존 exp4_results.json에서 완료된 run을 skip하고 재개")
     return p.parse_args(argv)
 
 
@@ -729,6 +772,7 @@ def main(argv=None) -> None:
         seed=args.seed,
         image_size=args.image_size,
         num_workers=args.num_workers,
+        resume=args.resume,
     )
     status = result.get("status", "unknown")
     n_ds   = len(result.get("results", {}))
