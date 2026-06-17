@@ -22,6 +22,7 @@ Usage (Colab):
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -43,9 +44,14 @@ logger = logging.getLogger("aroma.exp4")
 
 # Suppress anomalib/Lightning/tqdm verbose output
 os.environ.setdefault("TQDM_DISABLE", "1")
+import warnings
+warnings.filterwarnings("ignore")
 logging.getLogger("lightning.pytorch").setLevel(logging.WARNING)
+logging.getLogger("lightning.pytorch.utilities").setLevel(logging.WARNING)
+logging.getLogger("lightning.pytorch.accelerators").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
 logging.getLogger("anomalib").setLevel(logging.WARNING)
+logging.getLogger("timm").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Bootstrap
@@ -450,6 +456,13 @@ def _run_model_condition(
 
     except Exception as exc:
         logger.error("Model %s failed: %s", model_name, exc)
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        gc.collect()
         return {"error": str(exc)}
 
     if not test_results:
@@ -579,6 +592,22 @@ def _run_ad_mode(
     existing = existing_results or {}
     results: Dict[str, Any] = {k: v for k, v in existing.items()}
 
+    total_planned = len(dataset_keys) * len(model_keys) * len(condition_keys)
+    n_done = sum(
+        1
+        for ds in dataset_keys
+        for m in model_keys
+        for c in condition_keys
+        if existing.get(ds, {}).get(m, {}).get(c, {}).get("image_auroc") is not None
+    )
+    n_remaining = total_planned - n_done
+    logger.info(
+        "Exp4 plan: %d total | %d done | %d remaining  (datasets=%s models=%s conditions=%s)",
+        total_planned, n_done, n_remaining,
+        dataset_keys, model_keys, condition_keys,
+    )
+    run_idx = 0
+
     for ds in dataset_keys:
         logger.info("=== AD dataset: %s ===", ds)
         lists = _get_image_lists(ds, real_data_dir, seed=seed)
@@ -624,10 +653,19 @@ def _run_ad_mode(
                     continue
 
                 synth_paths = CONDITIONS[cond]
+                run_idx += 1
                 logger.info(
-                    "  %s / %s / %s  synth=%d",
-                    ds, model_name, cond, len(synth_paths),
+                    "  [%d/%d] %s / %s / %s  synth=%d",
+                    run_idx, n_remaining, ds, model_name, cond, len(synth_paths),
                 )
+
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                gc.collect()
 
                 res = _run_model_condition(
                     model_name=model_name,

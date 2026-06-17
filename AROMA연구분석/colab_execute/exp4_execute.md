@@ -85,8 +85,8 @@ print("EXP4_OUT         :", os.environ['EXP4_OUT'])
     --resume
 ```
 
-> **resume 단위**: `(dataset, model, condition)` 트리플. 조건 내부 crash는 해당 조건 처음부터 재실행.  
-> 특정 조건 재실행 필요 시: `exp4_results.json`에서 해당 키 삭제 후 `--resume`.
+> **resume 단위**: `(dataset, model, condition)` 트리플. `image_auroc`가 유효한 조건만 skip — `None`으로 저장된 실패 조건은 자동 재실행.  
+> 특정 조건 강제 재실행: `exp4_results.json`에서 해당 키 삭제 후 `--resume`.
 
 ---
 
@@ -137,6 +137,23 @@ for ds in sorted(results):
 | `$EXP4_OUT/exp4_results.json` | 데이터셋 × 모델 × 조건별 image_auroc / pixel_auroc |
 | `$EXP4_OUT/exp4_summary.md` | Markdown 비교 테이블 (조건 × 모델) + delta 섹션 |
 | `$EXP4_OUT/checkpoints/{ds}/{model}/{cond}/` | 각 모델 체크포인트 |
+
+---
+
+## 콘솔 로그
+
+anomalib/Lightning 내부 verbose 출력(progress bar, coreset index 로그 등)은 자동 억제.  
+출력되는 로그는 아래 항목만:
+
+```
+05:06:23 [INFO] === AD dataset: isp_LSM_1 ===
+05:06:23 [INFO] isp_LSM_1: train_normal=3678  test_good=1470  test_defect=95  masks_matched=95
+05:13:43 [INFO] Local cache ready for isp_LSM_1: 439.7s  (train=3678 ...)
+05:13:43 [INFO]   RESUME skip isp_LSM_1 / patchcore / baseline  (cached image_auroc=0.8432)
+05:15:00 [INFO] patchcore / baseline done: image_auroc=0.8432  pixel_auroc=0.7211
+```
+
+이전 실행에서 coreset 로그가 과다 출력된 경우 → git pull 후 재실행.
 
 ---
 
