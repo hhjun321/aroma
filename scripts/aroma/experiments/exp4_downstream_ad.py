@@ -389,7 +389,6 @@ def _run_model_condition(
     try:
         from anomalib.data import Folder
         from anomalib.engine import Engine
-        from anomalib import TaskType
     except ImportError as exc:
         logger.error("anomalib not installed: %s  Run: pip install anomalib", exc)
         return {"error": "anomalib_missing"}
@@ -416,16 +415,12 @@ def _run_model_condition(
                 num_workers=num_workers,
             )
 
-            task = TaskType.SEGMENTATION if mask_dir else TaskType.CLASSIFICATION
-
             folder_kwargs: Dict[str, Any] = dict(
                 name="exp4",
                 root=tmpdir,
                 normal_dir="train/good",
                 abnormal_dir="test/defect",
                 normal_test_dir="test/good",
-                task=task,
-                image_size=(image_size, image_size),
                 train_batch_size=32,
                 eval_batch_size=32,
                 num_workers=4,
