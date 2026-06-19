@@ -1395,170 +1395,185 @@ def _run_detection_mode(
     run_idx = 0
 
     for ds in dataset_keys:
-        logger.info("=== Detection dataset: %s ===", ds)
-        lists = _get_image_lists(ds, real_data_dir, seed=seed)
-        if lists is None:
-            logger.warning("Detection skip %s — dataset not found", ds)
-            continue
+        try:
+            logger.info("=== Detection dataset: %s ===", ds)
+            lists = _get_image_lists(ds, real_data_dir, seed=seed)
+            if lists is None:
+                logger.warning("Detection skip %s — dataset not found", ds)
+                continue
 
-        # synth annotations per condition (loaded once per dataset).
-        # MOVED UP: must exist before the local cache so its paths get rewritten.
-        synth_by_cond: Dict[str, List[Dict[str, Any]]] = {
-            "baseline": [],
-            "random":   _load_synth_annotations(random_synthetic_dir, ds),
-            "aroma":    _load_synth_annotations(aroma_synthetic_dir, ds),
-        }
+            # synth annotations per condition (loaded once per dataset).
+            # MOVED UP: must exist before the local cache so its paths get rewritten.
+            synth_by_cond: Dict[str, List[Dict[str, Any]]] = {
+                "baseline": [],
+                "random":   _load_synth_annotations(random_synthetic_dir, ds),
+                "aroma":    _load_synth_annotations(aroma_synthetic_dir, ds),
+            }
 
-        # Absolute cap (synth_ratio 미지정 시에만 적용).
-        if max_synth_per_ds is not None and synth_ratio is None:
-            for cond in ("random", "aroma"):
-                anns = synth_by_cond.get(cond, [])
-                if len(anns) > max_synth_per_ds:
-                    rng_sub = random.Random(seed)
-                    synth_by_cond[cond] = rng_sub.sample(anns, max_synth_per_ds)
-                    logger.info(
-                        "  [SubSample] %s/%s: %d → %d",
-                        ds, cond, len(anns), max_synth_per_ds,
-                    )
+            # Absolute cap (synth_ratio 미지정 시에만 적용).
+            if max_synth_per_ds is not None and synth_ratio is None:
+                for cond in ("random", "aroma"):
+                    anns = synth_by_cond.get(cond, [])
+                    if len(anns) > max_synth_per_ds:
+                        rng_sub = random.Random(seed)
+                        synth_by_cond[cond] = rng_sub.sample(anns, max_synth_per_ds)
+                        logger.info(
+                            "  [SubSample] %s/%s: %d → %d",
+                            ds, cond, len(anns), max_synth_per_ds,
+                        )
 
-        # Local cache: stage Drive images to /tmp for I/O acceleration.
-        # Linux/Colab only (os.name != "nt"). Rewrites lists + synth paths to /tmp.
-        if local_cache and os.name != "nt":
-            lists, synth_by_cond = _local_cache_for_yolo(
-                ds, lists, synth_by_cond, random_synthetic_dir, aroma_synthetic_dir,
+            # Local cache: stage Drive images to /tmp for I/O acceleration.
+            # Linux/Colab only (os.name != "nt"). Rewrites lists + synth paths to /tmp.
+            if local_cache and os.name != "nt":
+                lists, synth_by_cond = _local_cache_for_yolo(
+                    ds, lists, synth_by_cond, random_synthetic_dir, aroma_synthetic_dir,
+                )
+
+            train_normal = lists["train_normal"]
+            all_defect   = lists["test_defect"]
+            mask_map     = lists["mask_map"]
+
+            # real defect train/val split (seeded, disjoint, mask-bearing only)
+            train_defect, val_defect = _split_defects(all_defect, mask_map, val_frac, seed)
+            logger.info(
+                "%s: real defect split — train=%d  val=%d  (val_frac=%.2f)",
+                ds, len(train_defect), len(val_defect), val_frac,
+            )
+            if not train_defect or not val_defect:
+                logger.warning(
+                    "%s: too few labeled defects to split "
+                    "(train=%d val=%d, need >=1 each) — skipping",
+                    ds, len(train_defect), len(val_defect),
+                )
+                continue
+
+            # Ratio-based synth cap (synth_ratio 지정 시 max_synth_per_ds 보다 우선).
+            if synth_ratio is not None:
+                n_real_train = len(train_defect)
+                for cond in ("random", "aroma"):
+                    anns = synth_by_cond.get(cond, [])
+                    cap = max(1, int(n_real_train * synth_ratio))
+                    if len(anns) > cap:
+                        rng_sub = random.Random(seed)
+                        synth_by_cond[cond] = rng_sub.sample(anns, cap)
+                        logger.info(
+                            "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (%d -> %d synth)",
+                            ds, cond, synth_ratio, n_real_train, cap, len(anns), cap,
+                        )
+                    elif anns:
+                        logger.info(
+                            "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (available=%d, no trim)",
+                            ds, cond, synth_ratio, n_real_train, cap, len(anns),
+                        )
+
+            # Build (or load from Drive cache) the real YOLO (image,label) set ONCE
+            # per dataset, hoisted out of the per-condition loop. baseline/random/aroma
+            # all stage the SAME pre-built pairs into their tmpdirs.
+            real_sets = _build_or_load_real_yolo_dataset(
+                ds_key=ds,
+                mask_map=mask_map,
+                defect_splits={"train": train_defect, "val": val_defect, "test": []},
+                cache_dir=yolo_cache_dir,
+                min_area=50,
+                val_frac=val_frac,
+                split_seed=seed,
             )
 
-        train_normal = lists["train_normal"]
-        all_defect   = lists["test_defect"]
-        mask_map     = lists["mask_map"]
+            # checkpoint base persists under output_dir so best.pt survives the run
+            ckpt_base = str(Path(output_dir) / ds)
 
-        # real defect train/val split (seeded, disjoint, mask-bearing only)
-        train_defect, val_defect = _split_defects(all_defect, mask_map, val_frac, seed)
-        logger.info(
-            "%s: real defect split — train=%d  val=%d  (val_frac=%.2f)",
-            ds, len(train_defect), len(val_defect), val_frac,
-        )
-        if not train_defect or not val_defect:
-            logger.warning(
-                "%s: too few labeled defects to split "
-                "(train=%d val=%d, need >=1 each) — skipping",
-                ds, len(train_defect), len(val_defect),
-            )
-            continue
+            ds_results: Dict[str, Any] = dict(existing.get(ds, {}))
 
-        # Ratio-based synth cap (synth_ratio 지정 시 max_synth_per_ds 보다 우선).
-        if synth_ratio is not None:
-            n_real_train = len(train_defect)
-            for cond in ("random", "aroma"):
-                anns = synth_by_cond.get(cond, [])
-                cap = max(1, int(n_real_train * synth_ratio))
-                if len(anns) > cap:
-                    rng_sub = random.Random(seed)
-                    synth_by_cond[cond] = rng_sub.sample(anns, cap)
+            for model_name in model_keys:
+                model_results: Dict[str, Any] = dict(ds_results.get(model_name, {}))
+
+                # Run baseline first for result ordering; random/aroma are independent
+                ordered = (
+                    [c for c in condition_keys if c == "baseline"]
+                    + [c for c in condition_keys if c != "baseline"]
+                )
+
+                def _save_incremental() -> None:
+                    if not output_path:
+                        return
+                    ds_results[model_name] = dict(model_results)
+                    results[ds] = dict(ds_results)
+                    try:
+                        save_json(results, output_path)
+                    except Exception as _e:
+                        logger.warning("Incremental save failed: %s", _e)
+
+                for cond in ordered:
+                    if cond not in synth_by_cond:
+                        logger.warning("Unknown condition %s — skipping", cond)
+                        continue
+
+                    # Resume: skip only if already completed with valid map50
+                    _cached = existing.get(ds, {}).get(model_name, {}).get(cond)
+                    if _cached is not None and _cached.get("map50") is not None:
+                        model_results[cond] = _cached
+                        logger.info(
+                            "  RESUME skip %s / %s / %s  (cached map50=%s)",
+                            ds, model_name, cond, _cached.get("map50"),
+                        )
+                        continue
+
+                    run_idx += 1
+                    synth_ann = synth_by_cond[cond]
                     logger.info(
-                        "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (%d -> %d synth)",
-                        ds, cond, synth_ratio, n_real_train, cap, len(anns), cap,
+                        "  [%d/%d] %s / %s / %s  synth_ann=%d",
+                        run_idx, n_remaining, ds, model_name, cond, len(synth_ann),
                     )
-                elif anns:
+
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    gc.collect()
+
+                    res = _run_yolo_condition(
+                        model_name=model_name,
+                        condition=cond,
+                        synth_annotations=synth_ann,
+                        train_defect_paths=train_defect,
+                        train_normal_paths=train_normal,
+                        val_defect_paths=val_defect,
+                        mask_map=mask_map,
+                        checkpoint_dir=str(Path(ckpt_base) / model_name),
+                        real_sets=real_sets,
+                        baseline_epochs=baseline_epochs,
+                        imgsz=imgsz,
+                        seed=seed,
+                        device=device,
+                    )
+                    model_results[cond] = res
                     logger.info(
-                        "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (available=%d, no trim)",
-                        ds, cond, synth_ratio, n_real_train, cap, len(anns),
+                        "    map50=%s  map50_95=%s  P=%s  R=%s",
+                        res.get("map50"), res.get("map50_95"),
+                        res.get("precision"), res.get("recall"),
                     )
 
-        # Build (or load from Drive cache) the real YOLO (image,label) set ONCE
-        # per dataset, hoisted out of the per-condition loop. baseline/random/aroma
-        # all stage the SAME pre-built pairs into their tmpdirs.
-        real_sets = _build_or_load_real_yolo_dataset(
-            ds_key=ds,
-            mask_map=mask_map,
-            defect_splits={"train": train_defect, "val": val_defect, "test": []},
-            cache_dir=yolo_cache_dir,
-            min_area=50,
-            val_frac=val_frac,
-            split_seed=seed,
-        )
+                    _save_incremental()
 
-        # checkpoint base persists under output_dir so best.pt survives the run
-        ckpt_base = str(Path(output_dir) / ds)
+                ds_results[model_name] = model_results
 
-        ds_results: Dict[str, Any] = dict(existing.get(ds, {}))
+            results[ds] = ds_results
 
-        for model_name in model_keys:
-            model_results: Dict[str, Any] = dict(ds_results.get(model_name, {}))
-
-            # Run baseline first for result ordering; random/aroma are independent
-            ordered = (
-                [c for c in condition_keys if c == "baseline"]
-                + [c for c in condition_keys if c != "baseline"]
+        except Exception as _ds_exc:
+            logger.error(
+                "Dataset %s failed — skipping and saving progress: %s",
+                ds, _ds_exc,
             )
-
-            def _save_incremental() -> None:
-                if not output_path:
-                    return
-                ds_results[model_name] = dict(model_results)
-                results[ds] = dict(ds_results)
+            if ds not in results:
+                results[ds] = {"error": str(_ds_exc)}
+            if output_path:
                 try:
                     save_json(results, output_path)
-                except Exception as _e:
-                    logger.warning("Incremental save failed: %s", _e)
-
-            for cond in ordered:
-                if cond not in synth_by_cond:
-                    logger.warning("Unknown condition %s — skipping", cond)
-                    continue
-
-                # Resume: skip only if already completed with valid map50
-                _cached = existing.get(ds, {}).get(model_name, {}).get(cond)
-                if _cached is not None and _cached.get("map50") is not None:
-                    model_results[cond] = _cached
-                    logger.info(
-                        "  RESUME skip %s / %s / %s  (cached map50=%s)",
-                        ds, model_name, cond, _cached.get("map50"),
-                    )
-                    continue
-
-                run_idx += 1
-                synth_ann = synth_by_cond[cond]
-                logger.info(
-                    "  [%d/%d] %s / %s / %s  synth_ann=%d",
-                    run_idx, n_remaining, ds, model_name, cond, len(synth_ann),
-                )
-
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                gc.collect()
-
-                res = _run_yolo_condition(
-                    model_name=model_name,
-                    condition=cond,
-                    synth_annotations=synth_ann,
-                    train_defect_paths=train_defect,
-                    train_normal_paths=train_normal,
-                    val_defect_paths=val_defect,
-                    mask_map=mask_map,
-                    checkpoint_dir=str(Path(ckpt_base) / model_name),
-                    real_sets=real_sets,
-                    baseline_epochs=baseline_epochs,
-                    imgsz=imgsz,
-                    seed=seed,
-                    device=device,
-                )
-                model_results[cond] = res
-                logger.info(
-                    "    map50=%s  map50_95=%s  P=%s  R=%s",
-                    res.get("map50"), res.get("map50_95"),
-                    res.get("precision"), res.get("recall"),
-                )
-
-                _save_incremental()
-
-            ds_results[model_name] = model_results
-
-        results[ds] = ds_results
+                except Exception as _save_exc:
+                    logger.warning("Error save failed: %s", _save_exc)
+            continue
 
     return results
 
