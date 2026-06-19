@@ -136,7 +136,7 @@ for ds in sorted(results):
 |------|------|
 | `$EXP4_OUT/exp4_results.json` | 데이터셋 × 모델 × 조건별 image_auroc / pixel_auroc |
 | `$EXP4_OUT/exp4_summary.md` | Markdown 비교 테이블 (조건 × 모델) + delta 섹션 |
-| `$EXP4_OUT/checkpoints/{ds}/{model}/{cond}/` | 각 모델 체크포인트 |
+| `/content/tmp/exp4_checkpoints/{ds}/{model}/{cond}/` | 각 모델 체크포인트 (세션 내 임시, Drive 저장 안 함) |
 
 ---
 

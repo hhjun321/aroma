@@ -635,7 +635,7 @@ def _run_ad_mode(
         test_good    = lists["test_good"]
         test_defect  = lists["test_defect"]
         mask_map     = lists["mask_map"]
-        ckpt_base    = str(Path(output_dir) / "checkpoints" / ds)
+        ckpt_base    = str(Path("/content/tmp/exp4_checkpoints") / ds)
 
         # Define conditions — synth_paths is None means "to be loaded"; [] means empty (baseline)
         CONDITIONS: Dict[str, List[str]] = {
