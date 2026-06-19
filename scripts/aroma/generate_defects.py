@@ -285,7 +285,9 @@ def _stage_inputs(
 ) -> tuple:
     """
     Copy defect and normal images to local staging dir.
-    Returns (staged_selected, staged_normal_images) with updated paths.
+    Returns (staged_selected, staged_normal_images, normal_map) with updated
+    paths. normal_map maps original Drive path -> local staged path (for
+    annotations that must record the original Drive path).
     """
     defect_dir = staging_dir / "defects"
     normal_dir_local = staging_dir / "normals"
@@ -329,7 +331,7 @@ def _stage_inputs(
         "Staged %d defect images + %d normal images → %s",
         len(defect_map), len(normal_map), staging_dir,
     )
-    return staged_selected, staged_normal
+    return staged_selected, staged_normal, normal_map
 
 
 def _push_outputs(local_img_dir: Path, drive_img_dir: Path) -> int:
@@ -419,9 +421,14 @@ def run(
     staging_dir: Optional[Path] = None
     work_output_dir = output_dir
 
+    # Map staged-local normal path -> original Drive path so annotations record
+    # the durable Drive path (not the ephemeral /content/tmp staging path).
+    staged_to_drive: Dict[str, str] = {}
+
     if local_staging and normal_images:
         staging_dir = _default_staging_dir(roi_dir)
-        selected, normal_images = _stage_inputs(selected, normal_images, staging_dir)
+        selected, normal_images, normal_map = _stage_inputs(selected, normal_images, staging_dir)
+        staged_to_drive = {staged: orig for orig, staged in normal_map.items()}
         work_output_dir = str(staging_dir / "synthetic")
         logger.info("Synthesis will run in local staging dir: %s", work_output_dir)
 
@@ -476,7 +483,7 @@ def run(
                     "image_path":    final_out_path,
                     "source_roi":    orig_source_roi[roi_idx],
                     "image_id":      roi_entry.get("image_id", ""),
-                    "normal_image":  normal_path,
+                    "normal_image":  staged_to_drive.get(normal_path, normal_path),
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),

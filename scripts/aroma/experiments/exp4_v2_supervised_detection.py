@@ -581,6 +581,42 @@ def _image_size(path: str) -> Tuple[int, int]:
 # YOLO label writers
 # ---------------------------------------------------------------------------
 
+def _template_match_bbox(
+    synth_path: str,
+    template_path: str,
+    min_area: int = 200,
+) -> List[Tuple[int, int, int, int]]:
+    """source_roi template matching fallback for bbox extraction.
+
+    Used when normal_image is unavailable (stale path from local_staging).
+    """
+    if not _CV2_AVAILABLE:
+        return []
+    composite = cv2.imread(synth_path, cv2.IMREAD_COLOR)
+    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    if composite is None or template is None:
+        return []
+    th, tw = template.shape[:2]
+    ch, cw = composite.shape[:2]
+    if tw > cw or th > ch:
+        return []
+    # resize template proportionally to at most 40% of composite
+    max_ratio = 0.4
+    if tw / cw > max_ratio or th / ch > max_ratio:
+        scale = min(max_ratio * cw / tw, max_ratio * ch / th)
+        template = cv2.resize(template, (int(tw * scale), int(th * scale)))
+        th, tw = template.shape[:2]
+    result = cv2.matchTemplate(composite, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    if max_val < 0.3:  # low confidence — skip
+        return []
+    x, y = max_loc
+    bw, bh = tw, th
+    if bw * bh < min_area:
+        return []
+    return [(int(x), int(y), int(bw), int(bh))]
+
+
 def _write_yolo_labels(
     synth_annotations: List[Dict[str, Any]],
     label_dir: str,
@@ -625,6 +661,12 @@ def _write_yolo_labels(
             bboxes = m_bboxes
         if not bboxes and normal_path and Path(normal_path).exists():
             bboxes = _extract_defect_bboxes(synth_path, normal_path, min_area=min_area)
+
+        # Final fallback: source_roi template matching (handles stale
+        # normal_image paths left over from local_staging runs).
+        source_roi_path = ann.get("source_roi")
+        if not bboxes and source_roi_path and Path(source_roi_path).exists() and _CV2_AVAILABLE:
+            bboxes = _template_match_bbox(synth_path, source_roi_path, min_area=min_area)
 
         stem = f"syn_{i:06d}"
         img_dst = str(Path(image_dir_out) / f"{stem}{Path(synth_path).suffix}")

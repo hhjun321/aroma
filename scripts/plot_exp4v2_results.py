@@ -11,9 +11,8 @@ Conditions and colors (shared with the rest of the paper figures):
     random   = blue   (#1f77b4)
     aroma    = red    (#d62728)
 
-NOTE: the current Exp4v2 run is invalid — every metric is 0.0 across all arms
-(eval/label-pipeline failure + AROMA n_train=0). The figure annotates this so the
-zeros are not mistaken for a measured result.
+NOTE: baseline/random results are valid (pipeline smoke test passed).
+AROMA n_synth=0 due to stale normal_image path; bar is marked "synth=0 (invalid)".
 
 Output: AROMA연구분석/Article/figure/fig_exp4v2_map50.png
 """
@@ -39,7 +38,7 @@ METRIC = "map50"
 
 
 def load():
-    """Return ordered list of (cell_label, {cond: map50}, {cond: n_train})."""
+    """Return ordered list of (cell_label, {cond: map50}, {cond: n_train}, {cond: n_synth})."""
     with open(RESULTS_JSON, "r", encoding="utf-8") as fh:
         data = json.load(fh)
 
@@ -49,7 +48,8 @@ def load():
             label = f"{ds}\n{model}"
             vals = {c: float(arms.get(c, {}).get(METRIC, 0.0)) for c in CONDS}
             ntr = {c: int(arms.get(c, {}).get("n_train", 0)) for c in CONDS}
-            cells.append((label, vals, ntr))
+            nsynth = {c: int(arms.get(c, {}).get("n_synth_train", -1)) for c in CONDS}
+            cells.append((label, vals, ntr, nsynth))
     return cells
 
 
@@ -63,22 +63,27 @@ def grouped_bars(cells):
 
     for j, cond in enumerate(CONDS):
         offs = (j - 1) * width
-        heights = [vals[cond] for (_, vals, _) in cells]
+        heights = [vals[cond] for (_, vals, _ntr, _ns) in cells]
         all_vals.extend(heights)
         bars = ax.bar(
             x + offs, heights, width, label=COND_LABELS[j],
             color=COND_COLORS[j], edgecolor="white", linewidth=0.5,
         )
-        for b, (_, _, ntr) in zip(bars, cells):
+        for b, (_, _vals, ntr, nsynth) in zip(bars, cells):
+            ann_label = f"{b.get_height():.3f}\n(n={ntr[cond]})"
+            if cond == "aroma" and nsynth.get("aroma", -1) == 0:
+                ann_label = f"{b.get_height():.3f}\n(synth=0\ninvalid)"
+                b.set_hatch("///")
+                b.set_alpha(0.6)
             ax.annotate(
-                f"{b.get_height():.3f}\n(n={ntr[cond]})",
+                ann_label,
                 (b.get_x() + b.get_width() / 2, b.get_height()),
                 ha="center", va="bottom", fontsize=7,
                 xytext=(0, 2), textcoords="offset points",
             )
 
     ax.set_xticks(x)
-    ax.set_xticklabels([lbl for (lbl, _, _) in cells], fontsize=9)
+    ax.set_xticklabels([lbl for (lbl, _, _ntr, _ns) in cells], fontsize=9)
     ax.set_ylabel("mAP@0.5", fontsize=10)
 
     vmax = max(all_vals) if all_vals else 0.0
