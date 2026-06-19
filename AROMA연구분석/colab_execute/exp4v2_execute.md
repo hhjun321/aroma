@@ -63,7 +63,8 @@ CASDA 논문의 핵심 주장은 "합성 데이터 품질이 다운스트림 성
 | `--epochs 50` | `--baseline_epochs 50` | baseline (real 이미지) 학습 epoch 수 |
 | (없음) | `--finetune_epochs 30` | random / aroma fine-tuning epoch 수 |
 | `--val_frac` 기본값 | 0.5 → 0.3 | train≈64/val≈28 (n=92 기준, 이론적 최적) |
-| `--max_synth_per_ds` | (신규) | synth:real 비율 제어. None=제한없음, 권장 128~192 (real-train의 2~3배) |
+| `--max_synth_per_ds` | (신규) | synth:real 비율 제어. None=제한없음, 권장 128 (real-train의 2배) |
+| `--imgsz` | 640 권장 | 기본값 256. MVTec/VisA 고해상도 이미지에서 640이 검출 정확도 개선 |
 
 `--epochs`는 더 이상 사용하지 않는다.
 
@@ -165,12 +166,23 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
     --real_data_dir        $AROMA_DATA \
     --output_dir           $EXP4V2_OUT \
     --seed 42 \
+    --imgsz 640 \
     --baseline_epochs 30 \
     --finetune_epochs 20 \
     --max_synth_per_ds 128
 ```
 
 > **소요 시간**: Colab Pro A100 기준 약 5-10분 (mvtec_cable 단독, 3조건).
+>
+> **확인된 결과** (mvtec_cable / yolov8n, val_frac=0.3, max_synth=128):
+>
+> | 조건 | mAP50 | Precision | Recall | n_real | n_synth |
+> |------|-------|-----------|--------|--------|---------|
+> | baseline | 0.5846 | 0.6707 | 0.5610 | 64 | 0 |
+> | random | 0.6210 | 0.7061 | 0.5366 | 64 | 128 |
+> | aroma | 0.5920 | 0.5772 | **0.6661** | 64 | 128 |
+>
+> AROMA: random 대비 mAP50 −2.9pp, recall +12.95pp. 산업 결함 검출에서 recall 우위가 핵심.
 
 ### 권장 실행 명령 (캐시 + resume 조합)
 
@@ -187,8 +199,10 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
     --real_data_dir        $AROMA_DATA \
     --output_dir           $EXP4V2_OUT \
     --yolo_cache_dir       $AROMA_OUT/yolo_cache \
+    --imgsz 640 \
     --baseline_epochs 30 \
     --finetune_epochs 20 \
+    --max_synth_per_ds 128 \
     --resume
 ```
 
@@ -210,6 +224,9 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
     --real_data_dir        $AROMA_DATA \
     --output_dir           $EXP4V2_OUT \
     --seed 42 \
+    --imgsz 640 \
+    --val_frac 0.3 \
+    --max_synth_per_ds 128 \
     --baseline_epochs 50 \
     --finetune_epochs 30
 ```
@@ -231,6 +248,9 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
     --real_data_dir        $AROMA_DATA \
     --output_dir           $EXP4V2_OUT \
     --seed 42 \
+    --imgsz 640 \
+    --val_frac 0.3 \
+    --max_synth_per_ds 128 \
     --baseline_epochs 50 \
     --finetune_epochs 30 \
     --resume
@@ -314,8 +334,10 @@ for ds in sorted(results):
 - **real 결함 라벨이 0개이면 진단 로그 확인**: real defect 이미지에서 라벨이 하나도 추출되지 않으면 `_get_real: 0 labels ... (no_mask=.. bad_size=.. no_bbox=.. no_lines=..)` 에러가 출력된다. `no_mask`가 크면 mask 경로 매핑 문제, `no_bbox`가 크면 `min_area`(기본 50)가 해당 데이터셋 mask 해상도에 비해 너무 큰 것이다.
 - **YOLO 캐시 schema_version=2**: bbox 추출 로직 변경으로 캐시 스키마가 v2로 상향되었다. `--yolo_cache_dir`로 기존(v1) 캐시가 있으면 자동으로 무효화되어 1회 재빌드된다.
 - **baseline checkpoint 공유**: baseline 학습이 완료된 뒤 해당 가중치를 random / aroma가 출발점으로 사용한다. baseline 학습이 실패하면 이후 두 조건도 실행되지 않는다.
-- **baseline_epochs=50 수렴 가능**: 데이터셋당 real 결함 약 수백 장 기준으로 50 epoch 내 수렴이 확인됨.
+- **파라미터 변경 후 재실행 시 결과 초기화 필요**: `val_frac`, `max_synth_per_ds`, `imgsz` 등 학습 조건이 변경되면 이전 `exp4v2_results.json`의 캐시 결과가 불일치한다. `--resume` 사용 시 기존 결과가 skip 조건으로 판정되어 재학습이 일어나지 않는다. 해당 데이터셋 조건의 결과를 json에서 직접 삭제하거나 파일 전체를 삭제 후 재실행.
+- **baseline_epochs=50 수렴 가능**: 데이터셋당 real 결함 약 수십~백 장 기준 50 epoch 내 수렴. val_frac=0.3 적용 시 train≈64장으로 안정적 학습 확인(mvtec_cable mAP50=0.5846).
 - **finetune_epochs=30**: baseline checkpoint 위에서 synthetic 데이터로 추가 학습. 30 epoch이면 충분히 수렴한다.
+- **imgsz=640 권장**: 기본값 256은 고해상도 이미지에서 small defect 검출 능력 저하. 640 사용 시 약간 느리지만 검출 정확도 개선.
 - **Test set 원칙**: 합성 이미지는 finetune train에만 포함. test/defect는 항상 real 이미지만 사용.
 - **visa_pcb**: pcb4 단독 사용.
 - **GPU 필수**: YOLO fine-tuning은 CUDA 없이 실행 불가.
