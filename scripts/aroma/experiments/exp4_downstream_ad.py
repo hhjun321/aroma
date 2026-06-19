@@ -44,14 +44,21 @@ logger = logging.getLogger("aroma.exp4")
 
 # Suppress anomalib/Lightning/tqdm verbose output
 os.environ.setdefault("TQDM_DISABLE", "1")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import warnings
 warnings.filterwarnings("ignore")
-logging.getLogger("lightning.pytorch").setLevel(logging.WARNING)
-logging.getLogger("lightning.pytorch.utilities").setLevel(logging.WARNING)
-logging.getLogger("lightning.pytorch.accelerators").setLevel(logging.WARNING)
-logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
-logging.getLogger("anomalib").setLevel(logging.WARNING)
-logging.getLogger("timm").setLevel(logging.WARNING)
+# Suppress all Lightning sub-loggers via root logger
+logging.getLogger("lightning").setLevel(logging.ERROR)
+logging.getLogger("lightning.pytorch").setLevel(logging.ERROR)
+logging.getLogger("lightning.pytorch.utilities").setLevel(logging.ERROR)
+logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.ERROR)
+logging.getLogger("lightning.pytorch.accelerators").setLevel(logging.ERROR)
+logging.getLogger("lightning.pytorch.trainer").setLevel(logging.ERROR)
+logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
+logging.getLogger("anomalib").setLevel(logging.ERROR)
+logging.getLogger("timm").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
 # Bootstrap
@@ -444,6 +451,11 @@ def _run_model_condition(
             model = MODEL_REGISTRY[model_name]()
 
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+            try:
+                import torch
+                torch.set_float32_matmul_precision("medium")
+            except Exception:
+                pass
             engine = Engine(
                 default_root_dir=checkpoint_dir,
                 max_epochs=1,
