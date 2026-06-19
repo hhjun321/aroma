@@ -1355,6 +1355,7 @@ def _run_detection_mode(
     baseline_epochs: int = 50,
     val_frac: float = 0.5,
     max_synth_per_ds: Optional[int] = None,
+    synth_ratio: Optional[float] = None,
     imgsz: int = 256,
     seed: int = 42,
     existing_results: Optional[Dict[str, Any]] = None,
@@ -1371,6 +1372,7 @@ def _run_detection_mode(
     - real defect 는 seeded split 으로 train/val 분리 (disjoint). Val = real only.
     - baseline 을 항상 먼저 학습. random/aroma 도 COCO 에서 독립적으로 처음부터 학습.
     - checkpoint 는 {output_dir}/{ds}/{model}/baseline/weights/best.pt 에 영속.
+    synth_ratio: real_train 수 대비 synth 비율. 지정 시 max_synth_per_ds 무시.
     """
     device = _check_gpu()
     existing = existing_results or {}
@@ -1407,8 +1409,8 @@ def _run_detection_mode(
             "aroma":    _load_synth_annotations(aroma_synthetic_dir, ds),
         }
 
-        # Subsample synth annotations per condition if max_synth_per_ds is set.
-        if max_synth_per_ds is not None:
+        # Absolute cap (synth_ratio 미지정 시에만 적용).
+        if max_synth_per_ds is not None and synth_ratio is None:
             for cond in ("random", "aroma"):
                 anns = synth_by_cond.get(cond, [])
                 if len(anns) > max_synth_per_ds:
@@ -1443,6 +1445,25 @@ def _run_detection_mode(
                 ds, len(train_defect), len(val_defect),
             )
             continue
+
+        # Ratio-based synth cap (synth_ratio 지정 시 max_synth_per_ds 보다 우선).
+        if synth_ratio is not None:
+            n_real_train = len(train_defect)
+            for cond in ("random", "aroma"):
+                anns = synth_by_cond.get(cond, [])
+                cap = max(1, int(n_real_train * synth_ratio))
+                if len(anns) > cap:
+                    rng_sub = random.Random(seed)
+                    synth_by_cond[cond] = rng_sub.sample(anns, cap)
+                    logger.info(
+                        "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (%d -> %d synth)",
+                        ds, cond, synth_ratio, n_real_train, cap, len(anns), cap,
+                    )
+                elif anns:
+                    logger.info(
+                        "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (available=%d, no trim)",
+                        ds, cond, synth_ratio, n_real_train, cap, len(anns),
+                    )
 
         # Build (or load from Drive cache) the real YOLO (image,label) set ONCE
         # per dataset, hoisted out of the per-condition loop. baseline/random/aroma
@@ -1638,6 +1659,7 @@ def run(
     baseline_epochs: int = 50,
     val_frac: float = 0.5,
     max_synth_per_ds: Optional[int] = None,
+    synth_ratio: Optional[float] = None,
     imgsz: int = 256,
     seed: int = 42,
     resume: bool = False,
@@ -1677,6 +1699,7 @@ def run(
         baseline_epochs=baseline_epochs,
         val_frac=val_frac,
         max_synth_per_ds=max_synth_per_ds,
+        synth_ratio=synth_ratio,
         imgsz=imgsz,
         seed=seed,
         existing_results=existing_results,
@@ -1750,6 +1773,14 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="데이터셋·조건당 synth annotation 최대 사용 수. None=제한 없음(기본). "
              "지정 시 random.sample로 subsampling (seed 적용).",
     )
+    p.add_argument(
+        "--synth_ratio", type=float, default=None,
+        help=(
+            "synth:real_train 비율 지정 (예: 0.3, 0.5, 0.7). "
+            "n_synth_cap = max(1, int(n_real_train * ratio)). "
+            "지정 시 --max_synth_per_ds 무시. None=비활성(기본)."
+        ),
+    )
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
     p.add_argument("--seed",   type=int, default=42)
@@ -1788,6 +1819,7 @@ def main(argv=None) -> None:
         baseline_epochs=args.baseline_epochs,
         val_frac=args.val_frac,
         max_synth_per_ds=args.max_synth_per_ds,
+        synth_ratio=args.synth_ratio,
         imgsz=args.imgsz,
         seed=args.seed,
         resume=args.resume,
