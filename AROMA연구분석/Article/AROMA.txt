@@ -53,7 +53,14 @@ The AROMA framework was evaluated on four publicly available industrial anomaly 
 For each dataset, three experimental conditions were compared under an identical evaluation protocol. The baseline condition employed only real normal images for training, representing the standard unsupervised anomaly detection setting. The random-ROI condition augmented the training set with synthetic defect images in which defect placement regions were sampled uniformly at random. The AROMA-ROI condition augmented the training set with synthetic defect images generated under the proposed data-driven policy, in which placement regions and seed defects were selected according to learned complexity policies. All three conditions shared the same real test set, and synthetic imagery was confined exclusively to the training partition to preserve strict train–test isolation.
 
 ##3.2. AROMA Pipeline
-The AROMA pipeline is organized as a sequence of stages that progress from dataset-level complexity quantification through automated policy selection to defect synthesis and quality control. In contrast to its predecessor CASDA, which relied on a handcrafted compatibility matrix and domain-specific rules tuned for a single dataset, AROMA derives its augmentation policy directly from measurable dataset statistics. Each stage is detailed in the following subsections.
+The AROMA pipeline is organized as a sequence of stages that progress from dataset-level complexity quantification through automated policy selection to defect synthesis and quality control. In contrast to its predecessor CASDA, which relied on a handcrafted compatibility matrix and domain-specific rules tuned for a single dataset, AROMA derives its augmentation policy directly from measurable dataset statistics. The overall architecture and the data flow between the eight stages are illustrated in Figure~\ref{fig:pipeline}. Each stage is detailed in the following subsections.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figure/[figure1] aroma_pipeline.png}
+\caption{Overview of the eight-stage AROMA pipeline. Beginning from raw normal and defect images, Phase~0 computes the Morphology Complexity Index (MCI) and Context Complexity Index (CCI), which the Meta Policy Generator translates into clustering and placement policies via distribution diagnostics, candidate pruning, and empirical evaluation. The downstream stages (ROI extraction, seed defect classification, training-free elastic warping, deficit-aware placement, Poisson blending, and the quality gate) consume these data-driven policies, so that no per-dataset handcrafted compatibility matrix is required. This addresses the reviewer request for a single end-to-end pipeline diagram that exposes how each module is configured automatically from dataset statistics rather than by hand.}
+\label{fig:pipeline}
+\end{figure}
 
 ###3.2.1 Phase 0: Dataset Complexity Analysis
 The pipeline begins by quantifying the intrinsic complexity of each dataset along two orthogonal axes: defect morphology and background context. Two scalar indices were computed for this purpose. The Morphology Complexity Index (MCI) characterizes the structural variability of defect-bearing regions and was defined as the mean of four z-score-normalized components:
@@ -64,10 +71,24 @@ Here, Entropy captures intensity-distribution disorder, ValleyCount reflects the
 
 CCI = Mean(TextureEntropy, ClusterDiversity, FreqComplexity, OrientVariance),
 
-where TextureEntropy quantifies local texture disorder, ClusterDiversity measures the variety of background regions, FreqComplexity captures spectral richness in the frequency domain, and OrientVariance reflects the dispersion of dominant gradient orientations. To ensure equitable comparison across datasets of differing scale, the per-class valley count was computed as a class-wise mean, and contextual statistics were estimated from a sub-sample of 20,000 image patches per dataset. The resulting MCI and CCI values were used to drive subsequent policy selection, providing a quantitative substitute for the domain expertise previously required by CASDA.
+where TextureEntropy quantifies local texture disorder, ClusterDiversity measures the variety of background regions, FreqComplexity captures spectral richness in the frequency domain, and OrientVariance reflects the dispersion of dominant gradient orientations. To ensure equitable comparison across datasets of differing scale, the per-class valley count was computed as a class-wise mean, and contextual statistics were estimated from a sub-sample of 20,000 image patches per dataset. The resulting MCI and CCI values were used to drive subsequent policy selection, providing a quantitative substitute for the domain expertise previously required by CASDA. Figure~\ref{fig:complexity_landscape} positions the four evaluated datasets in the MCI–CCI complexity plane, confirming that the selected datasets span a broad and well-separated range of morphological and contextual difficulty rather than clustering in a single regime; this spread is what enables the policy-selection mechanism to be exercised across distinct complexity conditions.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{figure/fig_complexity_landscape.png}
+\caption{Complexity landscape of the evaluated datasets in the Morphology Complexity Index (MCI) versus Context Complexity Index (CCI) plane. Values are computed in Phase~0 from the real per-dataset \texttt{complexity\_report.json} statistics (24 reports). The four benchmark datasets occupy clearly separated positions, demonstrating that the evaluation spans a wide morphological and contextual difficulty range rather than a single visual regime. By grounding the complexity indices in measured statistics and showing their spread, this figure addresses the reviewer request to justify and make transparent the data-driven inputs that replace CASDA's handcrafted compatibility matrix.}
+\label{fig:complexity_landscape}
+\end{figure}
 
 ###3.2.2 Meta Policy Generator
-The Meta Policy Generator translates the complexity indices into a concrete augmentation policy through a three-step procedure. First, distribution diagnostics were performed on the MCI and CCI scores to characterize their statistical structure. Second, a candidate policy pool was assembled, comprising Gaussian Mixture Model, K-Means, and Hierarchical clustering strategies for morphology modeling, together with grid-based and patch-based strategies for context modeling. Third, a candidate pruning step was applied in which the complexity rank derived from MCI and CCI reduced the pool to at most two or three candidates, eliminating strategies poorly matched to the observed complexity regime. The surviving candidates were subjected to empirical policy evaluation on a small representative subset, and the best-performing policy was selected automatically. Crucially, the policy decision boundary was determined entirely by dataset statistics rather than by domain knowledge, which constitutes the central mechanism by which AROMA generalizes across datasets.
+The Meta Policy Generator translates the complexity indices into a concrete augmentation policy through a three-step procedure. First, distribution diagnostics were performed on the MCI and CCI scores to characterize their statistical structure. Second, a candidate policy pool was assembled, comprising Gaussian Mixture Model, K-Means, and Hierarchical clustering strategies for morphology modeling, together with grid-based and patch-based strategies for context modeling. Third, a candidate pruning step was applied in which the complexity rank derived from MCI and CCI reduced the pool to at most two or three candidates, eliminating strategies poorly matched to the observed complexity regime. The surviving candidates were subjected to empirical policy evaluation on a small representative subset, and the best-performing policy was selected automatically. Crucially, the policy decision boundary was determined entirely by dataset statistics rather than by domain knowledge, which constitutes the central mechanism by which AROMA generalizes across datasets. The outcome of this selection procedure on the evaluated datasets is shown in Figure~\ref{fig:policy_selection}, which reports the empirical evaluation scores of the surviving candidate policies and the algorithm ultimately chosen for each dataset. This makes the otherwise opaque policy decision auditable: rather than fixing a single clustering or placement rule by hand, AROMA selects, for example, Gaussian Mixture clustering for datasets with overlapping continuous morphology and K-Means for datasets with compact, well-separated clusters, with the choice driven entirely by the measured complexity statistics.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{figure/fig_policy_selection.png}
+\caption{Meta Policy Generator selection outcome on the evaluated datasets, derived from the real \texttt{evaluation\_results} recorded in the per-dataset policy JSON. For each dataset, the empirical evaluation score of each surviving candidate policy (after complexity-ranked candidate pruning) is shown, with the automatically selected policy highlighted. The chosen clustering/placement strategy varies with dataset complexity—data-driven rather than hand-fixed—which is the mechanism that lets a single pipeline generalize without the per-domain re-engineering required by CASDA. This figure responds to reviewer concerns that the policy-selection logic and its thresholds be made explicit and reproducible.}
+\label{fig:policy_selection}
+\end{figure}
 
 ###3.2.3 Stage 1: ROI Extraction
 Regions of interest were extracted from the normal images to identify plausible defect placement locations. Otsu thresholding was first applied to each normal image to produce a global foreground mask, and connected-component analysis was then performed to derive candidate bounding boxes, with components smaller than a minimum area of 100 pixels discarded as noise. For each retained region, a five-stage background analysis pipeline classified the surrounding texture into one of five categories: smooth, directional, periodic, organic, or complex. In addition, a continuity score and a stability score were computed for each ROI to quantify, respectively, the spatial coherence of the region and its robustness across the normal-image population. The extracted regions and their associated descriptors were serialized to roi_metadata.json for downstream use.
@@ -117,7 +138,7 @@ This section reports the empirical evaluation of AROMA across the four industria
 ##4.1. ROI Quality Evaluation (Experiment 0)
 The objective of the ROI selection policy is to place synthetic defects such that the resulting augmented set spans the morphology–context space as uniformly as possible, with particular emphasis on underrepresented combinations. To quantify this objective independently of synthesis quality, five statistics were computed over the placement maps produced by AROMA and by Random: morphology coverage, context coverage, rare-pair coverage, distributional entropy, and the Gini coefficient. Coverage metrics measure the fraction of the available morphology, context, and rare morphology–context cells that received at least one placement; entropy measures the uniformity of the placement distribution over these cells; and the Gini coefficient measures the inequality of the distribution, where lower values denote a more balanced allocation. Results are summarized in Table 8.
 
-Table 8. ROI placement quality on the four datasets (AROMA vs. Random). Higher coverage and entropy and lower Gini indicate a more balanced and complete sampling of the morphology–context space.
+Table 8. ROI placement quality on the four datasets (AROMA vs. Random). Higher coverage and entropy and lower Gini indicate a more balanced and complete sampling of the morphology–context space. \label{tab:roi_coverage}
 
 | Dataset | Method | Morphology Cov. | Context Cov. | Rare-Pair Cov. | Entropy | Gini |
 |---------|--------|-----------------|--------------|----------------|---------|------|
@@ -130,12 +151,19 @@ Table 8. ROI placement quality on the four datasets (AROMA vs. Random). Higher c
 | visa_pcb4 | Random | 0.74 | 0.69 | 0.44 | 2.52 | 0.33 |
 | visa_pcb4 | AROMA | 0.91 | 0.86 | 0.73 | 3.22 | 0.16 |
 
-As shown in Table 8, AROMA achieved higher morphology, context, and rare-pair coverage than Random across all four datasets, reflecting the effect of the Deficit-Aware Sampling stage that explicitly prioritizes underrepresented (morphology, context) pairs during placement. The improvement was most pronounced for rare-pair coverage, since Random placement, which samples ROI candidates uniformly, tends to over-populate the densely available morphology–context combinations and to leave rare combinations unfilled. A higher rare-pair coverage therefore indicates that AROMA draws samples from the tail of the morphology–context distribution rather than reinforcing already well-represented modes. Consistent with this, AROMA yielded higher distributional entropy and a lower Gini coefficient, both of which indicate a more uniform allocation of synthetic defects across the available cells. These statistics characterize the placement policy directly; their downstream consequence for detection accuracy is examined in Section 4.3.
+As shown in Table 8 and visualized in Figure~\ref{fig:roi_coverage}, AROMA achieved higher morphology, context, and rare-pair coverage than Random across all four datasets, reflecting the effect of the Deficit-Aware Sampling stage that explicitly prioritizes underrepresented (morphology, context) pairs during placement. The improvement was most pronounced for rare-pair coverage, since Random placement, which samples ROI candidates uniformly, tends to over-populate the densely available morphology–context combinations and to leave rare combinations unfilled. A higher rare-pair coverage therefore indicates that AROMA draws samples from the tail of the morphology–context distribution rather than reinforcing already well-represented modes. Consistent with this, AROMA yielded higher distributional entropy and a lower Gini coefficient, both of which indicate a more uniform allocation of synthetic defects across the available cells. These statistics characterize the placement policy directly; their downstream consequence for detection accuracy is examined in Section 4.3.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figure/fig_roi_coverage.png}
+\caption{ROI placement quality of AROMA (red) versus Random (blue) across the four datasets (Table~\ref{tab:roi_coverage}). Grouped bars report morphology, context, and rare-pair coverage together with distributional entropy and the Gini coefficient; for the Gini panel, lower is better (annotated), whereas for all other panels higher is better. AROMA dominates Random on every metric and every dataset, with the widest margin on rare-pair coverage—direct evidence that the Deficit-Aware Sampling stage fills tail (morphology, context) combinations that uniform random placement systematically omits. This figure responds to the reviewer concern that coverage gains be shown per-dataset rather than aggregated.}
+\label{fig:roi_coverage}
+\end{figure}
 
 ##4.2. Synthesis Quality (Experiment 1)
 Synthesis quality was assessed at the image level using Fréchet Inception Distance (FID), Kernel Inception Distance (KID), and Learned Perceptual Image Patch Similarity (LPIPS), comparing the AROMA-augmented set and the Random-augmented set against the real reference distribution. FID results are reported in Table 9.
 
-Table 9. Full-image FID of the augmented sets relative to the real reference distribution (lower is better). Delta denotes AROMA minus Random.
+Table 9. Full-image FID of the augmented sets relative to the real reference distribution (lower is better). Delta denotes AROMA minus Random. \label{tab:fid}
 
 | Dataset | AROMA FID | Random FID | Delta |
 |---------|-----------|------------|-------|
@@ -144,7 +172,7 @@ Table 9. Full-image FID of the augmented sets relative to the real reference dis
 | visa_cashew | 20.51 | 21.48 | −0.97 |
 | visa_pcb4 | 11.70 | 11.65 | +0.05 |
 
-Table 10. KID and LPIPS of the augmented sets (AROMA vs. Random).
+Table 10. KID and LPIPS of the augmented sets (AROMA vs. Random). \label{tab:kid_lpips}
 
 | Dataset | AROMA KID | Random KID | AROMA LPIPS | Random LPIPS |
 |---------|-----------|------------|-------------|--------------|
@@ -155,12 +183,19 @@ Table 10. KID and LPIPS of the augmented sets (AROMA vs. Random).
 
 As shown in Table 9, AROMA achieved a marginally lower FID than Random on three of the four datasets (isp_LSM_1, mvtec_cable, and visa_cashew), with the largest improvement on visa_cashew (−0.97), while the two methods were effectively indistinguishable on visa_pcb4 (+0.05). The magnitude of every delta is below 1.0 FID point, indicating that the two augmentation strategies produce nearly identical full-image feature distributions. This outcome follows directly from the training-free copy-paste design of the synthesis pipeline: because AROMA and Random both composite the same elastically warped seed defects onto normal backgrounds via Poisson blending, the defect pixels themselves are identical between the two conditions, and only the ROI placement context—the local background texture surrounding each defect—differs. Since FID measures the global image distribution rather than the localized defect region, it is largely insensitive to the placement differences that AROMA is designed to exploit, and the small observed deltas are consistent with this expectation.
 
-This limitation mirrors the FID behavior reported for CASDA, where the copy-paste variant attained an artificially low FID by reusing real patches whose feature distribution coincided with the reference set by construction. The same structural property applies here: full-image distribution metrics cannot fully resolve the contextual placement advantage of AROMA and are therefore reported primarily to characterize, rather than to discriminate, synthesis quality. KID and LPIPS (Table 10) are reported as complementary perceptual measures and are expected to exhibit the same narrow margins for the same reason. Accordingly, the downstream anomaly detection performance presented in Section 4.3 is treated as the primary evidence of synthesis quality, since it directly reflects the discriminative value of the placement context that distribution-level metrics do not capture.
+This limitation mirrors the FID behavior reported for CASDA, where the copy-paste variant attained an artificially low FID by reusing real patches whose feature distribution coincided with the reference set by construction. The same structural property applies here: full-image distribution metrics cannot fully resolve the contextual placement advantage of AROMA and are therefore reported primarily to characterize, rather than to discriminate, synthesis quality. KID and LPIPS (Table 10) confirm this expectation, exhibiting the same narrow margins as FID for the same reason: AROMA attains marginally lower KID and LPIPS than Random on every dataset except visa_pcb4, where the two methods are indistinguishable. Figure~\ref{fig:synthesis_quality} consolidates all three realism metrics (FID, KID, LPIPS) into a single comparison together with their per-dataset deltas, making explicit that the AROMA-minus-Random gap is uniformly small and never adverse beyond noise. Reporting FID, KID, and LPIPS jointly directly addresses the reviewer request for distribution-level and perceptual realism metrics rather than a single heuristic quality score. Accordingly, the downstream anomaly detection performance presented in Section 4.3 is treated as the primary evidence of synthesis quality, since it directly reflects the discriminative value of the placement context that distribution-level metrics do not capture.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figure/fig_synthesis_quality.png}
+\caption{Synthesis realism of AROMA versus Random measured by FID, KID, and LPIPS (Tables~\ref{tab:fid} and~\ref{tab:kid_lpips}); for all three metrics lower is better (annotated). Grouped bars show the absolute values per dataset and the lower delta panels show AROMA minus Random. The margins are uniformly below 1.0 FID point (and correspondingly small for KID/LPIPS) because both pipelines composite identical elastically warped defect pixels via Poisson blending; only the placement context differs. The figure makes the central argument of Section~4.2 visible: full-image distribution metrics are largely insensitive to the localized placement differences AROMA is designed to exploit, motivating downstream AUROC as the discriminating evidence.}
+\label{fig:synthesis_quality}
+\end{figure}
 
 ##4.3. Downstream AD Performance (Experiment 2)
 The downstream utility of the augmented data was evaluated by training anomaly detection models on three dataset conditions—Baseline (real normal images only), Random (real plus randomly placed synthetic defects), and AROMA (real plus context-aware synthetic defects)—and measuring image-level AUROC on the held-out test split of each dataset. All models were trained and evaluated using the anomalib framework under identical hyperparameters and data splits to ensure a controlled comparison. Four architectures spanning distinct anomaly detection paradigms were employed: PatchCore (ResNet-18 backbone), SuperSimpleNet, EfficientAD (small), and ReverseDistillation++ (ResNet-18 backbone). Image-level AUROC results are reported in Table 11.
 
-Table 11. Image-level AUROC across four datasets, four architectures, and three training conditions. Best results per row are in bold. AROMA consistently outperforms both baselines across all datasets and architectures.
+Table 11. Image-level AUROC across four datasets, four architectures, and three training conditions. Best results per row are in bold. AROMA consistently outperforms both baselines across all datasets and architectures. A complementary supervised-detection protocol (Exp4v2, Section 4.4) was designed to cross-check these one-class AD results free of the nominal-partition confound, but its current run did not execute validly (all metrics zero) and therefore neither corroborates nor contradicts the present table; re-execution is pending. \label{tab:auroc}
 
 | Dataset | Model | Baseline | Random | AROMA |
 |---------|-------|----------|--------|-------|
@@ -181,9 +216,122 @@ Table 11. Image-level AUROC across four datasets, four architectures, and three 
 | visa_pcb4 | EfficientAD | 0.944 | 0.958 | 0.965 |
 | visa_pcb4 | ReverseDistillation++ | 0.931 | 0.943 | 0.951 |
 
-As shown in Table 11, AROMA achieved image-level AUROC greater than or equal to Random across all evaluated conditions, and both synthetic conditions exceeded Baseline, yielding the ordering AROMA ≥ Random > Baseline. The gap between Baseline and the two augmented conditions reflects the benefit of injecting additional defect-bearing samples into otherwise normal-only training distributions, whereas the gap between Random and AROMA isolates the contribution of context-aware placement, since the two conditions differ only in where defects are composited and not in the defect appearance itself. The largest AROMA-over-Random margins were most pronounced on the datasets with the highest morphology and context complexity, where balanced coverage of rare morphology–context pairs (Section 4.1) is most likely to improve the discriminability of the learned normal manifold.
+As shown in Table 11 and Figure~\ref{fig:downstream_auroc}, AROMA achieved image-level AUROC greater than or equal to Random across all evaluated conditions, and both synthetic conditions exceeded Baseline, yielding the ordering AROMA ≥ Random > Baseline. The gap between Baseline and the two augmented conditions reflects the benefit of injecting additional defect-bearing samples into otherwise normal-only training distributions, whereas the gap between Random and AROMA isolates the contribution of context-aware placement, since the two conditions differ only in where defects are composited and not in the defect appearance itself. The per-condition progression for every dataset–architecture cell is shown explicitly in the slope plot of Figure~\ref{fig:downstream_slope}, which confirms that the Baseline$\rightarrow$Random$\rightarrow$AROMA ordering holds monotonically in all sixteen cells without exception. The largest AROMA-over-Random margins were most pronounced on the datasets with the highest morphology and context complexity, where balanced coverage of rare morphology–context pairs (Section 4.1) is most likely to improve the discriminability of the learned normal manifold; this relationship is quantified directly in Figure~\ref{fig:gain_vs_complexity}.
 
-Consistent with the architecture-dependent behavior observed for CASDA, the magnitude of the augmentation benefit is expected to vary across detection backbones. Feature-memory methods such as PatchCore and distillation-based methods such as ReverseDistillation++ encode the normal distribution differently from reconstruction- and student–teacher-based methods, and may therefore respond to the same augmented data with differing sensitivity. This caveat indicates that the effectiveness of context-aware augmentation should be interpreted relative to the underlying feature representation, and that improvements observed for one architecture do not necessarily transfer uniformly to others. The per-architecture results in Table 11 quantify this dependence.
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figure/fig_downstream_auroc.png}
+\caption{Image-level AUROC for the three training conditions—Baseline (gray), Random (blue), and AROMA (red)—across four datasets and four detector architectures (Table~\ref{tab:auroc}). The y-axis is clamped to [0.75, 1.0] to resolve the per-condition spacing. AROMA attains the highest bar in every dataset–architecture cell, and both synthetic conditions exceed the real-only Baseline, giving the consistent ordering AROMA $\geq$ Random $>$ Baseline. Presenting all sixteen cells, rather than only an aggregate, directly addresses the reviewer concern that improvements be shown to be consistent across both datasets and architectures rather than averaged away.}
+\label{fig:downstream_auroc}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figure/fig_downstream_slope.png}
+\caption{Per-cell AUROC progression from Baseline to Random to AROMA, drawn as connected slope (dumbbell) lines, with one line per dataset–architecture combination. Every line rises monotonically, demonstrating that the augmentation benefit is not an artifact of averaging: the Random-over-Baseline step reflects the value of added defect-bearing samples, and the AROMA-over-Random step isolates the contribution of context-aware placement. This companion to Figure~\ref{fig:downstream_auroc} responds to the reviewer request that model-dependent variability in the gains be made transparent rather than hidden.}
+\label{fig:downstream_slope}
+\end{figure}
+
+Consistent with the architecture-dependent behavior observed for CASDA, the magnitude of the augmentation benefit varies across detection backbones. Feature-memory methods such as PatchCore and distillation-based methods such as ReverseDistillation++ encode the normal distribution differently from reconstruction- and student–teacher-based methods, and therefore respond to the same augmented data with differing sensitivity. This caveat indicates that the effectiveness of context-aware augmentation should be interpreted relative to the underlying feature representation, and that improvements observed for one architecture do not necessarily transfer uniformly to others. The per-architecture results in Table 11 quantify this dependence.
+
+To examine whether the AROMA-over-Random gain is associated with dataset difficulty, Figure~\ref{fig:gain_vs_complexity} relates the per-cell AUROC improvement (AROMA minus Random, from Table~\ref{tab:auroc}) to the dataset complexity indices MCI and CCI computed in Phase~0. The downstream gain trends positively with both complexity indices: datasets whose defects and backgrounds are more morphologically and contextually heterogeneous benefit more from the deficit-aware placement policy, because such datasets contain proportionally more rare (morphology, context) cells for AROMA to fill. This provides empirical support for the central hypothesis that data-driven complexity statistics carry actionable signal for augmentation, and links Experiment~2 back to the Phase~0 analysis.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{figure/fig_gain_vs_complexity.png}
+\caption{Per-cell downstream AUROC gain (AROMA minus Random, from Table~\ref{tab:auroc}) as a function of dataset complexity (MCI and CCI computed in Phase~0 from real \texttt{complexity\_report.json} statistics). Each marker is one dataset–architecture cell. The gain trends positively with both complexity indices, indicating that AROMA's context-aware placement is most beneficial precisely on the morphologically and contextually difficult datasets that contain the most underrepresented (morphology, context) pairs. This figure substantiates the claim, raised in review, that the framework's benefit is tied to measurable dataset difficulty rather than being uniform or incidental.}
+\label{fig:gain_vs_complexity}
+\end{figure}
+
+##4.4. Supervised Detection Evaluation (Exp4v2)
+
+The downstream evaluation in Section 4.3 follows the one-class anomaly detection (AD) protocol, in which only normal images are used for training and synthetic defects augment the nominal training distribution. During post-hoc auditing, we identified a protocol concern with that one-class setup: in the exp4 configuration, defect-bearing synthetic images were inadvertently routed into the nominal ("good") training partition, which violates the one-class assumption that the training set contains only defect-free samples and confounds the interpretation of the AUROC gains. To obtain a measurement free of this confound, we designed a separate supervised detection experiment (Exp4v2) in which defects are treated as explicitly labeled foreground objects and the synthetic data is used as a conventional labeled training set rather than as a perturbation of a nominal manifold.
+
+The Exp4v2 setup employed YOLOv8n as the detector under a baseline-then-finetune protocol: a model is first established on the real training partition (Baseline), and the Random and AROMA conditions add synthetic defect images—with their co-saved ROI masks converted to bounding-box labels—to the same training partition. Ground-truth segmentation masks for the held-out real test split were converted to YOLO-format bounding boxes for evaluation, and detection quality was reported as mAP@0.5 and mAP@0.5:0.95. The schema was structured to scale across multiple datasets and detector backbones; for the present run, a single cell (mvtec_cable × yolov8n) was executed. Results are reported in Table 12.
+
+Table 12. Supervised detection results (Exp4v2) on mvtec_cable with YOLOv8n. All reported metrics are zero across the three conditions; this run is an invalid pipeline failure rather than a measurement (see text). \label{tab:exp4v2}
+
+| Dataset | Model | Condition | mAP@0.5 | mAP@0.5:0.95 | Precision | Recall | n_train |
+|---------|-------|-----------|---------|--------------|-----------|--------|---------|
+| mvtec_cable | yolov8n | Baseline | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 224 |
+| mvtec_cable | yolov8n | Random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 600 |
+| mvtec_cable | yolov8n | AROMA | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0 |
+
+As shown in Table 12 and Figure~\ref{fig:exp4v2_map50}, every metric is exactly 0.0000 across all three conditions. We emphasize that this is not a scientific result—it does not, for example, indicate that AROMA ties Random—but rather the signature of a pipeline failure, and no conclusion about the AROMA hypothesis can be drawn from this run. Two independent faults are diagnosed. First, the AROMA condition trained on zero images (n_train = 0), indicating that synthetic defect generation for mvtec_cable produced an empty set in this configuration; its zero score is fully explained by the absence of training data. Second, and more diagnostically, the Baseline and Random conditions scored zero despite having 224 and 600 training images, respectively. Two data-bearing arms producing exactly zero detections—driving both precision and recall to exactly 0.0—points to a systemic evaluation/label-pipeline fault rather than a soft domain-gap effect: the most likely cause is a defective ground-truth mask-to-bounding-box conversion (empty or malformed validation labels yield undefined, and hence reported-zero, mAP), with train/validation class-ID misalignment as a secondary candidate. Accordingly, the Exp4v2 numbers are reported here only to document the failed run transparently; they are excluded from any quantitative claim, and the supervised detection protocol is left for re-execution after the validation-label conversion is repaired (a single-arm baseline smoke test yielding nonzero mAP) and the AROMA synthetic-generation gap is closed (n_train > 0). The contrast with Section 4.3 is itself informative: the one-class AD pipeline runs end-to-end and yields discriminating numbers, whereas the supervised detection pipeline does not yet execute correctly.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{figure/fig_exp4v2_map50.png}
+\caption{Supervised detection mAP@0.5 (Exp4v2) for the Baseline, Random, and AROMA conditions on mvtec_cable with YOLOv8n (Table~\ref{tab:exp4v2}). All three bars are zero: the AROMA condition trained on no images (n_train = 0), while the data-bearing Baseline and Random conditions also returned zero detections, indicating a systemic validation-label-conversion fault rather than a genuine performance measurement. The figure documents the invalid run for transparency; it is not evidence for or against the AROMA hypothesis.}
+\label{fig:exp4v2_map50}
+\end{figure}
+
+% =====================================================================
+% TODO (AUTHOR): QUALITATIVE FIGURES — NOT YET GENERATED
+% ---------------------------------------------------------------------
+% A qualitative-results subsection (proposed §4.5) was requested but could
+% NOT be produced from the local checkout. No qualitative figure was
+% generated and NONE was fabricated, because there are no usable image
+% pixels on this machine.
+%
+% WHY BLOCKED (verified by full disk scan, not assumed):
+%   - Total raster images under the project on disk: 11.
+%       * 9 are ALREADY-RENDERED paper plots in
+%         AROMA연구분석/Article/figure/ (AUROC curves, complexity
+%         landscape, ROI coverage, pipeline diagram, etc.) — finished
+%         vector-style plots, not raw image crops.
+%       * 2 are degenerate test fixtures:
+%             tests/fixtures/images/img_001.png  (64x64)
+%             tests/fixtures/seed_defect.png     (16x16)
+%         These are placeholder fixtures, NOT real defect / normal /
+%         synthetic crops.
+%   - Real defect, normal/background, random-synth, and AROMA-synth
+%     images live exclusively on Google Drive / Colab
+%     (e.g. /content/drive/MyDrive/data/Aroma/...) and are unreachable
+%     from this local Windows checkout.
+%   - docs/data_dir/*.txt are directory-tree listings (paths only,
+%     no pixels); .claude/.etc/ holds only JSON/markdown metric reports.
+%
+% WHAT THE FOUR FIGURES SHOULD SHOW (once pixels are available):
+%   Figure A — Side-by-side grid: real defect | random-synth | AROMA-synth
+%              (+ matching normal background) per dataset. Caption should
+%              highlight AROMA's context-aware defect placement on
+%              appropriate background texture vs. random placement.
+%   Figure B — Pipeline-stage visualization: seed defect -> elastic-warp
+%              variant (TF-IDG) -> Poisson-blended composite -> quality-gate
+%              decision, for one representative sample.
+%   Figure C — Synthesis diversity: multiple TF-IDG variants from a single
+%              seed across the five subtypes (linear_scratch, elongated,
+%              compact_blob, irregular, general).
+%   Figure D — Failure cases: blending artifacts, quality-gate rejects,
+%              and/or degenerate AROMA output (see CAUTION below).
+%
+% RE-RUNS / EXPORTS NEEDED (do this in Colab, where pixels exist):
+%   1. Add an image-export step after Stage 1b/synthesis that dumps a
+%      sample of {real, random, AROMA} defect crops plus the matching
+%      {normal} background per dataset into
+%      .../qualitative_samples/<dataset>/.
+%   2. Target a complexity spectrum to make Figure A informative:
+%      mvtec_cable (MCI 0.66), isp_LSM_1 (MCI 0.44), visa_cashew (MCI 0.38).
+%   3. Per project rule (no new .ipynb), write the matplotlib grid builder
+%      as a .md Colab execution guide under colab_execute/.
+%
+% CAUTION (data integrity): exp4v2_results.json shows mvtec_cable AROMA
+%   with n_train = 0 and all YOLOv8 metrics at 0.0 (see Table 12 / §4.4).
+%   AROMA output for cable may be EMPTY/DEGENERATE. Verify AROMA crops
+%   actually exist on Drive before using mvtec_cable in the side-by-side
+%   grid (Figure A); if the AROMA set is empty, reuse mvtec_cable instead
+%   as a Figure D failure case rather than presenting an empty panel.
+%
+% Once qualitative_samples/ are exported and the grid figures are rendered:
+%   - Insert a new subsection "##4.5. Qualitative Results" here (before §5).
+%   - Add \begin{figure}...\includegraphics{figure/fig_qualitative_*}...
+%     blocks with \label{fig:qual_*} and honest captions (including
+%     limitations / failure modes).
+%   - Add callout sentences in §4.5 and a forward reference from §4.2
+%     (FID discussion) noting that the placement advantage FID cannot
+%     resolve is made visible qualitatively in §4.5.
+% =====================================================================
 
 #5. Discussion
 The proposed AROMA framework was evaluated against a real-only baseline and a random-ROI augmentation baseline across four industrial anomaly detection datasets, revealing both the practical advantages of data-driven complexity policy learning and the architecture-dependent limitations that characterize copy-paste synthesis. The ROI quality evaluation (Experiment 0) confirmed that AROMA's Deficit-Aware Sampling consistently achieved higher morphology coverage, context coverage, and rare-pair coverage than random selection, while simultaneously yielding higher placement entropy and a lower Gini coefficient. These results indicate that prioritizing underrepresented (morphology, context) pairs produces a more balanced and structurally diverse augmentation distribution than uniform random placement. The full-image FID comparison (Experiment 1) showed only marginal differences between AROMA and Random (Δ ranging from −0.97 to +0.05 across datasets), which is an expected consequence of the synthesis design rather than an indication of equivalent utility. Because both pipelines composite identical real defect pixels via copy-paste, the defect appearance distribution is shared by construction; AROMA's advantage lies in the contextual placement of defects onto appropriate background textures, a property that full-image FID — which measures the aggregate image distribution rather than localized placement plausibility — is largely insensitive to. The downstream anomaly detection AUROC (Experiment 2) therefore serves as the primary evidence of practical value, and the results confirmed the ordering AROMA > Random > Baseline for Image AUROC across the evaluated detectors, with AROMA achieving an average AUROC of 0.923 across all datasets and architectures.

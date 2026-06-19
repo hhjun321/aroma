@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
 """
-AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가
+AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (baseline-then-finetune)
 
-Exp4(one-class AD)를 supervised detection으로 대체한 버전.
-Synthetic defect 이미지를 LABELED TRAINING DATA로 사용하고,
-real defect test 이미지(+GT mask)를 평가셋으로 사용한다.
+CASDA-style 재설계: 세 조건 모두 "real labeled defect"를 공통 토대로 학습한다.
 
-핵심 아이디어:
-- Synthetic 이미지는 copy-paste composite (normal 배경 위에 defect를 붙임)
-- 각 synthetic dir의 annotations.json에 "image_path", "normal_image" 필드 존재
-- defect bbox = composite 와 background 의 image difference → threshold → contour bbox
-- synthesis 재실행 불필요 — label을 post-hoc 로 유도
+| 조건     | 시작 weights         | 학습 데이터                                   |
+|----------|----------------------|-----------------------------------------------|
+| baseline | COCO (yolov8n.pt)    | real labeled defect (train split) → best.pt 저장 |
+| random   | baseline best.pt     | real labeled defect + random synth (finetune) |
+| aroma    | baseline best.pt     | real labeled defect + aroma synth  (finetune) |
 
-조건:
-- baseline: synthetic defect 학습 없음 (배경 이미지만, defect label 없음)
-- random:   random synthetic 으로 학습
-- aroma:    aroma synthetic 으로 학습
+핵심 변경:
+- real defect 이미지를 train/val 로 seeded split (이전엔 전부 val) → baseline 이
+  real positive 를 학습하고, val 은 disjoint real-only 로 유지.
+- synthetic 은 random/aroma 에서만 real 위에 "추가"되는 데이터.
+- baseline 은 COCO 에서 시작 + save=True 로 best.pt 영속화.
+  random/aroma 는 그 best.pt 를 YOLO(best.pt) 로 로드해 finetune.
+
+Synthetic label 유도:
+- composite(synth) 와 background(normal) 의 image diff → threshold → contour bbox.
+- synthesis 재실행 불필요 — label 을 post-hoc 로 유도.
 
 Datasets: isp_LSM_1, mvtec_cable, visa_cashew, visa_pcb (pcb4)
+
+I/O 가속 (두 단계 캐시):
+- Local cache (`--no_local_cache` 로 끔): Linux/Colab 에서 Drive 이미지를 /tmp 로
+  복사해 두고 그 경로로 학습 (Drive 직접 read 의 느린 random-access 회피).
+  Windows 에서는 항상 비활성.
+- YOLO real-dataset cache (`--yolo_cache_dir`): real (image,label) 셋을 데이터셋당
+  한 번만 빌드하고 지정 경로(예: Drive)에 영속화. 동일 (min_area/val_frac/seed)
+  조합이면 재빌드 없이 로드. 미지정 시 매 데이터셋마다 새로 빌드 (캐시 없음 —
+  기존 동작과 동일).
 
 Usage (Colab):
     !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \\
@@ -28,8 +41,11 @@ Usage (Colab):
         --aroma_synthetic_dir  $AROMA_SYNTH_DIR \\
         --real_data_dir        $AROMA_DATA \\
         --output_dir           $EXP4_OUT \\
+        --yolo_cache_dir       $EXP4_OUT/yolo_cache \\
         --seed 42 \\
-        --epochs 50 \\
+        --baseline_epochs 50 \\
+        --finetune_epochs 30 \\
+        --val_frac 0.5 \\
         --resume
 """
 from __future__ import annotations
@@ -39,11 +55,14 @@ import gc
 import json
 import logging
 import os
+import random
 import shutil
 import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -140,6 +159,33 @@ def _split_normal(
     shuffled = [normal_paths[i] for i in rng.permutation(len(normal_paths))]
     n_test = max(1, int(len(normal_paths) * test_split))
     return shuffled[n_test:], shuffled[:n_test]
+
+
+def _split_defects(
+    test_defect_paths: List[str],
+    mask_map: Dict[str, str],
+    val_frac: float = 0.5,
+    seed: int = 42,
+) -> Tuple[List[str], List[str]]:
+    """Split real defect images (that HAVE masks) into disjoint train/val pools.
+
+    Returns (train_defect_paths, val_defect_paths). Only mask-bearing images are
+    eligible (need GT bbox for both train labels and val metrics).
+    """
+    eligible = sorted(p for p in test_defect_paths if mask_map.get(p))
+    if not eligible:
+        # No mask-bearing defect images: cannot form train or val labels.
+        return [], []
+    rng = random.Random(seed)
+    rng.shuffle(eligible)
+    # Reserve at least one image for val, but never consume the whole pool so
+    # train is also non-empty when >=2 images exist.
+    n_val = max(1, int(round(len(eligible) * val_frac)))
+    if len(eligible) >= 2:
+        n_val = min(n_val, len(eligible) - 1)
+    val = eligible[:n_val]
+    train = eligible[n_val:]
+    return train, val
 
 
 def _resolve_isp_masks(defect_paths: List[str], gt_dir: str) -> Dict[str, str]:
@@ -303,12 +349,21 @@ def _extract_defect_bboxes(
     diff = cv2.absdiff(composite, background)
     gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blur, 20, 255, cv2.THRESH_BINARY)
 
+    # Blended (Poisson/alpha) defects produce a low-contrast diff; a fixed
+    # threshold of 20 misses them entirely. Use a low fixed floor (8), and if
+    # that yields nothing, fall back to Otsu on the diff (adapts to globally
+    # faint blends). min_area still filters JPEG-compression speckle.
     kernel = np.ones((3, 3), np.uint8)
-    dilated = cv2.dilate(thresh, kernel, iterations=3)
 
+    _, thresh = cv2.threshold(blur, 8, 255, cv2.THRESH_BINARY)
+    dilated = cv2.dilate(thresh, kernel, iterations=3)
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        dilated = cv2.dilate(thresh, kernel, iterations=3)
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     bboxes: List[Tuple[int, int, int, int]] = []
     for c in contours:
@@ -385,7 +440,13 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
     """
     ann_path = Path(synth_root) / dataset_key / "annotations.json"
     if not ann_path.exists():
-        logger.warning("annotations.json not found: %s", ann_path)
+        # Surface the fully-resolved path so a wrong --*_synthetic_dir arg or a
+        # missing per-dataset annotations.json is immediately diagnosable.
+        logger.error(
+            "annotations.json NOT FOUND for '%s' -> synth_annotations will be EMPTY "
+            "(n_synth=0). Looked at: %s  (synth_root=%s)",
+            dataset_key, ann_path.resolve(), synth_root,
+        )
         return []
 
     try:
@@ -435,16 +496,48 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
             skipped_missing += 1
             continue
         norm_p = _resolve_path(e.get("normal_image"))
+        # Prefer an explicit GT mask when the synthesis pipeline persists one.
+        # AROMA's generate_defects.py currently writes no mask, but other
+        # pipelines (e.g. stage4 fmt='cls') write '{stem}_mask.png'. Accept
+        # any of these keys, plus a sibling masks/ file as a last resort.
+        mask_raw = (
+            e.get("mask")
+            or e.get("roi_mask")
+            or e.get("mask_path")
+        )
+        mask_p = _resolve_path(mask_raw)
+        if mask_p is None and img_p:
+            stem = Path(img_p).stem
+            for cand in (
+                synth_base / "masks" / f"{stem}.png",
+                synth_base / "masks" / f"{stem}_mask.png",
+                Path(img_p).with_name(f"{stem}_mask.png"),
+            ):
+                if cand.exists():
+                    mask_p = str(cand)
+                    break
         valid.append({
             "image_path": img_p,
             "normal_image": norm_p,
             "source_roi": e.get("source_roi"),
+            "mask_path": mask_p,
         })
 
-    logger.info(
-        "Synth annotations %s: %d valid  (dry_run skipped=%d, missing skipped=%d) from %s",
-        dataset_key, len(valid), skipped_dry, skipped_missing, ann_path,
+    log_fn = logger.info if valid else logger.error
+    log_fn(
+        "Synth annotations %s: %d valid  (dry_run skipped=%d, missing skipped=%d, "
+        "total entries=%d) from %s",
+        dataset_key, len(valid), skipped_dry, skipped_missing, len(entries), ann_path,
     )
+    if not valid and entries:
+        # File present and non-empty but every entry was filtered out — almost
+        # always image_path fields pointing at paths that don't resolve under
+        # synth_root. Flag explicitly so it isn't silently treated as n_synth=0.
+        logger.error(
+            "  -> %s annotations.json had %d entries but 0 resolved; check that "
+            "image_path values exist under %s (or are valid absolute paths)",
+            dataset_key, len(entries), Path(synth_root) / dataset_key,
+        )
     return valid
 
 
@@ -452,8 +545,11 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
 # Image staging helper (symlink on posix, copy on windows)
 # ---------------------------------------------------------------------------
 
-def _link_or_copy(src: str, dst: str) -> None:
-    use_symlink = os.name != "nt"
+def _link_or_copy(src: str, dst: str, force_copy: bool = False) -> None:
+    # force_copy=True: always copy bytes (e.g. building a persistent YOLO cache
+    # that must survive the tmpdir / live on a different filesystem). Symlinks
+    # into a tmpdir would dangle once the tmpdir is cleaned up.
+    use_symlink = os.name != "nt" and not force_copy
     if use_symlink:
         if not Path(dst).exists():
             try:
@@ -506,6 +602,7 @@ def _write_yolo_labels(
     for i, ann in enumerate(synth_annotations):
         synth_path = ann.get("image_path")
         normal_path = ann.get("normal_image")
+        mask_path = ann.get("mask_path")
         if not synth_path:
             continue
 
@@ -514,7 +611,19 @@ def _write_yolo_labels(
         if img_w <= 0 or img_h <= 0:
             continue
 
-        if normal_path and Path(normal_path).exists():
+        # Prefer an explicit GT mask when available (exact bbox); only fall back
+        # to composite-vs-normal image differencing when no mask is persisted.
+        if mask_path and Path(mask_path).exists():
+            m_bboxes, mw, mh = _mask_to_bboxes(mask_path, min_area=min_area)
+            if m_bboxes and (mw, mh) != (img_w, img_h) and mw > 0 and mh > 0:
+                sx = img_w / mw
+                sy = img_h / mh
+                m_bboxes = [
+                    (int(x * sx), int(y * sy), int(bw * sx), int(bh * sy))
+                    for (x, y, bw, bh) in m_bboxes
+                ]
+            bboxes = m_bboxes
+        if not bboxes and normal_path and Path(normal_path).exists():
             bboxes = _extract_defect_bboxes(synth_path, normal_path, min_area=min_area)
 
         stem = f"syn_{i:06d}"
@@ -553,39 +662,157 @@ def _stage_background_images(
     return n
 
 
+# ---------------------------------------------------------------------------
+# Local cache (Drive -> /tmp staging for I/O acceleration; Linux/Colab only)
+# ---------------------------------------------------------------------------
+
+def _local_cache_for_yolo(
+    ds: str,
+    lists: Dict[str, Any],
+    synth_by_cond: Dict[str, List[Dict[str, Any]]],
+    random_synth_dir: str,
+    aroma_synth_dir: str,
+    cache_base: str = "/tmp/aroma_exp4v2_cache",
+    num_workers: Optional[int] = None,
+) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]]]]:
+    """Stage Drive images to local /tmp for I/O acceleration. Linux/Colab only.
+
+    Returns (new_lists, new_synth_by_cond) with paths rewritten to /tmp.
+    Idempotent per-file. mask_map keys rewritten in lockstep with test_defect.
+    """
+    if num_workers is None:
+        num_workers = min(32, (os.cpu_count() or 4) * 2)
+
+    cache_ds = Path(cache_base) / ds
+    real_dir = cache_ds / "real"
+    real_imgs = real_dir / "images"
+    real_masks = real_dir / "masks"
+    for d in (real_imgs, real_masks):
+        d.mkdir(parents=True, exist_ok=True)
+
+    def _copy_if_missing(src: str, dst: Path) -> str:
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, str(dst))
+        return str(dst)
+
+    n_real = len(lists["train_normal"]) + len(lists["test_defect"])
+    n_synth = sum(len(synth_by_cond.get(c, [])) for c in ("random", "aroma"))
+    logger.info("[LocalCache] %s: copying %d images -> %s", ds, n_real + n_synth, cache_base)
+    t0 = time.time()
+
+    with ThreadPoolExecutor(max_workers=num_workers) as ex:
+        # real train_normal
+        tn_futs = [
+            ex.submit(_copy_if_missing, p, real_imgs / f"tn_{i:05d}{Path(p).suffix}")
+            for i, p in enumerate(lists["train_normal"])
+        ]
+        # real test_defect
+        td_futs = [
+            ex.submit(_copy_if_missing, p, real_imgs / f"td_{i:05d}{Path(p).suffix}")
+            for i, p in enumerate(lists["test_defect"])
+        ]
+        local_tn = [f.result() for f in tn_futs]
+        local_td = [f.result() for f in td_futs]
+
+        # mask_map: rewrite keys lockstep with test_defect
+        local_mask_map: Dict[str, str] = {}
+        mask_futs = {}
+        for i, (orig_p, local_p) in enumerate(zip(lists["test_defect"], local_td)):
+            if orig_p in lists["mask_map"]:
+                mdst = real_masks / f"mask_{i:05d}.png"
+                mask_futs[local_p] = ex.submit(
+                    _copy_if_missing, lists["mask_map"][orig_p], mdst
+                )
+        for local_p, fut in mask_futs.items():
+            local_mask_map[local_p] = fut.result()
+
+        # synth per condition
+        synth_roots = {"random": random_synth_dir, "aroma": aroma_synth_dir}
+        new_synth_by_cond: Dict[str, List[Dict[str, Any]]] = {
+            "baseline": list(synth_by_cond.get("baseline", []))
+        }
+        for cond in ("random", "aroma"):
+            cond_imgs = cache_ds / cond / "images"
+            anns = synth_by_cond.get(cond, [])
+            futs_list = []
+            for j, ann in enumerate(anns):
+                img_dst = cond_imgs / f"syn_{j:05d}{Path(ann['image_path']).suffix}"
+                f_img = ex.submit(_copy_if_missing, ann["image_path"], img_dst)
+                f_norm = None
+                if ann.get("normal_image"):
+                    norm_dst = cond_imgs / f"nrm_{j:05d}{Path(ann['normal_image']).suffix}"
+                    f_norm = ex.submit(_copy_if_missing, ann["normal_image"], norm_dst)
+                futs_list.append((ann, f_img, f_norm))
+            new_anns = []
+            for ann, f_img, f_norm in futs_list:
+                new_ann = dict(ann)
+                new_ann["image_path"] = f_img.result()
+                if f_norm is not None:
+                    new_ann["normal_image"] = f_norm.result()
+                new_anns.append(new_ann)
+            new_synth_by_cond[cond] = new_anns
+            # copy annotations.json for fidelity
+            src_json = Path(synth_roots[cond]) / ds / "annotations.json"
+            if src_json.exists():
+                _copy_if_missing(str(src_json), cache_ds / cond / "annotations.json")
+
+    elapsed = time.time() - t0
+    logger.info(
+        "[LocalCache] %s ready: %.1fs (train_normal=%d defect=%d masks=%d random=%d aroma=%d)",
+        ds, elapsed, len(local_tn), len(local_td), len(local_mask_map),
+        len(new_synth_by_cond.get("random", [])), len(new_synth_by_cond.get("aroma", [])),
+    )
+
+    new_lists = {
+        **lists,
+        "train_normal": local_tn,
+        "test_defect": local_td,
+        "mask_map": local_mask_map,
+    }
+    return new_lists, new_synth_by_cond
+
+
 def _get_real_test_images_and_labels(
     test_defect_paths: List[str],
     mask_map: Dict[str, str],
     label_dir: str,
     image_dir_out: str,
     min_area: int = 50,
+    force_copy: bool = False,
 ) -> int:
     """
-    real defect test 이미지 + GT mask → YOLO val set 구성.
+    real defect 이미지 + GT mask → YOLO label set 구성 (condition-agnostic).
+
+    train pool 을 넘기면 train label, val pool 을 넘기면 val label 이 된다.
 
     각 defect 이미지(mask 보유) 마다:
       - binary mask PNG → bounding boxes
       - YOLO label 작성
       - 이미지 stage
-    mask 가 없는 defect 이미지는 평가에서 제외 (label 없으면 mAP 계산 불가).
+    mask 가 없는 defect 이미지는 제외 (label 없으면 학습/평가 모두 불가).
 
-    Returns count of val images with labels.
+    Returns count of images with labels.
     """
     Path(label_dir).mkdir(parents=True, exist_ok=True)
     Path(image_dir_out).mkdir(parents=True, exist_ok=True)
 
     n = 0
+    n_no_mask = n_bad_size = n_no_bbox = n_no_lines = 0
     for i, img_p in enumerate(test_defect_paths):
         mask_p = mask_map.get(img_p)
         if not mask_p:
+            n_no_mask += 1
             continue
 
         img_w, img_h = _image_size(img_p)
         if img_w <= 0 or img_h <= 0:
+            n_bad_size += 1
             continue
 
         m_bboxes, mw, mh = _mask_to_bboxes(mask_p, min_area=min_area)
         if not m_bboxes:
+            n_no_bbox += 1
             continue
 
         # mask 해상도가 이미지와 다르면 bbox 를 이미지 좌표로 스케일
@@ -599,13 +826,24 @@ def _get_real_test_images_and_labels(
 
         lines = _bboxes_to_yolo_lines(m_bboxes, img_w, img_h, class_id=0)
         if not lines:
+            n_no_lines += 1
             continue
 
         stem = f"real_{i:06d}"
         img_dst = str(Path(image_dir_out) / f"{stem}{Path(img_p).suffix}")
-        _link_or_copy(img_p, img_dst)
+        _link_or_copy(img_p, img_dst, force_copy=force_copy)
         (Path(label_dir) / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         n += 1
+
+    if n == 0 and test_defect_paths:
+        # Convert the silent "real=0 -> train on backgrounds" symptom into an
+        # actionable line that pinpoints WHERE extraction dropped every image.
+        logger.error(
+            "    _get_real: 0 labels from %d defect imgs "
+            "(no_mask=%d bad_size=%d no_bbox=%d no_lines=%d, min_area=%d)",
+            len(test_defect_paths), n_no_mask, n_bad_size, n_no_bbox,
+            n_no_lines, min_area,
+        )
 
     return n
 
@@ -650,18 +888,213 @@ def _train_with_heartbeat(train_fn, label: str, interval_s: int = 60):
 
 
 # ---------------------------------------------------------------------------
-# Per-condition YOLO runner
+# Real YOLO dataset cache (build-once-per-dataset, optional Drive persistence)
+# ---------------------------------------------------------------------------
+
+def _validate_real_cache(
+    cache_root: Path,
+    min_area: int,
+    val_frac: float,
+    split_seed: int,
+) -> Optional[Dict[str, Any]]:
+    """Return parsed meta dict if cache valid + params match, else None."""
+    meta_path = cache_root / "meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if meta.get("schema_version") != 2:
+        return None
+    if meta.get("min_area") != min_area:
+        return None
+    if meta.get("val_frac") != val_frac:
+        return None
+    if meta.get("split_seed") != split_seed:
+        return None
+    if int(meta.get("n_labeled", 0)) <= 0:
+        return None
+
+    # structural check: train/val non-empty, every image has sibling label
+    for split in ("train", "val"):
+        img_dir = cache_root / "images" / split
+        lbl_dir = cache_root / "labels" / split
+        if not img_dir.is_dir() or not lbl_dir.is_dir():
+            return None
+        imgs = [p for p in img_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+        if not imgs:
+            return None
+        for img in imgs:
+            if not (lbl_dir / (img.stem + ".txt")).is_file():
+                return None
+    return meta
+
+
+def _stage_pairs_into(
+    triple: Tuple[List[str], List[str], int],
+    img_dst_dir: str,
+    lbl_dst_dir: str,
+) -> None:
+    """Copy cached (image, label) pairs into a condition tmpdir.
+
+    Always copies bytes (not symlinks): cache may live on a different
+    filesystem (Drive) than the tmpdir.
+    """
+    img_paths, lbl_paths, _ = triple
+    for ip in img_paths:
+        shutil.copy2(ip, Path(img_dst_dir) / Path(ip).name)
+    for lp in lbl_paths:
+        dst = Path(lbl_dst_dir) / Path(lp).name
+        if Path(lp).is_file():
+            shutil.copy2(lp, dst)
+
+
+def _build_or_load_real_yolo_dataset(
+    ds_key: str,
+    mask_map: Dict[str, str],
+    defect_splits: Dict[str, List[str]],
+    cache_dir: Optional[str],
+    min_area: int = 50,
+    val_frac: float = 0.5,
+    split_seed: int = 42,
+) -> Dict[str, Tuple[List[str], List[str], int]]:
+    """
+    Build or load cached per-split real YOLO dataset.
+
+    Returns {split: (img_paths, lbl_paths, n_labeled)} for train/val/test.
+    When cache_dir is None: builds fresh, no persistence (behavior identical
+    to the previous per-condition build).
+    When cache_dir provided: checks Drive cache, builds+saves on miss.
+    """
+    use_cache = cache_dir is not None
+    cache_root = Path(cache_dir) / ds_key / "real" if use_cache else None
+
+    # --- CACHE HIT ---
+    if use_cache and cache_root is not None:
+        meta = _validate_real_cache(cache_root, min_area, val_frac, split_seed)
+        if meta is not None:
+            result: Dict[str, Tuple[List[str], List[str], int]] = {}
+            for split in ("train", "val", "test"):
+                img_dir = cache_root / "images" / split
+                lbl_dir = cache_root / "labels" / split
+                imgs = (
+                    sorted(
+                        str(p)
+                        for p in img_dir.glob("*")
+                        if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+                    )
+                    if img_dir.is_dir()
+                    else []
+                )
+                lbls = [str(lbl_dir / (Path(p).stem + ".txt")) for p in imgs]
+                lbls = [l for l in lbls if Path(l).is_file()]
+                result[split] = (imgs, lbls, len(lbls))
+            total = sum(v[2] for v in result.values())
+            logger.info(
+                "[YoloCache] %s: loaded %d real labels from cache (train=%d val=%d)",
+                ds_key, total, result["train"][2], result["val"][2],
+            )
+            return result
+
+    # --- CACHE MISS: build ---
+    if use_cache and cache_root is not None:
+        tmp_root = cache_root.parent / "real.building"
+        if tmp_root.exists():
+            shutil.rmtree(tmp_root, ignore_errors=True)
+        target = tmp_root
+    else:
+        target = Path(tempfile.mkdtemp(prefix=f"realbuild_{ds_key}_"))
+
+    result = {}
+    per_split_meta: Dict[str, Dict[str, int]] = {}
+    for split in ("train", "val", "test"):
+        img_out = target / "images" / split
+        lbl_out = target / "labels" / split
+        img_out.mkdir(parents=True, exist_ok=True)
+        lbl_out.mkdir(parents=True, exist_ok=True)
+        paths = defect_splits.get(split, [])
+        # reuse existing _get_real_test_images_and_labels() unchanged in logic;
+        # force_copy so cached images survive tmpdir cleanup / different FS.
+        n_labeled = _get_real_test_images_and_labels(
+            test_defect_paths=paths,
+            mask_map=mask_map,
+            label_dir=str(lbl_out),
+            image_dir_out=str(img_out),
+            min_area=min_area,
+            force_copy=use_cache,
+        )
+        imgs = sorted(
+            str(p)
+            for p in img_out.glob("*")
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+        )
+        lbls = [str(lbl_out / (Path(p).stem + ".txt")) for p in imgs]
+        lbls = [l for l in lbls if Path(l).is_file()]
+        result[split] = (imgs, lbls, len(lbls))
+        per_split_meta[split] = {"n_images": len(imgs), "n_labeled": len(lbls)}
+
+    total = sum(v[2] for v in result.values())
+
+    if use_cache and cache_root is not None:
+        meta = {
+            "dataset_key": ds_key,
+            "schema_version": 2,
+            "splits": per_split_meta,
+            "n_images": sum(v["n_images"] for v in per_split_meta.values()),
+            "n_labeled": total,
+            "min_area": min_area,
+            "val_frac": val_frac,
+            "split_seed": split_seed,
+            "build_timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        (target / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        # atomic publish: tmp -> real
+        if cache_root.exists():
+            shutil.rmtree(cache_root, ignore_errors=True)
+        cache_root.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(str(target), str(cache_root))
+
+        # repoint result paths from tmp_root to cache_root
+        def _repoint(paths: List[str], old_root: Path, new_root: Path) -> List[str]:
+            return [str(new_root / Path(p).relative_to(old_root)) for p in paths]
+
+        result2: Dict[str, Tuple[List[str], List[str], int]] = {}
+        for split in ("train", "val", "test"):
+            imgs, lbls, _n = result[split]
+            new_imgs = _repoint(imgs, target, cache_root)
+            new_lbls = _repoint(lbls, target, cache_root)
+            new_lbls = [l for l in new_lbls if Path(l).is_file()]
+            result2[split] = (new_imgs, new_lbls, len(new_lbls))
+        result = result2
+        logger.info(
+            "[YoloCache] %s: built+saved %d real labels to cache (train=%d val=%d)",
+            ds_key, total, result["train"][2], result["val"][2],
+        )
+    else:
+        logger.info("[YoloCache] %s: built %d real labels (no cache)", ds_key, total)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Per-condition YOLO runner (baseline-then-finetune)
 # ---------------------------------------------------------------------------
 
 def _run_yolo_condition(
     model_name: str,
     condition: str,
     synth_annotations: List[Dict[str, Any]],
+    train_defect_paths: List[str],
     train_normal_paths: List[str],
-    test_defect_paths: List[str],
+    val_defect_paths: List[str],
     mask_map: Dict[str, str],
     checkpoint_dir: str,
-    epochs: int = 50,
+    real_sets: Dict[str, Tuple[List[str], List[str], int]],
+    baseline_weights_path: Optional[str] = None,
+    baseline_epochs: int = 50,
+    finetune_epochs: int = 30,
     imgsz: int = 256,
     seed: int = 42,
     device: int = 0,
@@ -669,10 +1102,14 @@ def _run_yolo_condition(
     """
     하나의 (model, condition) 조합을 학습/평가.
 
-    baseline:        synth_annotations=[] → defect label 없음 (배경만 fine-tune)
-    random / aroma:  synth annotation 으로 label 작성
+    모든 조건이 real labeled defect (train split)를 공통으로 학습한다.
+      baseline:        real labeled defect 만 (+ 약간의 real normal background) →
+                       COCO 에서 시작, save=True 로 best.pt 영속화.
+      random / aroma:  real labeled defect + synth (additive) → baseline best.pt
+                       에서 finetune, save=False.
 
-    Returns {map50, map50_95, precision, recall, n_train}.
+    Returns {map50, map50_95, precision, recall, n_train, n_real_train,
+             n_synth_train, weights_path(baseline only)}.
     """
     try:
         from ultralytics import YOLO  # type: ignore[import]
@@ -680,8 +1117,11 @@ def _run_yolo_condition(
         logger.error("ultralytics not installed. Run: pip install ultralytics")
         return {"error": "ultralytics_missing"}
 
+    # local fast scratch on Colab/Linux; default temp on Windows
+    tmp_dir_root = "/tmp" if os.name != "nt" else None
+
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(dir=tmp_dir_root) as tmpdir:
             train_img = str(Path(tmpdir) / "train" / "images")
             train_lbl = str(Path(tmpdir) / "train" / "labels")
             val_img   = str(Path(tmpdir) / "val" / "images")
@@ -689,40 +1129,53 @@ def _run_yolo_condition(
             for d in (train_img, train_lbl, val_img, val_lbl):
                 Path(d).mkdir(parents=True, exist_ok=True)
 
-            # --- Train set ---
-            n_labeled = 0
-            if condition == "baseline":
-                # background-only fine-tune: stage normal images, no defect labels
-                n_bg = _stage_background_images(train_normal_paths, train_img, prefix="bg")
-                logger.info("    baseline train: %d background imgs (no defect labels)", n_bg)
-                n_train = n_bg
-            else:
-                n_labeled = _write_yolo_labels(
+            # --- TRAIN: real labeled defects (ALL conditions) ---
+            # Pre-built/cached real (image,label) pairs are staged in;
+            # the build itself happened once per dataset in the caller.
+            _stage_pairs_into(real_sets["train"], train_img, train_lbl)
+            n_real = real_sets["train"][2]
+            logger.info("    train real labeled defects: %d", n_real)
+            if n_real == 0:
+                logger.error(
+                    "    %s/%s: no real train labels — cannot train",
+                    model_name, condition,
+                )
+                return {"error": "no_real_train_labels"}
+
+            # --- TRAIN: a few real normals as background negatives (ALL conditions) ---
+            n_bg = _stage_background_images(
+                train_normal_paths[:n_real], train_img, prefix="bg"
+            )
+            logger.info("    train background negatives: %d", n_bg)
+
+            # --- TRAIN: add synthetic (random/aroma only) ---
+            n_synth = 0
+            if condition != "baseline":
+                # An empty synth set means this finetune would be identical to
+                # baseline (real-only) yet get reported as "random"/"aroma" — a
+                # misleading row. Refuse instead of silently producing it.
+                if not synth_annotations:
+                    logger.error(
+                        "    %s/%s: no synthetic annotations — refusing to report "
+                        "real-only finetune as '%s'. Check %s annotations.json.",
+                        model_name, condition, condition, condition,
+                    )
+                    return {"error": "no_synth_annotations"}
+                n_synth = _write_yolo_labels(
                     synth_annotations=synth_annotations,
                     label_dir=train_lbl,
                     image_dir_out=train_img,
                     min_area=200,
                 )
-                n_total_synth = len(synth_annotations)
                 logger.info(
-                    "    %s train: %d/%d synth imgs labeled",
-                    condition, n_labeled, n_total_synth,
+                    "    %s train: %d/%d synth imgs labeled (additive)",
+                    condition, n_synth, len(synth_annotations),
                 )
-                n_train = n_labeled
-                if n_labeled == 0:
-                    logger.warning(
-                        "    %s/%s: no labeled synth images — training will have no positives",
-                        model_name, condition,
-                    )
+            n_train = n_real + n_synth
 
-            # --- Val set (real defect + GT mask) ---
-            n_val = _get_real_test_images_and_labels(
-                test_defect_paths=test_defect_paths,
-                mask_map=mask_map,
-                label_dir=val_lbl,
-                image_dir_out=val_img,
-                min_area=50,
-            )
+            # --- VAL: real labeled defects (disjoint from train) ---
+            _stage_pairs_into(real_sets["val"], val_img, val_lbl)
+            n_val = real_sets["val"][2]
             logger.info("    val: %d real defect imgs with labels", n_val)
             if n_val == 0:
                 logger.error(
@@ -740,7 +1193,7 @@ def _run_yolo_condition(
                 yaml_path=yaml_path,
             )
 
-            # --- Train ---
+            # --- Weights selection: baseline=COCO, others=baseline best.pt ---
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
             try:
                 import torch
@@ -748,7 +1201,24 @@ def _run_yolo_condition(
             except Exception:
                 pass
 
-            model = YOLO(f"{model_name}.pt")  # downloads pretrained weights
+            if condition == "baseline":
+                weights = f"{model_name}.pt"      # COCO pretrained (downloaded)
+                epochs = baseline_epochs
+                do_save = True                    # MUST persist best.pt
+            else:
+                weights = baseline_weights_path   # finetune source
+                epochs = finetune_epochs
+                do_save = False
+                if not weights or not Path(weights).exists():
+                    logger.error(
+                        "    %s/%s: baseline weights missing (%s) — cannot finetune",
+                        model_name, condition, weights,
+                    )
+                    return {"error": "baseline_weights_missing"}
+
+            # YOLO("best.pt") loads weights + architecture; .train() = transfer/finetune.
+            # NOTE: do NOT pass resume=True (would continue the same run's epoch counter).
+            model = YOLO(weights)
 
             def _do_train():
                 return model.train(
@@ -760,14 +1230,16 @@ def _run_yolo_condition(
                     seed=seed,
                     verbose=False,
                     plots=False,
-                    save=False,   # no checkpoint to save disk
+                    save=do_save,    # baseline: True → best.pt written
                     device=device,
                     exist_ok=True,
                 )
 
             logger.info(
-                "    fit start: %s / %s  train_imgs=%d  epochs=%d imgsz=%d",
-                model_name, condition, n_train, epochs, imgsz,
+                "    fit start: %s / %s  weights=%s  train_imgs=%d (real=%d synth=%d)  "
+                "epochs=%d imgsz=%d save=%s",
+                model_name, condition, weights, n_train, n_real, n_synth,
+                epochs, imgsz, do_save,
             )
             _, fit_elapsed = _train_with_heartbeat(
                 _do_train, label=f"{model_name}/{condition}", interval_s=60,
@@ -777,17 +1249,48 @@ def _run_yolo_condition(
             # --- Validate ---
             logger.info("    val start: %s / %s", model_name, condition)
             t_val = time.time()
-            val_results = model.val(data=yaml_path, verbose=False, plots=False)
+            # verbose=True so ultralytics surfaces its "images/instances" summary;
+            # a silent 0.0 (no GT loaded / geometry-collapsed labels) would
+            # otherwise be indistinguishable from a genuine 0.0 mAP.
+            val_results = model.val(data=yaml_path, verbose=True, plots=False)
             logger.info("    val done: %.1fs", time.time() - t_val)
 
             box = val_results.box
+            # Diagnostic: how many GT instances did ultralytics actually match?
+            # If 0, the recorded 0.0 is a label/geometry problem, not model perf.
+            try:
+                n_gt = int(getattr(box, "nc", 0)) and int(
+                    getattr(val_results, "seen", 0)
+                )
+                tp = getattr(box, "tp", None)
+                n_tp = int(tp.sum()) if tp is not None and hasattr(tp, "sum") else None
+                logger.info(
+                    "    val GT check: staged_val_labels=%d  seen=%s  tp=%s  map50=%.4f",
+                    n_val, getattr(val_results, "seen", "?"), n_tp,
+                    float(box.map50),
+                )
+                if float(box.map50) == 0.0:
+                    logger.warning(
+                        "    %s/%s: val map50 == 0.0 — verify staged val labels land "
+                        "on defects and imgsz=%d is large enough for the defect scale.",
+                        model_name, condition, imgsz,
+                    )
+            except Exception as _diag_exc:
+                logger.warning("    val GT check failed: %s", _diag_exc)
             out = {
-                "map50":     round(float(box.map50), 4),
-                "map50_95":  round(float(box.map), 4),
-                "precision": round(float(box.mp), 4),
-                "recall":    round(float(box.mr), 4),
-                "n_train":   int(n_train),
+                "map50":        round(float(box.map50), 4),
+                "map50_95":     round(float(box.map), 4),
+                "precision":    round(float(box.mp), 4),
+                "recall":       round(float(box.mr), 4),
+                "n_train":      int(n_train),
+                "n_real_train": int(n_real),
+                "n_synth_train": int(n_synth),
             }
+            # baseline best.pt 위치를 caller 가 재사용할 수 있도록 보고
+            if condition == "baseline":
+                out["weights_path"] = str(
+                    Path(checkpoint_dir) / condition / "weights" / "best.pt"
+                )
 
     except Exception as exc:
         logger.error("Condition %s/%s failed: %s", model_name, condition, exc)
@@ -815,17 +1318,25 @@ def _run_detection_mode(
     aroma_synthetic_dir: str,
     real_data_dir: str,
     output_dir: str,
-    epochs: int = 50,
+    baseline_epochs: int = 50,
+    finetune_epochs: int = 30,
+    val_frac: float = 0.5,
     imgsz: int = 256,
     seed: int = 42,
     existing_results: Optional[Dict[str, Any]] = None,
     output_path: Optional[str] = None,
+    yolo_cache_dir: Optional[str] = None,
+    local_cache: bool = True,
 ) -> Dict[str, Any]:
     """
-    Iterate datasets x models x conditions.
-    Output structure: {dataset: {model: {condition: {map50, map50_95, precision, recall, n_train}}}}
+    Iterate datasets x models x conditions (baseline-then-finetune).
+    Output: {dataset: {model: {condition: {map50, map50_95, precision, recall,
+             n_train, n_real_train, n_synth_train, weights_path?}}}}
 
-    CRITICAL: Val set = real defect images only. Synthetic NEVER in val.
+    CRITICAL:
+    - real defect 는 seeded split 으로 train/val 분리 (disjoint). Val = real only.
+    - baseline 을 항상 먼저 학습해 best.pt 를 만들고, random/aroma 가 그걸 finetune.
+    - checkpoint 는 {output_dir}/{ds}/{model}/baseline/weights/best.pt 에 영속.
     """
     device = _check_gpu()
     existing = existing_results or {}
@@ -854,24 +1365,110 @@ def _run_detection_mode(
             logger.warning("Detection skip %s — dataset not found", ds)
             continue
 
-        train_normal = lists["train_normal"]
-        test_defect  = lists["test_defect"]
-        mask_map     = lists["mask_map"]
-        ckpt_base    = str(Path("/content/tmp/exp4v2_checkpoints") / ds)
-
-        # synth annotations per condition (loaded once per dataset)
+        # synth annotations per condition (loaded once per dataset).
+        # MOVED UP: must exist before the local cache so its paths get rewritten.
         synth_by_cond: Dict[str, List[Dict[str, Any]]] = {
             "baseline": [],
             "random":   _load_synth_annotations(random_synthetic_dir, ds),
             "aroma":    _load_synth_annotations(aroma_synthetic_dir, ds),
         }
 
+        # Local cache: stage Drive images to /tmp for I/O acceleration.
+        # Linux/Colab only (os.name != "nt"). Rewrites lists + synth paths to /tmp.
+        if local_cache and os.name != "nt":
+            lists, synth_by_cond = _local_cache_for_yolo(
+                ds, lists, synth_by_cond, random_synthetic_dir, aroma_synthetic_dir,
+            )
+
+        train_normal = lists["train_normal"]
+        all_defect   = lists["test_defect"]
+        mask_map     = lists["mask_map"]
+
+        # real defect train/val split (seeded, disjoint, mask-bearing only)
+        train_defect, val_defect = _split_defects(all_defect, mask_map, val_frac, seed)
+        logger.info(
+            "%s: real defect split — train=%d  val=%d  (val_frac=%.2f)",
+            ds, len(train_defect), len(val_defect), val_frac,
+        )
+        if not train_defect or not val_defect:
+            logger.warning(
+                "%s: too few labeled defects to split "
+                "(train=%d val=%d, need >=1 each) — skipping",
+                ds, len(train_defect), len(val_defect),
+            )
+            continue
+
+        # Build (or load from Drive cache) the real YOLO (image,label) set ONCE
+        # per dataset, hoisted out of the per-condition loop. baseline/random/aroma
+        # all stage the SAME pre-built pairs into their tmpdirs.
+        real_sets = _build_or_load_real_yolo_dataset(
+            ds_key=ds,
+            mask_map=mask_map,
+            defect_splits={"train": train_defect, "val": val_defect, "test": []},
+            cache_dir=yolo_cache_dir,
+            min_area=50,
+            val_frac=val_frac,
+            split_seed=seed,
+        )
+
+        # checkpoint base persists under output_dir so best.pt survives the run
+        ckpt_base = str(Path(output_dir) / ds)
+
         ds_results: Dict[str, Any] = dict(existing.get(ds, {}))
 
         for model_name in model_keys:
             model_results: Dict[str, Any] = dict(ds_results.get(model_name, {}))
 
-            for cond in condition_keys:
+            # FORCE baseline first, then the rest (so finetune always has weights)
+            ordered = (
+                [c for c in condition_keys if c == "baseline"]
+                + [c for c in condition_keys if c != "baseline"]
+            )
+
+            baseline_weights: Optional[str] = None  # per (ds, model)
+
+            def _save_incremental() -> None:
+                if not output_path:
+                    return
+                ds_results[model_name] = dict(model_results)
+                results[ds] = dict(ds_results)
+                try:
+                    save_json(results, output_path)
+                except Exception as _e:
+                    logger.warning("Incremental save failed: %s", _e)
+
+            def _run_baseline() -> Dict[str, Any]:
+                """Train baseline (real-only) and return its result dict."""
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                gc.collect()
+                logger.info(
+                    "    [baseline] %s / %s  real_train=%d",
+                    ds, model_name, len(train_defect),
+                )
+                return _run_yolo_condition(
+                    model_name=model_name,
+                    condition="baseline",
+                    synth_annotations=[],
+                    train_defect_paths=train_defect,
+                    train_normal_paths=train_normal,
+                    val_defect_paths=val_defect,
+                    mask_map=mask_map,
+                    checkpoint_dir=str(Path(ckpt_base) / model_name),
+                    real_sets=real_sets,
+                    baseline_weights_path=None,
+                    baseline_epochs=baseline_epochs,
+                    finetune_epochs=finetune_epochs,
+                    imgsz=imgsz,
+                    seed=seed,
+                    device=device,
+                )
+
+            for cond in ordered:
                 if cond not in synth_by_cond:
                     logger.warning("Unknown condition %s — skipping", cond)
                     continue
@@ -884,7 +1481,40 @@ def _run_detection_mode(
                         "  RESUME skip %s / %s / %s  (cached map50=%s)",
                         ds, model_name, cond, _cached.get("map50"),
                     )
+                    if cond == "baseline":
+                        # recover weights path for downstream finetune
+                        baseline_weights = _cached.get("weights_path")
                     continue
+
+                # If a finetune cond is requested but we have no usable baseline
+                # weights on disk, run baseline implicitly first.
+                if cond != "baseline" and not (
+                    baseline_weights and Path(baseline_weights).exists()
+                ):
+                    logger.info(
+                        "  baseline weights missing for %s/%s — running baseline first",
+                        ds, model_name,
+                    )
+                    base_res = _run_baseline()
+                    baseline_weights = base_res.get("weights_path")
+                    if "baseline" in condition_keys:
+                        model_results["baseline"] = base_res
+                        logger.info(
+                            "    map50=%s  map50_95=%s  P=%s  R=%s",
+                            base_res.get("map50"), base_res.get("map50_95"),
+                            base_res.get("precision"), base_res.get("recall"),
+                        )
+                        _save_incremental()
+                    if not (baseline_weights and Path(baseline_weights).exists()):
+                        logger.error(
+                            "  baseline failed to produce weights for %s/%s — "
+                            "skipping finetune conditions",
+                            ds, model_name,
+                        )
+                        # record the failed finetune attempt and move on
+                        model_results[cond] = {"error": "baseline_weights_missing"}
+                        _save_incremental()
+                        continue
 
                 run_idx += 1
                 synth_ann = synth_by_cond[cond]
@@ -905,15 +1535,22 @@ def _run_detection_mode(
                     model_name=model_name,
                     condition=cond,
                     synth_annotations=synth_ann,
+                    train_defect_paths=train_defect,
                     train_normal_paths=train_normal,
-                    test_defect_paths=test_defect,
+                    val_defect_paths=val_defect,
                     mask_map=mask_map,
-                    checkpoint_dir=str(Path(ckpt_base) / model_name / cond),
-                    epochs=epochs,
+                    checkpoint_dir=str(Path(ckpt_base) / model_name),
+                    real_sets=real_sets,
+                    baseline_weights_path=(None if cond == "baseline" else baseline_weights),
+                    baseline_epochs=baseline_epochs,
+                    finetune_epochs=finetune_epochs,
                     imgsz=imgsz,
                     seed=seed,
                     device=device,
                 )
+                if cond == "baseline":
+                    baseline_weights = res.get("weights_path")
+
                 model_results[cond] = res
                 logger.info(
                     "    map50=%s  map50_95=%s  P=%s  R=%s",
@@ -921,14 +1558,7 @@ def _run_detection_mode(
                     res.get("precision"), res.get("recall"),
                 )
 
-                # Incremental save after each condition
-                if output_path:
-                    ds_results[model_name] = dict(model_results)
-                    results[ds] = dict(ds_results)
-                    try:
-                        save_json(results, output_path)
-                    except Exception as _e:
-                        logger.warning("Incremental save failed: %s", _e)
+                _save_incremental()
 
             ds_results[model_name] = model_results
 
@@ -941,22 +1571,36 @@ def _run_detection_mode(
 # Summary builder
 # ---------------------------------------------------------------------------
 
+def _fmt_delta(x: Dict[str, Any], y: Dict[str, Any]) -> str:
+    """Format (x[c] - y[c]) in percentage points for the core metrics."""
+    parts = []
+    for col in ("map50", "map50_95", "precision", "recall"):
+        xv, yv = x.get(col), y.get(col)
+        if isinstance(xv, (int, float)) and isinstance(yv, (int, float)):
+            parts.append(f"{col} {(xv - yv) * 100:+.2f}pp")
+        else:
+            parts.append(f"{col} N/A")
+    return ", ".join(parts)
+
+
 def _build_summary(results: Dict[str, Any]) -> str:
     """
-    Build Markdown summary.
+    Build Markdown summary (baseline-then-finetune).
     Per dataset/model: rows=conditions, cols=metrics.
-    Delta section: AROMA minus Random for map50.
+    Delta section: AROMA − Baseline and AROMA − Random (CASDA-style, pp).
     """
     lines = [
         "# AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가",
         "",
-        "비교: Baseline (background-only) vs Random ROI vs AROMA ROI",
-        "Train = synthetic defect (labeled), Val = real defect (GT mask → bbox)",
+        "비교: Baseline (real-only) vs Random ROI (real+synth) vs AROMA ROI (real+synth)",
+        "모든 조건이 real labeled defect (train split) 위에서 학습.",
+        "baseline: COCO→real-only 학습 후 best.pt 저장. random/aroma: baseline best.pt 에서 finetune.",
+        "Val = real defect (GT mask → bbox), train 과 disjoint.",
         "",
     ]
 
     all_conds = ALL_CONDITION_KEYS
-    metric_cols = ["map50", "map50_95", "precision", "recall", "n_train"]
+    metric_cols = ["map50", "map50_95", "precision", "recall", "n_real_train", "n_synth_train"]
 
     for ds in sorted(results):
         ds_data = results[ds]
@@ -971,9 +1615,9 @@ def _build_summary(results: Dict[str, Any]) -> str:
             m_data = ds_data.get(model_name, {})
             lines += [f"### {model_name}", ""]
 
-            header = " | ".join(f"{c:>10}" for c in metric_cols)
+            header = " | ".join(f"{c:>12}" for c in metric_cols)
             lines.append(f"| {'조건':<10} | {header} |")
-            sep = " | ".join("-" * 10 for _ in metric_cols)
+            sep = " | ".join("-" * 12 for _ in metric_cols)
             lines.append(f"|{'-' * 12}|{sep}|")
 
             for cond in all_conds:
@@ -981,27 +1625,24 @@ def _build_summary(results: Dict[str, Any]) -> str:
                 cells = []
                 for col in metric_cols:
                     val = cm.get(col)
-                    if isinstance(val, float):
+                    if isinstance(val, bool):
+                        cells.append(str(val))
+                    elif isinstance(val, float):
                         cells.append(f"{val:.4f}")
                     elif isinstance(val, int):
                         cells.append(str(val))
                     else:
                         cells.append("N/A")
-                row = " | ".join(f"{c:>10}" for c in cells)
+                row = " | ".join(f"{c:>12}" for c in cells)
                 lines.append(f"| {cond:<10} | {row} |")
             lines.append("")
 
-            # Delta: AROMA - Random
+            # CASDA-style delta panel
+            b = m_data.get("baseline", {})
             r = m_data.get("random", {})
             a = m_data.get("aroma", {})
-            parts = []
-            for col in ("map50", "map50_95", "precision", "recall"):
-                rv, av = r.get(col), a.get(col)
-                if isinstance(rv, float) and isinstance(av, float):
-                    parts.append(f"{col} {av - rv:+.4f}")
-                else:
-                    parts.append(f"{col} N/A")
-            lines.append(f"**Delta (AROMA − Random)**: " + ", ".join(parts))
+            lines.append("**Delta (AROMA − Baseline)**: " + _fmt_delta(a, b))
+            lines.append("**Delta (AROMA − Random)**:   " + _fmt_delta(a, r))
             lines.append("")
 
     return "\n".join(lines)
@@ -1019,10 +1660,14 @@ def run(
     aroma_synthetic_dir: str,
     real_data_dir: str,
     output_dir: str,
-    epochs: int = 50,
+    baseline_epochs: int = 50,
+    finetune_epochs: int = 30,
+    val_frac: float = 0.5,
     imgsz: int = 256,
     seed: int = 42,
     resume: bool = False,
+    yolo_cache_dir: Optional[str] = None,
+    local_cache: bool = True,
 ) -> Dict[str, Any]:
     if not _CV2_AVAILABLE:
         logger.error("OpenCV (cv2) not installed. Run: pip install opencv-python-headless")
@@ -1054,11 +1699,15 @@ def run(
         aroma_synthetic_dir=aroma_synthetic_dir,
         real_data_dir=real_data_dir,
         output_dir=output_dir,
-        epochs=epochs,
+        baseline_epochs=baseline_epochs,
+        finetune_epochs=finetune_epochs,
+        val_frac=val_frac,
         imgsz=imgsz,
         seed=seed,
         existing_results=existing_results,
         output_path=output_path,
+        yolo_cache_dir=yolo_cache_dir,
+        local_cache=local_cache,
     )
 
     save_json(results, output_path)
@@ -1077,7 +1726,7 @@ def run(
 
 def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가"
+        description="AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (baseline-then-finetune)"
     )
     p.add_argument(
         "--model",
@@ -1115,15 +1764,32 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument(
         "--output_dir",
         required=True,
-        help="exp4v2_results.json + exp4v2_summary.md 저장 경로",
+        help="exp4v2_results.json + exp4v2_summary.md + baseline best.pt 저장 경로",
     )
-    p.add_argument("--epochs", type=int, default=50,
-                   help="YOLO 학습 epoch 수 (default: 50)")
+    p.add_argument("--baseline_epochs", type=int, default=50,
+                   help="baseline(real-only) 학습 epoch (default: 50)")
+    p.add_argument("--finetune_epochs", type=int, default=30,
+                   help="random/aroma finetune epoch (default: 30)")
+    p.add_argument("--val_frac", type=float, default=0.5,
+                   help="real defect 중 val 비율 (나머지는 train, default: 0.5)")
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
     p.add_argument("--seed",   type=int, default=42)
     p.add_argument("--resume", action="store_true",
                    help="기존 exp4v2_results.json에서 완료된 run을 skip하고 재개")
+    p.add_argument(
+        "--yolo_cache_dir",
+        default=None,
+        help="real YOLO (image,label) 데이터셋을 build-once 후 영속 캐시할 경로 "
+             "(예: Drive). 지정 시 동일 (min_area/val_frac/seed) 조합은 재빌드 없이 "
+             "재사용. 미지정 시 매 데이터셋마다 새로 빌드 (캐시 없음).",
+    )
+    p.add_argument(
+        "--no_local_cache",
+        action="store_true",
+        help="Drive→/tmp 로컬 캐시 staging 비활성화 (Linux/Colab 기본 활성). "
+             "Windows 에서는 항상 비활성.",
+    )
     return p.parse_args(argv)
 
 
@@ -1141,10 +1807,14 @@ def main(argv=None) -> None:
         aroma_synthetic_dir=args.aroma_synthetic_dir,
         real_data_dir=args.real_data_dir,
         output_dir=args.output_dir,
-        epochs=args.epochs,
+        baseline_epochs=args.baseline_epochs,
+        finetune_epochs=args.finetune_epochs,
+        val_frac=args.val_frac,
         imgsz=args.imgsz,
         seed=args.seed,
         resume=args.resume,
+        yolo_cache_dir=args.yolo_cache_dir,
+        local_cache=not args.no_local_cache,
     )
     status = result.get("status", "unknown")
     n_ds   = len(result.get("results", {}))

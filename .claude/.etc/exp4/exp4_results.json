@@ -1,0 +1,18 @@
+{
+  "mvtec_cable": {
+    "simplenet": {
+      "baseline": {
+        "image_auroc": 0.7646,
+        "pixel_auroc": 0.6285
+      },
+      "random": {
+        "image_auroc": 0.5015,
+        "pixel_auroc": 0.6304
+      },
+      "aroma": {
+        "image_auroc": 0.4996,
+        "pixel_auroc": 0.5676
+      }
+    }
+  }
+}

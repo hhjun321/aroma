@@ -1,0 +1,53 @@
+#Comments and Suggestions for Authors
+##The manuscript proposes CASDA, a context-aware data augmentation framework for steel surface defect detection by combining ControlNet-based image generation, defect-background matching, and synthetic sample quality filtering. The topic is relevant and timely, as data scarcity and class imbalance are important challenges in industrial visual inspection. The idea of incorporating the relationship between defects and background context is potentially useful.
+However, the manuscript still has substantial weaknesses in terms of the justification of novelty, methodological transparency, experimental rigor, statistical reliability, and objective interpretation of results. The proposed framework appears largely as an integration of existing components rather than a clearly demonstrated methodological advance. Several key mechanisms are insufficiently specified, some parameter settings appear heuristic, the experimental validation remains limited, and the reported performance gains are inconsistent across benchmark models. In some cases, CASDA does not outperform simpler baselines. In addition, several conclusions are stronger than the evidence presented can support.
+Overall, the study has practical potential, but the manuscript, in its current form, does not yet meet the required publication standards.
+
+1.	Limited novelty; the framework appears to be a combination of existing techniques
+The major components of CASDA—ROI defect extraction, morphological descriptors, prompt conditioning, ControlNet generation, Poisson blending, and quality filtering—are individually familiar concepts in the literature. The manuscript should more clearly explain what constitutes the core methodological novelty of CASDA beyond combining these existing elements.
+2.	Insufficient methodological detail and lack of reproducibility
+Several critical parts of the framework are described only conceptually and cannot be reproduced reliably. In particular:
+	The construction procedure of the defect-background compatibility matrix is unclear.
+	The definition of background categories is insufficiently explained.
+	Prompt templates and generation settings are incomplete.
+	ControlNet implementation details (fine-tuning, pretrained model, inference parameters, sampling steps, guidance scale, etc.) are missing.
+	Training settings for benchmark models (optimizer, learning rate, epochs, batch size, hardware) are not reported.
+3.	Core mechanisms rely on heuristic thresholds and manually selected parameters
+Several key decisions appear manually chosen without sufficient justification, including:
+	Defect classification thresholds (e.g., linearity > 0.85, aspect ratio > 5.0)
+	Suitability score weights (0.5 / 0.3 / 0.2)
+	Quality gate threshold (Q ≥ 0.7)
+	Morphology, artifact, and sharpness scoring rules
+	
+4.	Experimental results do not consistently demonstrate the superiority of CASDA
+Although CASDA improves YOLO-MFD performance, the gains are modest. For EB-YOLOv8, the overall improvement is minimal, and some metrics are worse than those of the Raw or Copy-Paste baselines. For DeepLabV3+, the Dice score decreases. These results suggest that CASDA's effectiveness is model-dependent rather than consistently robust. Therefore, statements claiming consistent performance improvement should be revised.
+5.	Baseline comparisons and validation scope are insufficient
+The manuscript compares CASDA mainly with Raw data, traditional augmentation, and Copy-Paste. This is not enough to establish state-of-the-art relevance.
+6.	No statistical significance or robustness analysis
+Several reported improvements are only around 0.3–1 percentage points. Without repeated runs, multiple random seeds, standard deviations, confidence intervals, or significance testing, it is unclear whether these gains are meaningful or simply due to randomness.
+7.	The ablation study is incomplete
+The current ablation only removes pruning and blending. The truly central components of CASDA—including the compatibility matrix, three-channel hint image, prompt fields, quality gate, and ControlNet conditioning—are not independently tested. Therefore, the contribution of each component remains uncertain.
+Moreover, removing ROI pruning reduces mAP by only 0.09 pp, which does not strongly support the claim that this module substantially improves performance.
+8.	The data split strategy and potential data leakage need clarification
+The manuscript compares multiple train/validation/test split ratios and then selects 70/15/15. If test-set performance influenced this selection, there may be selection bias.
+The authors should also clearly state:
+	Whether validation/test images were completely excluded from ROI extraction
+	Whether background patches were sampled only from training images
+	Whether any synthetic generation process involved leakage from evaluation data
+	
+9.	Realism and annotation quality of synthetic data are not sufficiently validated
+Synthetic samples are evaluated only using a heuristic quality score. More convincing evidence is needed, such as:
+	FID / KID / LPIPS or similar realism metrics
+	Human perceptual evaluation
+	Feature-distribution comparison with real defects
+	Validation that synthetic masks accurately correspond to generated defect boundaries after blending
+	
+10.	Detection and segmentation tasks are discussed together too broadly
+YOLO-MFD and EB-YOLOv8 are detection models, while DeepLabV3+ is a segmentation model. Their metrics and sensitivity to boundary artifacts differ substantially. The manuscript should analyze these task types separately rather than drawing overly unified conclusions.
+11.	Writing quality and presentation require improvement
+The manuscript still has presentation issues, including:
+	Inconsistent table numbering and missing result tables
+	Informal or exaggerated expressions (e.g., "a whopping 15.06 pp")
+	Overstated claims such as "solves the data sparsity problem".
+	Limited discussion of failure cases and practical limitations
+

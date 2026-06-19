@@ -1,0 +1,27 @@
+{
+  "mvtec_cable": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "n_train": 224
+      },
+      "random": {
+        "map50": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "n_train": 600
+      },
+      "aroma": {
+        "map50": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "n_train": 0
+      }
+    }
+  }
+}

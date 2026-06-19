@@ -1,0 +1,29 @@
+#Comments and Suggestions for Authors
+1.	General comment (enhance the quality of the language). There are several grammar mistakes, and the quality of the English is too low. A thorough review from a native language speaker is suggested to improve the quality of the language
+2.	In the introduction section improve the literature review - by inserting the outcome. It is suggested to include in the introduction some research articles dealing with defect detection using aware data augmentation methods.
+3.	Given that ControlNet-based generation is conditioned on handcrafted features, how sensitive is CASDA to errors in ROI characterization and feature extraction bias?
+4.	What is the theoretical justification for the weighting scheme (0.5, 0.3, 0.2) used in the suitability score, and has any optimization or sensitivity analysis been performed?
+5.	How does CASDA compare against state-of-the-art diffusion-based augmentation methods using quantitative benchmarks beyond mAP and Dice (e.g., FID, LPIPS)?
+6.	To what extent does the synthetic-to-real domain gap affect generalization when deploying the trained model on unseen industrial datasets?
+7.	Why does CASDA degrade segmentation performance (Dice score) in DeepLabV3+, and how can boundary artifacts from Poisson blending be mathematically minimized?
+8.	How scalable is the proposed framework to multi-material or multi-sensor datasets where defect-background relationships are more complex?
+9.	What are the computational costs and inference-time implications of CASDA compared to traditional augmentation and GAN-based methods?
+10.	How does the method ensure that generated defects do not introduce label noise or unrealistic patterns that bias model learning?
+11.	Can the proposed morphological indices (linearity, solidity, aspect ratio) fully capture complex defect geometries, or are there limitations in representing irregular micro-defects?
+12.	What is the impact of the 42.7% synthetic data ratio on overfitting, and how was the optimal augmentation proportion determined?
+13.	How reproducible is the CASDA pipeline across different datasets, given the dependency on heuristic thresholds for defect classification?
+14.	Why does EB-YOLOv8 show marginal or inconsistent improvement compared to YOLO-MFD, and what does this imply about model–augmentation interaction?
+15.	How does the quality verification threshold (Q ≥ 0.7) influence dataset diversity versus accuracy trade-offs?
+16.	Could alternative blending techniques (e.g., GAN-based refinement or diffusion inpainting) outperform Poisson blending in preserving boundary fidelity?
+17.	How does CASDA perform under extreme class imbalance scenarios where minority class samples are nearly absent?
+18.	What is the statistical significance of the reported performance improvements, and were multiple runs conducted to ensure robustness?
+19.	How does the framework handle overlapping or interacting defects, which are common in real industrial surfaces?
+20.	Can the proposed approach be extended to 3D defect detection (e.g., volumetric data), and what challenges would arise?
+21.	What are the limitations of using grayscale Severstal dataset (page 6) for validating a framework intended for broader industrial applications?
+22.	22. Discussion must be strengthened by comparison with results published by others.
+23.	Rewrite the abstract and conclusion by incorporating the above suggestions.
+
+Overall. Rewrite the manuscript as per the comment. 
+
+#Comments on the Quality of English Language
+1.	General comment (enhance the quality of the language). There are several grammar mistakes, and the quality of the English is too low. A thorough review from a native language speaker is suggested to improve the quality of the language
