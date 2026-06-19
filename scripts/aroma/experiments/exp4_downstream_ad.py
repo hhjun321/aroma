@@ -29,6 +29,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -381,6 +383,28 @@ def _prepare_ad_dataset_with_masks(
 
 
 # ---------------------------------------------------------------------------
+# Fit helper with heartbeat logging
+# ---------------------------------------------------------------------------
+
+def _fit_with_heartbeat(engine, model, datamodule, label: str, interval_s: int = 60):
+    """Run engine.fit() with periodic heartbeat logs so silent coreset selection is visible."""
+    stop = threading.Event()
+    t0 = time.time()
+
+    def _beat():
+        while not stop.wait(interval_s):
+            logger.info("  ⏳ %s fitting... %.0fs elapsed", label, time.time() - t0)
+
+    beat = threading.Thread(target=_beat, daemon=True)
+    beat.start()
+    try:
+        engine.fit(model=model, datamodule=datamodule)
+    finally:
+        stop.set()
+    return time.time() - t0
+
+
+# ---------------------------------------------------------------------------
 # Per-model condition runner
 # ---------------------------------------------------------------------------
 
@@ -463,8 +487,21 @@ def _run_model_condition(
                 enable_model_summary=False,
             )
 
-            engine.fit(model=model, datamodule=datamodule)
+            n_train = len(train_normal_paths) + len(synth_image_paths)
+            logger.info(
+                "  fit start: %s  train=%d (normal=%d synth=%d)",
+                model_name, n_train, len(train_normal_paths), len(synth_image_paths),
+            )
+            fit_elapsed = _fit_with_heartbeat(
+                engine, model, datamodule,
+                label=f"{model_name}", interval_s=60,
+            )
+            logger.info("  fit done: %.1fs", fit_elapsed)
+
+            logger.info("  test start: %s", model_name)
+            t_test = time.time()
             test_results = engine.test(model=model, datamodule=datamodule)
+            logger.info("  test done: %.1fs", time.time() - t_test)
 
     except Exception as exc:
         logger.error("Model %s failed: %s", model_name, exc)
