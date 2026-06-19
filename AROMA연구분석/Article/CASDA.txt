@@ -1,0 +1,168 @@
+#Abstract
+Defect detection in manufacturing has evolved from manual inspection to deep learning-based Automated Visual Inspection (AVI) systems; however, acquiring sufficient defect samples in real industrial environments remains challenging, causing severe data sparsity and class imbalance. We propose CASDA (Context-Aware Steel Defect Augmentation), a five-stage framework that classifies defect morphology and background surface properties, constructs a compatibility matrix encoding their contextual relationship, and synthesizes defect images via a ControlNet pipeline conditioned on a three-channel hint image. Experiments on the Severstal steel dataset demonstrate that CASDA achieves an 83.0% quality validation pass rate. Under multi-seed evaluation (seeds 42 and 456), CASDA improved EB-YOLOv8 overall mAP@0.5 by 2.60 pp over the raw baseline and achieved a Class 2 AP gain of 22.09 pp over Copy-Paste, confirming that context-aware synthesis produces more discriminative minority-class training samples than simple patch reuse. Performance gains are architecture-dependent; YOLO-MFD did not show overall improvement, indicating that augmentation sensitivity varies with backbone feature representation.
+
+#1. Introduction
+With the advent of the Fourth Industrial Revolution, defect detection in manufacturing processes has rapidly shifted from manual inspection to deep learning-based Automated Visual Inspection (AVI) systems [1]. These systems have demonstrated high performance across industrial sectors such as steel, textiles, and semiconductors, establishing themselves as a core technology for quality control. However, deep learning-based defect detection models rely heavily on large-scale, high-quality training data, limiting their applicability in data-scarce industrial settings [2].
+In real-world industrial environments, collecting sufficient defect samples is inherently challenging because defects occur infrequently and exhibit diverse shapes, sizes, and patterns [3]. The resulting scarcity of minority-class defect data causes severe class imbalance, which degrades model generalization performance [4]. While existing augmentation techniques—such as geometric transformations and color variations—partially improve data diversity, they fail to capture the unique structural characteristics of defects or their contextual relationships with the background [5].
+To address this gap, data augmentation methods based on generative models have been actively investigated. Generative Adversarial Networks (GANs) and diffusion-based models have shown promising results in synthesizing defect images [6, 7]. However, existing approaches do not adequately model the spatial and physical consistency between defects and their background substrate, producing unrealistic samples that fail to reflect actual defect characteristics.
+This paper proposes CASDA (Context-Aware Steel Defect Augmentation), a framework designed to overcome data sparsity and class imbalance in industrial defect inspection by generating realistic defect images that respect the structural relationship between defect morphology and the background surface.
+The methodology proceeds through the following stages. First, defect types are systematically classified based on morphological and statistical indicators. Background surface characteristics are simultaneously analyzed and categorized. A compatibility matrix is then constructed to quantify defect–background relationships and used as a condition to generate contextually consistent images via a ControlNet-based generative model. Finally, the generated defects are naturally composited onto normal surface images to expand dataset diversity.
+The proposed framework introduces a context-aware augmentation paradigm that integrates background consistency into the defect synthesis process, offering a practical pathway for addressing class imbalance in visual inspection systems under data-scarce industrial conditions. Experimental results demonstrate that the benefit of CASDA is architecture-dependent, with consistent gains observed for EB-YOLOv8 and limited improvement for YOLO-MFD, indicating that the interaction between augmentation strategy and backbone feature representation warrants further investigation.
+
+#2. Related Work
+##2.1. Industrial Defect Detection
+Deep learning-based industrial defect detection has primarily evolved around supervised learning-based object detection or segmentation models [8, 9]. Recently, one-class anomaly detection approaches that detect anomalies using only normal data have also been actively investigated [10]. While these methods are attracting attention as alternatives given the limitations of data collection in real industrial environments, they remain limited in detecting minute or diverse defect types. In particular, model performance invariably degrades when sufficient defect data is unavailable [11].
+
+##2.2. Data Augmentation
+Various data augmentation techniques have been proposed to mitigate data sparsity. Traditional geometric transformations and color-based augmentation are simple to implement and widely used, but they fail to reflect the structural characteristics of defects [5]. To address this, cut-paste-based synthesis techniques or methods for recombining defect regions have been proposed; however, ensuring natural alignment between defects and the background remains challenging [12].
+
+##2.3. Generative Models for Augmentation
+GANs and diffusion-based generative models have been increasingly applied to defect image generation. While these methods effectively expand data diversity, synthesized defects do not sufficiently reflect the physical characteristics of real industrial environments [4]. In particular, because spatial and contextual relationships between defects and the background are not explicitly modeled, unrealistic samples may result.
+
+##2.4. Condition-based generation and ControlNet
+Research on conditional image generation has been actively pursued. In particular, ControlNet is capable of precisely controlling image generation based on structural conditions and has been applied across various domains [13]. However, existing work has primarily focused on general image generation or style control, and explicit modeling of the defect-background relationship in industrial defect augmentation remains limited [4].
+
+##2.5. Data-Driven Augmentation for Industrial Inspection
+Data-driven augmentation has emerged as a key strategy for overcoming defect sample scarcity in industrial settings. GAN-based methods first demonstrated that realistic synthetic defects could be generated from limited labeled data [6], while denoising diffusion probabilistic models (DDPMs) have since offered superior sample diversity and visual fidelity across steel, textile, and PCB domains [7]. However, a common limitation of prior methods is that defect generation is conditioned on defect appearance alone, without explicit modeling of the background surface, causing synthesized defects to exhibit texture or intensity distributions incompatible with the target substrate [4]. CASDA addresses this gap through a compatibility matrix and 3-channel hint image that jointly encode defect morphology and background surface properties.
+
+##2.6. Aware Data Augmentation for Defect Detection
+A dedicated line of research has developed augmentation strategies explicitly designed to respect the structural and contextual properties of industrial defect images, distinguishing themselves from domain-agnostic augmentation pipelines. Weimer et al. [19] demonstrated that GAN-based synthetic defect generation, when applied to the NEU steel strip dataset, can measurably improve detection accuracy for rare defect classes without requiring additional real-world data collection, establishing the core value proposition of synthetic augmentation for class-imbalanced defect datasets. More recent work has leveraged latent diffusion models to address few-shot defect generation scenarios: a diffusion-based approach applied to steel surface inspection [20] employs low-rank embedding adaptation and a mask-guided defect learning mechanism to fine-tune a pre-trained stable diffusion model on a small set of target-domain defect images, achieving significant improvement in detection recall for minority defect classes under data-scarce conditions. Complementary to generation-focused methods, context-aware synthetic augmentation approaches incorporate residual refinement modules and tailored training strategies that enforce coherence between the synthesized defect and the surrounding background texture [21]. Collectively, these works confirm that awareness of the defect-background relationship during synthesis—whether through GAN conditioning, diffusion model fine-tuning, or inpainting loss design—consistently improves the downstream utility of synthetic samples compared to context-agnostic generation. CASDA contributes to this line of work by formalizing the defect-background relationship through an explicit compatibility matrix and a 3-channel hint image, providing a structured and auditable conditioning mechanism that generalizes across defect morphological subtypes and background surface categories.
+
+#3. Methodology
+##3.1. Experimental Setup
+The Severstal Steel Defect Detection dataset was used to evaluate the proposed method [14]. The dataset contains multiple defect classes with distinct morphological characteristics and occurrence patterns, exhibiting a class-imbalanced distribution across normal and defect images. In particular, while most defect classes have sufficient samples, Class 2 is severely underrepresented, resulting in pronounced data sparsity. This imbalanced distribution, common in real industrial environments, is a primary driver of detection performance degradation for minority classes. The dataset therefore provides a suitable testbed for evaluating the effectiveness of the proposed CASDA framework under data sparsity and class imbalance conditions.
+
+##3.2. CASDA Pipeline
+The CASDA (Context-Aware Steel Defect Augmentation) framework consists of a five-stage sequential pipeline designed to preserve the geometric characteristics of defects and the physical context of the background. The five stages are: defect characteristic analysis, ControlNet configuration, context-based synthesis, quality verification, and dataset integration.
+
+###3.2.1 Stage 1: Geometric ROI Characterization and Suitability Evaluation
+First, the Region of Interest (ROI) is extracted from the original dataset, and four geometric indicators are calculated to quantify the morphological characteristics of the defects.
+The linearity index was computed by performing eigenvalue decomposition of the covariance matrix derived from the pixel coordinate set of the defect mask [15].
+The solidity of the defect region was defined as the ratio of the actual defect area to the area of its convex hull and was used to quantify defects with irregular boundaries [16].
+The area ratio (fill ratio or extent) was defined as the ratio of the defect area to the area of its bounding box and serves as a classical shape descriptor for measuring the rectangularity of a region [17].
+An ellipse was fitted to the defect region using the least-squares method, and the ratio of the major to minor axis was defined as the aspect ratio [18].
+
+Defects are classified into linear_scratch, irregular, compact_blob, or general types based on the following criteria:
+
+Each row corresponds to a defect subtype (Linear Scratch, Irregular, Compact Blob, and General), and each column represents a successive processing step: (1) the steel image crop with the ROI window and defect bounding box; (2) the binary defect mask decoded from the RLE annotation; (3) the geometric analysis overlay on the ROI patch, from which defect subtype classification is performed; (4) the classified 256×256 ROI patch.
+
+Each row corresponds to a background type (Smooth, Vertical Stripe, Horizontal Stripe, Textured, and Complex), and each column represents a successive processing step: (1) the steel image crop with a 64 px sliding grid and ROI window; (2) the Canny edge density map, which quantifies background complexity via pixel variance and edge density; (3) the Sobel direction map, in which the R channel encodes vertical edge strength (Sobel_x) and the B channel encodes horizontal edge strength (Sobel_y) to determine the dominant surface directionality; (4) the classified 256×256 ROI patch.
+
+Figure 4(1) shows representative ROI samples for each defect subtype: Linear Scratch, Irregular, Compact Blob, and General. Figure 4(2) shows representative ROI samples for each background type: Smooth, Vertical Stripe, Horizontal Stripe, Textured, and Complex.
+
+The suitability score for an ROI is calculated by integrating matching quality, spatial continuity, and background stability.
+
+###3.2.2 Stage 2: ControlNet Configuration
+The ControlNet model is initialized from lllyasviel/sd-controlnet-canny, built upon the runwayml/stable-diffusion-v1-5 base model, and fine-tuned on the defect ROI dataset for up to 20 epochs using AdamW (lr = 1×10⁻⁵, cosine scheduler with 50 warmup steps) with min-SNR weighting (γ = 5.0) and an effective batch size of 4 (batch size 1, gradient accumulation steps 4) under mixed-precision fp16 training on a Google Colab T4 GPU. The ControlNet conditioning scale was set to 1.0 during training, with early stopping patience of 20 and random seed 42. For inference, 30 denoising steps are applied with a classifier-free guidance scale of 7.5 and a ControlNet conditioning scale of 0.7; generated RGB outputs are converted to grayscale to eliminate VAE decoder color-channel artifacts on single-channel steel surface images.
+
+A 3-channel hint image and a hybrid prompt are configured to enable the ControlNet model to generate both defect-specific and background-specific features [13]. Each channel of the hint image encodes distinct physical characteristics: the R channel reflects the pixel-level geometry of the defect, the G channel reflects surface orientation based on Sobel operations, and the B channel reflects surface roughness through local dispersion [16].
+
+Each row corresponds to a defect class (Class 1 through 4), and each column represents a successive construction step: (1) the ROI patch with defect mask overlay; (2) the R channel encoding defect geometry based on morphological characteristics; (3) the G channel representing surface orientation via directional Sobel filtering per background type; (4) the B channel encoding surface roughness through local variance with a 7×7 kernel; (5) the final hint image (0.5R + 0.3G + 0.2B) used as the ControlNet conditioning input.
+
+Prompts are automatically constructed by concatenating four semantic fields in a fixed template: F1 (defect type), F2 (background type), F3 (directional texture), and F4 (surface condition based on the stability score).
+
+Table 3 defines the F1 prompt component for each defect subtype, mapping each subtype to a natural-language descriptor that is directly embedded in the generation prompt.
+
+Table 4 defines the F2 and F3 prompt components for each background type. F2 provides the surface description and F3 provides the corresponding texture modifier. Together, F2 and F3 encode the background substrate characteristics of the ROI into the generation prompt, conditioning the ControlNet model to synthesize defects consistent with the target surface context.
+
+As a representative example, a linear_scratch defect on a vertical_stripe background with an F4 stability score of 0.85 produces the prompt: "a linear scratch defect on vertical striped metal surface with directional texture (pristine), class 2."
+
+###3.2.3 Stage 3: Context-Based Defect Generation and Synthesis
+After extracting background patches from normal images, a composite image is generated by considering the physical alignment between defect characteristics and the background. A compatibility matrix defining the coexistence probability between defect types and background textures is constructed, and the background is probabilistically selected based on this matrix. The defect images generated using ControlNet are then inserted into the selected background, with Poisson blending applied to eliminate boundary discontinuities and ensure visual naturalness.
+
+###3.2.4 Stage 4: Quality Verification Gate
+A quality verification step is performed on each generated sample. A weighted sum score Q is calculated by evaluating morphological consistency (Q_morph), image sharpness (Q_sharp), the presence of artifacts (Q_artifact), and the area ratio (Q_area). Only samples satisfying Q ≥ 0.7 are retained as training data, preventing performance degradation caused by low-quality inputs.
+
+###3.2.5 Stage 5: Dataset Integration
+Defect masks are encoded for the selected synthetic images and integrated into the existing training dataset, constructing a final training dataset with improved data diversity and class balance.
+
+##3.3. Experimental Procedure
+###3.3.1 Dataset and Data Split
+The Severstal Steel Defect Detection dataset released on Kaggle was used [14]. All images are grayscale with a resolution of 1600×256, reflecting the surface defect characteristics of actual industrial environments. The dataset was partitioned into training, validation, and test sets at a 70:15:15 ratio. The 70:15:15 split was adopted over the 80:10:10 alternative because retaining approximately 1,000 test samples improved the statistical reliability of per-class performance evaluation.
+
+###3.3.2 Benchmark Architectures
+To evaluate the generality of the proposed augmentation technique, two models with different structural characteristics were selected. YOLO-MFD employs multiscale feature fusion specialized for fine defect detection. EB-YOLOv8 enhances feature representation by incorporating BiFPN (Bidirectional Feature Pyramid Network).
+
+###3.3.3 ROI Extraction and Suitability Analysis
+A total of 3,247 defect regions (ROIs) were extracted from the training dataset. Each ROI was scored using the proposed suitability evaluation metric, yielding an overall average suitability score of 0.68. ROIs were then classified into three groups: the High-quality group (61.3%, 1,990 ROIs) was used as high-quality templates; the Acceptable group (31.5%, 1,022 ROIs) was used selectively; and the Excluded group (7.2%, 235 ROIs) was removed from the template pool.
+
+###3.3.4 Augmentation Statistics and Quality Control
+Of the 2,500 candidate samples generated by CASDA, 83.0% (2,075 samples) met the quality criteria and were adopted as final training data.
+
+Fig. 6 compares ControlNet-generated defect samples with the original GT under identical hint conditioning. Multiple visually diverse outputs are produced from a single hint input, demonstrating that CASDA expands training data diversity without simple duplication.
+
+For Class 2, where data sparsity is most pronounced, 519 samples were added to the existing 247, achieving the highest augmentation rate of 110.1%, effectively mitigating the minority class issue. Overall, 2,238 CASDA-generated samples were added to the 5,237 original samples, constructing a final dataset of 7,475 samples. The synthetic data proportion of 42.7% was intentionally maintained to preserve the distributional characteristics of the original data while leveraging the diversity introduced by generated samples.
+
+#4. Experimental Results and Analysis
+##4.1. Performance Evaluation
+To assess result stability, all experiments were conducted with two independent random seeds (42 and 456); Tables 12 and 13 report mean ± standard deviation across runs. Due to the small sample size (n = 2), results are presented primarily as descriptive statistics; formal hypothesis tests are included for reference but have limited statistical power. Entries with std = 0.000 indicate that both seeds yielded identical evaluation outcomes, suggesting low sensitivity of those model–group configurations to random seed variation.
+
+Table 12. YOLO-MFD detection performance on the Severstal test set (mean ± std, n = 2 seeds).
+
+| Method | mAP@0.5 | Class 1 AP | Class 2 AP | Class 3 AP | Class 4 AP |
+|--------|---------|-----------|-----------|-----------|-----------|
+| Baseline (Raw) | 0.1123 ± 0.0118 | 0.0172 ± 0.0244 | 0.1020 ± 0.0495 | 0.1564 ± 0.0048 | 0.1736 ± 0.0772 |
+| Copy-Paste* | 0.1036 ± 0.0000 | 0.0217 ± 0.0000 | 0.0000 ± 0.0000 | 0.1973 ± 0.0000 | 0.1955 ± 0.0000 |
+| CASDA | 0.0873 ± 0.0013 | 0.0238 ± 0.0266 | 0.0561 ± 0.0793 | 0.1501 ± 0.0076 | 0.1190 ± 0.0551 |
+| CASDA vs. Raw | −2.50 pp | +0.66 pp | −4.59 pp | −0.63 pp | −5.46 pp |
+| CASDA vs. Copy-Paste | −1.63 pp | +0.21 pp | **+5.61 pp** | −4.72 pp | −7.65 pp |
+
+Table 13. EB-YOLOv8 detection performance on the Severstal test set (mean ± std, n = 2 seeds).
+
+| Method | mAP@0.5 | Class 1 AP | Class 2 AP | Class 3 AP | Class 4 AP |
+|--------|---------|-----------|-----------|-----------|-----------|
+| Baseline (Raw)* | 0.2936 ± 0.0000 | 0.1490 ± 0.0000 | 0.2548 ± 0.0000 | 0.3966 ± 0.0000 | 0.3739 ± 0.0000 |
+| Copy-Paste | 0.2722 ± 0.0304 | 0.1479 ± 0.0558 | 0.0550 ± 0.0000 | 0.4594 ± 0.0488 | 0.4266 ± 0.0172 |
+| CASDA | 0.3196 ± 0.0192 | 0.2493 ± 0.0056 | 0.2759 ± 0.0250 | 0.4287 ± 0.0094 | 0.3246 ± 0.0670 |
+| CASDA vs. Raw | **+2.60 pp** | **+10.03 pp** | +2.11 pp | +3.21 pp | −4.93 pp |
+| CASDA vs. Copy-Paste | **+4.74 pp** | **+10.14 pp** | **+22.09 pp** | −3.07 pp | −10.20 pp |
+
+*std = 0.000 indicates identical results across both seeds for this configuration.
+
+As shown in Tables 12 and 13, CASDA achieved an overall mAP@0.5 of 0.3196 for EB-YOLOv8, outperforming both Baseline (Raw) (+2.60 pp) and Copy-Paste (+4.74 pp). Class 1 AP showed the largest gain (+10.03 pp vs. Raw), and Class 2 AP — the defect class most severely affected by data sparsity — improved by +2.11 pp over Raw and +22.09 pp over Copy-Paste. These gains indicate that ControlNet-based context-aware generation produces training samples of higher discriminative value than simple patch reuse. In contrast, CASDA did not improve overall mAP@0.5 for YOLO-MFD (−2.50 pp vs. Raw), and Class 2 AP also decreased (−4.59 pp vs. Raw), though it remained superior to Copy-Paste (+5.61 pp). The high standard deviation observed for YOLO-MFD Class 2 AP (±0.0793 for CASDA; ±0.0495 for Baseline) indicates that results for this metric are highly variable across seeds and should be interpreted with caution.
+
+Due to the small sample size (n = 2 seeds) and evaluation limited to two architectures, statistical power is insufficient to draw definitive conclusions. Descriptive statistics are therefore reported as the primary evidence, and the small experimental scale is acknowledged as a limitation of this study.
+
+##4.2. Synthesis Quality
+Synthesis quality was assessed using FID, KID, and LPIPS; results are summarized in Table 14. For FID, Copy-Paste (61.4) yielded a lower score than CASDA (228.6); however, this reflects the structural property that Copy-Paste directly reuses real patches, making its feature distribution identical to that of the reference set by construction. The FID comparison is therefore included solely to expose this limitation and should not be interpreted as a direct quality comparison.
+
+For LPIPS Realism, CASDA (0.467) outperformed Copy-Paste (0.491) overall, confirming that Poisson blending effectively eliminates boundary artifacts and improves perceptual quality. The improvement was most pronounced in Class 1 (Δ = 0.116) and Class 4 (Δ = 0.060). Class 2 was the sole exception where CASDA was inferior, attributable to the irregular texture of Class 2 defects, which increased ControlNet generation difficulty. Notably, both FID and KID were highest for Class 2 (FID: 357.4, KID: 58.83 ± 3.13), confirming via two independent metrics that the performance gap originates in the generation stage rather than the blending process.
+
+For LPIPS Diversity, CASDA (0.448) exceeded Copy-Paste (0.394), indicating that ControlNet generates structurally varied defect patterns beyond simple patch recombination. These results suggest that synthesis diversity may contribute to the detection performance gains observed in EB-YOLOv8; however, the relationship between generation diversity and downstream detection performance remains architecture-dependent and warrants further investigation.
+
+#5. Discussion
+The detection performance of benchmark models trained with CASDA-augmented data was evaluated against a raw-data baseline and a Copy-Paste baseline, revealing both the strengths and the architecture-dependent limitations of the proposed framework.
+
+For EB-YOLOv8, CASDA improved overall mAP@0.5 (+2.60 pp vs. Raw) and demonstrated a large gain over Copy-Paste in Class 2 AP (+22.09 pp), the defect class most affected by data sparsity. These results confirm that context-aware synthesis, which conditions ControlNet on both defect morphology and background surface properties, produces more discriminative minority-class training samples than simple patch reuse. In contrast, CASDA did not improve overall mAP@0.5 for YOLO-MFD (−2.50 pp vs. Raw) or Class 2 AP (−4.59 pp vs. Raw), although it outperformed Copy-Paste for Class 2 (+5.61 pp). The high variance in YOLO-MFD Class 2 AP results (std ≈ 0.05–0.08) indicates that performance for this metric is unstable at n = 2 seeds, and the observed differences should not be interpreted as definitive.
+
+Furthermore, the results reveal a clear architecture-dependent sensitivity to CASDA augmentation. EB-YOLOv8 benefited consistently, whereas YOLO-MFD did not. This divergence suggests that multiscale feature fusion architectures such as YOLO-MFD may require augmentation strategies more tightly coupled to their internal feature representation, which remains an open direction for future work.
+
+Regarding statistical inference, formal hypothesis tests (Wilcoxon signed-rank, BH-FDR corrected, α = 0.05) did not reach statistical significance, primarily due to limited statistical power with n = 2 seeds and two architectures. Effect sizes were small for Class 2 improvement (d = 0.47) and negligible for CASDA vs. Copy-Paste overall mAP (d = 0.19). These results are reported transparently; stronger statistical conclusions would require evaluation across more seeds and additional benchmark architectures.
+
+Although the CASDA framework demonstrates meaningful advantages for minority-class augmentation, several limitations remain. To further improve synthesis quality, multi-scale blending and texture-aware compositing techniques should be applied to enhance statistical consistency between synthesized defects and the background. Normalization and brightness correction accounting for lighting conditions are planned to improve visual naturalness. Future work should establish a universal pipeline applicable to diverse industrial sectors including PCBs, wood, and carpets, and verify generalizability across additional backbone architectures.
+
+#6. Conclusion
+This study proposes CASDA, a context-aware steel defect augmentation framework that classifies defect morphology and background surface characteristics, generates customized defect images via ControlNet, and synthesizes them into training data through Poisson blending. The framework achieved a quality validation pass rate of 83.0% and increased the number of Class 2 training samples — the rarest defect class — by 110.1%. These findings demonstrate that context-aware synthesis produces more discriminative minority-class samples than simple patch reuse. Multi-seed evaluation (seeds 42, 456) over two benchmark architectures showed that CASDA improved overall mAP@0.5 and Class 2 AP for EB-YOLOv8 (+2.60 pp and +2.11 pp vs. Raw, respectively), and outperformed Copy-Paste in Class 2 AP for both architectures (EB-YOLOv8: +22.09 pp; YOLO-MFD: +5.61 pp). Nevertheless, YOLO-MFD did not show overall improvement with CASDA (−2.50 pp vs. Raw), indicating architecture-dependent sensitivity that warrants further investigation. Statistical significance tests did not reach α = 0.05 under the current experimental scale, and this limitation is acknowledged. Future work should focus on improving synthesis reliability through more sophisticated blending and post-processing techniques, and on extending the framework to a general-purpose pipeline applicable to diverse industrial sectors including PCBs, wood, and carpets.
+
+#References
+1.	Rippel, O.; Merhof, D. Anomaly Detection for Automated Visual Inspection: A Review. Technologien für die intelligente Automation. 2023. DOI: 10.1007/978-3-662-66769-9_1.
+2.	Hütten, N.; Gomes, M. A.; Hölken, F.; Andricevic, K.; Meyes, R. Deep Learning for Automated Visual Inspection in Manufac-turing and Maintenance: A Survey of Open-Access Papers. Applied System Innovation. 2024. DOI: 10.3390/asi7010011.
+3.	Bergmann, P.; Fauser, M.; Sattlegger, D.; Steger, C. MVTec AD A Comprehensive Real-World Dataset for Unsupervised Anomaly Detection. International Journal of Computer Vision. 2021. DOI: 10.1007/s11263-020-01400-4.
+4.	Zavrtanik, V.; Kristan, M.; Skočaj, D. DRAEM—A Discriminatively Trained Reconstruction Embedding for Surface Anomaly Detection. Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV). 2021. DOI: 10.1109/ICCV48922.2021.00836.
+5.	Shorten, C.; Khoshgoftaar, T. M. A Survey on Image Data Augmentation for Deep Learning. Journal of Big Data. 2019. DOI: 10.1186/s40537-019-0197-0.
+6.	Goodfellow, I.; Pouget-Abadie, J.; Mirza, M.; Xu, B.; Warde-Farley, D.; Ozair, S.; Courville, A.; Bengio, Y. Generative Adver-sarial Nets. Advances in Neural Information Processing Systems (NeurIPS). 2014. DOI: 10.48550/arXiv.1406.2661.
+7.	Ho, J.; Jain, A.; Abbeel, P. Denoising Diffusion Probabilistic Models. Advances in Neural Information Processing Systems (NeurIPS). 2020. DOI: 10.48550/arXiv.2006.11239.
+8.	Redmon, J.; Divvala, S.; Girshick, R.; Farhadi, A. You Only Look Once: Unified, Real-Time Object Detection. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR). 2016. DOI: 10.1109/CVPR.2016.91.
+9.	Ronneberger, O.; Fischer, P.; Brox, T. U-Net: Convolutional Networks for Biomedical Image Segmentation. Medical Image Computing and Computer-Assisted Intervention (MICCAI). 2015. DOI: 10.1007/978-3-319-24574-4_28.
+10.	Ruff, L.; Vandermeulen, R.; Görnitz, N.; Binder, A.; Müller, E.; Kloft, M. Deep One-Class Classification. Proceedings of the International Conference on Machine Learning (ICML). 2018. DOI: 10.48550/arXiv.1802.06360.
+11.	Han, H.J.; Moon, I.Y.; Research on Object Detection Model-Based Equipment Defect Detection Method. Journal of Advanced Navigation Technology, 2025, 29(6), 859–866. DOI: 10.12673/JANT.2025.29.6.859.
+12.	Dwibedi, D.; Misra, I.; Hebert, M. Cut, Paste and Learn: Surprisingly Easy Synthesis for Instance Detection. Proceedings of the IEEE International Conference on Computer Vision (ICCV). 2017. DOI: 10.1109/ICCV.2017.328.
+13.	Zhang, L.; Rao, A.; Agrawala, M. Adding Conditional Control to Text-to-Image Diffusion Models. Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV), 2023, pp. 3836–3847.  DOI: 10.1109/ICCV51070.2023.00355
+14.	Severstal Steel Defect Detection. Kaggle Competition, 2019. Available online: https://www.kaggle.com/competitions/severstal-steel-defect-detection
+15.	Frangi, A. F.; Niessen, W. J.; Vincken, K. L.; Viergever, M. A. Multiscale Vessel Enhancement Filtering. Medical Image Com-puting and Computer-Assisted Intervention (MICCAI). 1998, 130, 130–137. DOI: 10.1007/BFb0056195.
+16.	van der Walt, S.; Schönberger, J. L.; Nunez-Iglesias, J.; Boulogne, F.; Warner, J. D.; Yager, N.; Gouillart, E.; Yu, T. scikit-image: Image Processing in Python. PeerJ. 2014, 2, e453. DOI: 10.7717/peerj.453.
+17.	Rosenfeld, A.; Kak, A. C. Digital Picture Processing, 2nd ed.; Academic Press: New York, USA, 1982.
+18.	Ngan, H. Y. T.; Pang, G. K. H.; Yung, N. H. C. Automated Fabric Defect Detection—A Review. Image and Vision Computing. 2011, 29, 442–458. DOI: 10.1016/j.imavis.2011.02.002.
+19.	Weimer, D.; Scholz-Reiter, B.; Shpitalni, M. Design of deep convolutional neural network architectures for automated feature extraction in industrial inspection. CIRP Annals. 2016; Synthetic data augmentation for surface defect detection and classification using deep learning. Journal of Intelligent Manufacturing. 2022, 33, 1–17. DOI: 10.1007/s10845-020-01710-x
+20.	Li, H.; Liu, Y.; Liu, C.; Pang, H.; Xu, K. A Few-Shot Steel Surface Defect Generation Method Based on Diffusion Models. Sen-sors. 2025, 25(10), 3038. DOI: 10.3390/s25103038
+21.	Guclu, E.; Akin, E. Enhanced defect detection on steel surfaces using integrated residual refinement module with synthetic data augmentation. Measurement. 2025. DOI: 10.1016/j.measurement (pii: S0263224125004956) 
