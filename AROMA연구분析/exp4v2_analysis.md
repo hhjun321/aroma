@@ -98,14 +98,17 @@ AROMA는 배경 맥락에 맞는 결함을 Poisson blending으로 합성 → 결
 
 ```python
 # exp4v2 재실행 (imgsz 640 권장)
-!python $SCRIPTS/aroma/experiments/exp4_v2_supervised_detection.py \
-    --mode detection \
-    --datasets mvtec_cable \
-    --models yolov8n \
-    --conditions baseline random aroma \
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model     yolov8n \
+    --condition all \
+    --dataset_keys          mvtec_cable \
+    --random_synthetic_dir  $RANDOM_SYNTH_DIR \
+    --aroma_synthetic_dir   $AROMA_SYNTH_DIR \
+    --real_data_dir         $AROMA_DATA \
+    --output_dir            $EXP4V2_OUT \
     --imgsz 640 \
-    --epochs 50 \
-    --output_dir $AROMA_OUT/exp4v2 \
+    --baseline_epochs 50 \
+    --finetune_epochs 30 \
     --yolo_cache_dir $AROMA_OUT/yolo_cache \
     --resume
 ```

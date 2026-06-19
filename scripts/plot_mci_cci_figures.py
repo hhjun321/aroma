@@ -8,7 +8,7 @@ Figure C: MCI Component Breakdown — stacked bar (all 24 DS sorted by MCI)
 Data source: .claude/.etc/complexity/<ds>/complexity_report.json (local)
 Figure D (DEFICIT heatmap): Colab-only, see colab_execute/mci_cci_deficit_figures.md
 
-Output: AROMA연구분析/Article/figure/
+Output: AROMA연구분석/Article/figure/
 """
 import json
 import os
@@ -31,7 +31,7 @@ try:
 except ImportError:
     def setup_font():
         pass
-    OUTPUT_DIR = PROJECT_ROOT / 'AROMA연구분析' / 'Article' / 'figure'
+    OUTPUT_DIR = PROJECT_ROOT / 'AROMA연구분석' / 'Article' / 'figure'
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     def save(fig, fname):

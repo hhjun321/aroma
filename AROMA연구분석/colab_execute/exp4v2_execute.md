@@ -62,6 +62,8 @@ CASDA 논문의 핵심 주장은 "합성 데이터 품질이 다운스트림 성
 |---------|---------|------|
 | `--epochs 50` | `--baseline_epochs 50` | baseline (real 이미지) 학습 epoch 수 |
 | (없음) | `--finetune_epochs 30` | random / aroma fine-tuning epoch 수 |
+| `--val_frac` 기본값 | 0.5 → 0.3 | train≈64/val≈28 (n=92 기준, 이론적 최적) |
+| `--max_synth_per_ds` | (신규) | synth:real 비율 제어. None=제한없음, 권장 128~192 (real-train의 2~3배) |
 
 `--epochs`는 더 이상 사용하지 않는다.
 
@@ -83,6 +85,17 @@ YOLO 학습 데이터셋(real 이미지 기반 GT mask bbox 추출 결과)을 Dr
 | 첫 실행 | YOLO dataset 빌드 후 지정 경로에 저장 |
 | 이후 실행 | 캐시가 존재하면 GT mask bbox 추출 단계를 건너뛰어 빠르게 시작 |
 | 권장 조합 | `--resume`과 함께 사용하면 최대 효율 (완료된 조건 skip + bbox 재추출 skip) |
+
+### `--max_synth_per_ds` (선택)
+
+synth:real 비율을 제어한다. 기본값 None(제한 없음 = 전량 사용).
+
+| 항목 | 내용 |
+|------|------|
+| 타입 | 선택 인자 (생략 시 기존 동작 = synth 전량 사용) |
+| 이론적 근거 | copy-paste augmentation 연구 권장 synth:real = 1:1 ~ 3:1. 현재 600:46=13:1은 과잉 주입으로 precision 붕괴(0.19) 유발 |
+| 권장값 | real-train 수의 2~3배. val_frac=0.3 시 real-train≈64 → **128~192** |
+| 효과 | 재합성 없이 비율만 조정해 즉시 precision 회복 가능 |
 
 ### Local image cache (자동)
 
@@ -153,7 +166,8 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
     --output_dir           $EXP4V2_OUT \
     --seed 42 \
     --baseline_epochs 30 \
-    --finetune_epochs 20
+    --finetune_epochs 20 \
+    --max_synth_per_ds 128
 ```
 
 > **소요 시간**: Colab Pro A100 기준 약 5-10분 (mvtec_cable 단독, 3조건).

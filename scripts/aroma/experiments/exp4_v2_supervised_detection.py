@@ -1363,6 +1363,7 @@ def _run_detection_mode(
     baseline_epochs: int = 50,
     finetune_epochs: int = 30,
     val_frac: float = 0.5,
+    max_synth_per_ds: Optional[int] = None,
     imgsz: int = 256,
     seed: int = 42,
     existing_results: Optional[Dict[str, Any]] = None,
@@ -1414,6 +1415,18 @@ def _run_detection_mode(
             "random":   _load_synth_annotations(random_synthetic_dir, ds),
             "aroma":    _load_synth_annotations(aroma_synthetic_dir, ds),
         }
+
+        # Subsample synth annotations per condition if max_synth_per_ds is set.
+        if max_synth_per_ds is not None:
+            for cond in ("random", "aroma"):
+                anns = synth_by_cond.get(cond, [])
+                if len(anns) > max_synth_per_ds:
+                    rng_sub = random.Random(seed)
+                    synth_by_cond[cond] = rng_sub.sample(anns, max_synth_per_ds)
+                    logger.info(
+                        "  [SubSample] %s/%s: %d → %d",
+                        ds, cond, len(anns), max_synth_per_ds,
+                    )
 
         # Local cache: stage Drive images to /tmp for I/O acceleration.
         # Linux/Colab only (os.name != "nt"). Rewrites lists + synth paths to /tmp.
@@ -1705,6 +1718,7 @@ def run(
     baseline_epochs: int = 50,
     finetune_epochs: int = 30,
     val_frac: float = 0.5,
+    max_synth_per_ds: Optional[int] = None,
     imgsz: int = 256,
     seed: int = 42,
     resume: bool = False,
@@ -1744,6 +1758,7 @@ def run(
         baseline_epochs=baseline_epochs,
         finetune_epochs=finetune_epochs,
         val_frac=val_frac,
+        max_synth_per_ds=max_synth_per_ds,
         imgsz=imgsz,
         seed=seed,
         existing_results=existing_results,
@@ -1812,8 +1827,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="baseline(real-only) 학습 epoch (default: 50)")
     p.add_argument("--finetune_epochs", type=int, default=30,
                    help="random/aroma finetune epoch (default: 30)")
-    p.add_argument("--val_frac", type=float, default=0.5,
-                   help="real defect 중 val 비율 (나머지는 train, default: 0.5)")
+    p.add_argument("--val_frac", type=float, default=0.3,
+                   help="real defect 중 val 비율 (나머지는 train, default: 0.3)")
+    p.add_argument(
+        "--max_synth_per_ds", type=int, default=None,
+        help="데이터셋·조건당 synth annotation 최대 사용 수. None=제한 없음(기본). "
+             "지정 시 random.sample로 subsampling (seed 적용).",
+    )
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
     p.add_argument("--seed",   type=int, default=42)
@@ -1852,6 +1872,7 @@ def main(argv=None) -> None:
         baseline_epochs=args.baseline_epochs,
         finetune_epochs=args.finetune_epochs,
         val_frac=args.val_frac,
+        max_synth_per_ds=args.max_synth_per_ds,
         imgsz=args.imgsz,
         seed=args.seed,
         resume=args.resume,

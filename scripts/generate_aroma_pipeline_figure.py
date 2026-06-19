@@ -8,7 +8,7 @@ synthetic-defect augmentation pipeline, from multi-domain datasets through
 the seven processing stages to the downstream anomaly-detection models.
 
 Output:
-    D:\\project\\aroma\\AROMA연구분析\\Article\\figure\\[figure2] aroma_pipeline.png
+    D:\\project\\aroma\\AROMA연구분석\\Article\\figure\\[figure2] aroma_pipeline.png
 """
 
 import os
