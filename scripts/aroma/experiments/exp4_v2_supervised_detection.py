@@ -937,6 +937,7 @@ def _validate_real_cache(
     min_area: int,
     val_frac: float,
     split_seed: int,
+    n_source_defects: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return parsed meta dict if cache valid + params match, else None."""
     meta_path = cache_root / "meta.json"
@@ -956,6 +957,11 @@ def _validate_real_cache(
     if meta.get("split_seed") != split_seed:
         return None
     if int(meta.get("n_labeled", 0)) <= 0:
+        return None
+    # Invalidate if source defect image count changed since cache was built.
+    # Old caches without this field are treated as stale (force rebuild once).
+    cached_n = meta.get("n_source_defects")
+    if cached_n is None or (n_source_defects is not None and int(cached_n) != n_source_defects):
         return None
 
     # structural check: train/val non-empty, every image has sibling label
@@ -1013,8 +1019,10 @@ def _build_or_load_real_yolo_dataset(
     cache_root = Path(cache_dir) / ds_key / "real" if use_cache else None
 
     # --- CACHE HIT ---
+    n_source_defects = sum(len(v) for v in defect_splits.values())
     if use_cache and cache_root is not None:
-        meta = _validate_real_cache(cache_root, min_area, val_frac, split_seed)
+        meta = _validate_real_cache(cache_root, min_area, val_frac, split_seed,
+                                    n_source_defects=n_source_defects)
         if meta is not None:
             result: Dict[str, Tuple[List[str], List[str], int]] = {}
             for split in ("train", "val", "test"):
@@ -1085,6 +1093,7 @@ def _build_or_load_real_yolo_dataset(
             "splits": per_split_meta,
             "n_images": sum(v["n_images"] for v in per_split_meta.values()),
             "n_labeled": total,
+            "n_source_defects": n_source_defects,
             "min_area": min_area,
             "val_frac": val_frac,
             "split_seed": split_seed,
