@@ -1,0 +1,93 @@
+{
+  "mci": 0.47764227642276424,
+  "cci": 0.3172105496275733,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.05888097723776581,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": -1.4428232973175175e-12,
+      "valley_count": 10.0,
+      "class_diversity": 4.0,
+      "inv_silhouette": 1.0
+    },
+    "normalized": {
+      "entropy": 0.0,
+      "valley_count": 0.24390243902439024,
+      "class_diversity": 0.6666666666666667,
+      "inv_silhouette": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.0
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.671763435515602,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.010370987759024489,
+      "orient_variance": 0.5649155358131951
+    },
+    "normalized": {
+      "texture_entropy": 0.33397042943945027,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.010370987759024489,
+      "orient_variance": 0.3530722098832469
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 54528
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.3054802528881476,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3643612301259134,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.1992843430036796,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.008335282627139506,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_transistor",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

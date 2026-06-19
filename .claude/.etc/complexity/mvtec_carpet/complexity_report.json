@@ -1,0 +1,101 @@
+{
+  "mci": 0.6705492770398183,
+  "cci": 0.23338006391987987,
+  "morphology_policy": "hierarchical",
+  "context_policy": "gmm",
+  "stability_margin": 0.013141462049219121,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 1.4894368577410209,
+      "valley_count": 22.0,
+      "class_diversity": 4.992483236984163,
+      "inv_silhouette": 1.0
+    },
+    "normalized": {
+      "entropy": 0.3723592144352552,
+      "valley_count": 0.5365853658536586,
+      "class_diversity": 0.773252527870359,
+      "inv_silhouette": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": -0.17928956015289
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.8903659384096527,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.0005226805348479063,
+      "orient_variance": 0.0004372182638295973
+    },
+    "normalized": {
+      "texture_entropy": 0.3612957423012066,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.0005226805348479063,
+      "orient_variance": 0.0002732614148934983
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 71680
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu",
+      "hierarchical"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.40172947610805204,
+      "stability": 0.40671455263995754,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3437338265016814,
+      "axis": "morphology"
+    },
+    {
+      "policy": "hierarchical",
+      "silhouette": 0.41487093815727116,
+      "stability": 0.41487093815727116,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.17968239720259757,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.11906653581158733,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_carpet",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

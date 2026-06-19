@@ -1,0 +1,93 @@
+{
+  "mci": 0.5248292233792043,
+  "cci": 0.450743678313563,
+  "morphology_policy": "gmm",
+  "context_policy": "gmm",
+  "stability_margin": 0.15848459492738454,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.228621865318292,
+      "valley_count": 29.0,
+      "class_diversity": 1.9031141162555836,
+      "inv_silhouette": 0.5253903298848901
+    },
+    "normalized": {
+      "entropy": 0.557155466329573,
+      "valley_count": 0.7073170731707317,
+      "class_diversity": 0.3094540241316226,
+      "inv_silhouette": 0.5253903298848901
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.47460967011510996
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 1.7427854738669402,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.013697957592312963,
+      "orient_variance": 2.2041820245556325
+    },
+    "normalized": {
+      "texture_entropy": 0.21784818423336752,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.013697957592312963,
+      "orient_variance": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 6416
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.4716806231711866,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.31319602824380205,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.41133822242448426,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.13861583774904565,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/isp_LSM_2",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

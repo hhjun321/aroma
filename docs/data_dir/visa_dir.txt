@@ -1,0 +1,86 @@
+/content/drive/MyDrive/data/Aroma/visa
+├── candle
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── capsules
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── cashew
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── chewinggum
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── fryum
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── macaroni1
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── macaroni2
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── pcb1
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── pcb2
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── pcb3
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── pcb4
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+├── pipe_fryum
+│   └── Data
+│       ├── Images
+│       │   ├── Anomaly
+│       │   └── Normal
+│       └── Masks
+│           └── Anomaly
+└── split_csv

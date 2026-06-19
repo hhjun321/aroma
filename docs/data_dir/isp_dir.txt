@@ -1,0 +1,49 @@
+/content/drive/MyDrive/data/Aroma/isp
+└── unsupervised
+    ├── ASM
+    │   ├── ground_truth
+    │   │   ├── area
+    │   │   └── points
+    │   ├── test
+    │   │   ├── area
+    │   │   ├── good
+    │   │   └── points
+    │   └── train
+    │       └── good
+    ├── configs
+    │   ├── ASM
+    │   │   ├── DDAD
+    │   │   ├── Efficient_AD
+    │   │   ├── GLASS
+    │   │   └── Uflow
+    │   ├── LSM_1
+    │   │   ├── DDAD
+    │   │   ├── Efficient_AD
+    │   │   ├── GLASS
+    │   │   └── Uflow
+    │   └── LSM_2
+    │       ├── DDAD
+    │       ├── Efficient_AD
+    │       ├── GLASS
+    │       └── Uflow
+    ├── LSM_1
+    │   ├── ground_truth
+    │   │   ├── area
+    │   │   └── points
+    │   ├── test
+    │   │   ├── area
+    │   │   ├── good
+    │   │   └── points
+    │   └── train
+    │       ├── good
+    │       └── good_reduced
+    └── LSM_2
+        ├── ground_truth
+        │   ├── area
+        │   └── points
+        ├── test
+        │   ├── area
+        │   ├── good
+        │   └── points
+        └── train
+            └── good

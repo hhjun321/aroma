@@ -1,0 +1,95 @@
+{
+  "mci": 0.43195802492952323,
+  "cci": 0.25502168760850097,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.04431107712111587,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.1380277887914163,
+      "valley_count": 25.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.5835690549592634
+    },
+    "normalized": {
+      "entropy": 0.5345069471978541,
+      "valley_count": 0.6097560975609756,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.5835690549592634
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.41643094504073663
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.8729582153168236,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.005292057360313973,
+      "orient_variance": 0.13479415156882465
+    },
+    "normalized": {
+      "texture_entropy": 0.35911977691460295,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.005292057360313973,
+      "orient_variance": 0.0842463447305154
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 162000
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.3419140981730033,
+      "stability": 0.3521689679737272,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.38622517529411915,
+      "stability": 0.38622517529411915,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.28490755678552465,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.1061070311783952,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/visa_pipe_fryum",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

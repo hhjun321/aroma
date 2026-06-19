@@ -1,0 +1,103 @@
+{
+  "mci": 0.6636257522606039,
+  "cci": 0.2437546919520179,
+  "morphology_policy": "hierarchical",
+  "context_policy": "gmm",
+  "stability_margin": 0.03672067046352823,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 1.0714085417227595,
+      "valley_count": 16.0,
+      "class_diversity": 7.940450790550068,
+      "inv_silhouette": 1.0
+    },
+    "normalized": {
+      "entropy": 0.26785213543068986,
+      "valley_count": 0.3902439024390244,
+      "class_diversity": 0.9964069711727016,
+      "inv_silhouette": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": -0.17930995451798135
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.825133308707158,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.0013173177950757484,
+      "orient_variance": 0.07860994399364751
+    },
+    "normalized": {
+      "texture_entropy": 0.35314166358839477,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.0013173177950757484,
+      "orient_variance": 0.049131214996029696
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 57344
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu",
+      "hierarchical"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.40182088959019113,
+      "stability": 0.3771117449419722,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3785691191931971,
+      "axis": "morphology"
+    },
+    {
+      "policy": "hierarchical",
+      "silhouette": 0.43854156005371936,
+      "stability": 0.43854156005371936,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.10395972469160387,
+      "stability": 0.10197935727277034,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.08870161402444132,
+      "stability": 0.08258705534618699,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_cable",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

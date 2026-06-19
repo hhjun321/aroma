@@ -1,0 +1,93 @@
+{
+  "mci": 0.5994036209824548,
+  "cci": 0.4289687182444956,
+  "morphology_policy": "gmm",
+  "context_policy": "gmm",
+  "stability_margin": 0.16337938185344897,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 1.3649085754250327,
+      "valley_count": 16.0,
+      "class_diversity": 3.9956502699939245,
+      "inv_silhouette": 1.0
+    },
+    "normalized": {
+      "entropy": 0.3412271438562582,
+      "valley_count": 0.3902439024390244,
+      "class_diversity": 0.6661434376345365,
+      "inv_silhouette": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": -0.054130390740811815
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.1640153152401633,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.018613967665262732,
+      "orient_variance": 1.3685286711666047
+    },
+    "normalized": {
+      "texture_entropy": 0.2705019144050204,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.018613967665262732,
+      "orient_variance": 0.8553304194791279
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 22000
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.48269909846725095,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.319319716613802,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.24923953792374137,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.1530420292826392,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_metal_nut",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

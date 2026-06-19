@@ -1,0 +1,95 @@
+{
+  "mci": 0.3539518421995384,
+  "cci": 0.2490843341994102,
+  "morphology_policy": "gmm",
+  "context_policy": "gmm",
+  "stability_margin": 0.03333531578273724,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.1192238132539294,
+      "valley_count": 13.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.568928244752964
+    },
+    "normalized": {
+      "entropy": 0.5298059533134823,
+      "valley_count": 0.3170731707317073,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.568928244752964
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.43107175524703595
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 3.2203910300184253,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.019535500951561747,
+      "orient_variance": 0.004519017064327233
+    },
+    "normalized": {
+      "texture_entropy": 0.40254887875230316,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.019535500951561747,
+      "orient_variance": 0.0028243856652045204
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 57856
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.3187608572162228,
+      "stability": 0.3298052029605223,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.2854255414334856,
+      "stability": 0.2854255414334856,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.4036168715197432,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.34206345356777895,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/visa_pcb",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

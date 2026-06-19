@@ -1,0 +1,95 @@
+{
+  "mci": 0.4272153656330523,
+  "cci": 0.28133463624899063,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.01381895768247049,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.1875972665329813,
+      "valley_count": 20.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.6741572678501834
+    },
+    "normalized": {
+      "entropy": 0.5468993166332453,
+      "valley_count": 0.4878048780487805,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.6741572678501834
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.3258427321498166
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.685029308453815,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.004834127820059224,
+      "orient_variance": 0.34151549150496796
+    },
+    "normalized": {
+      "texture_entropy": 0.3356286635567269,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.004834127820059224,
+      "orient_variance": 0.21344718219060496
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 154020
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.2927253742268316,
+      "stability": 0.26920149916576497,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3065443319093021,
+      "stability": 0.3065443319093021,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.17448004348990667,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.02407677758899238,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/visa_chewinggum",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

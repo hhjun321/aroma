@@ -1,0 +1,95 @@
+{
+  "mci": 0.5620494910908337,
+  "cci": 0.31554884187113735,
+  "morphology_policy": "otsu",
+  "context_policy": "percentile",
+  "stability_margin": 0.03772636496687648,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 1.156178730484592,
+      "valley_count": 12.0,
+      "class_diversity": 3.9983674579764004,
+      "inv_silhouette": 1.0
+    },
+    "normalized": {
+      "entropy": 0.289044682621148,
+      "valley_count": 0.2926829268292683,
+      "class_diversity": 0.6664703549129185,
+      "inv_silhouette": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": -0.10508128997418348
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.1133647750082636,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.013222561601098425,
+      "orient_variance": 0.6613978201261547
+    },
+    "normalized": {
+      "texture_entropy": 0.26417059687603295,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.013222561601098425,
+      "orient_variance": 0.41337363757884665
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 100096
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.4438399248205594,
+      "stability": 0.40055569527006707,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.4061135598536829,
+      "stability": 0.4061135598536829,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.2191802957479611,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.27854338946886054,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_hazelnut",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "mci": 0.38343350691708517,
+  "cci": 0.24829458281527556,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.09152130119645385,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 1.9230689115931692,
+      "valley_count": 15.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.687113141233463
+    },
+    "normalized": {
+      "entropy": 0.4807672278982923,
+      "valley_count": 0.36585365853658536,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.687113141233463
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.312886858766537
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 3.252771672645451,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.008195483236557655,
+      "orient_variance": 0.011132508024466818
+    },
+    "normalized": {
+      "texture_entropy": 0.40659645908068137,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.008195483236557655,
+      "orient_variance": 0.006957817515291761
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 28800
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.23449305490685435,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3260143561033082,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.30509790735815767,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.09005110068594453,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/visa_cashew",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

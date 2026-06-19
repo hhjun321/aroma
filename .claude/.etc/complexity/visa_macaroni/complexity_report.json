@@ -1,0 +1,97 @@
+{
+  "mci": 0.4046836088724429,
+  "cci": 0.23920670411649508,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.011647220725689522,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.0814395624319415,
+      "valley_count": 19.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.634959910735445
+    },
+    "normalized": {
+      "entropy": 0.5203598906079854,
+      "valley_count": 0.4634146341463415,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.634959910735445
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.365040089264555
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.982441329658076,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.0031638105843820596,
+      "orient_variance": 0.015086829193227702
+    },
+    "normalized": {
+      "texture_entropy": 0.3728051662072595,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.0031638105843820596,
+      "orient_variance": 0.009429268245767314
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 310500
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.31761140872151805,
+      "stability": 0.32441587316769727,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3292586294472076,
+      "stability": 0.3292586294472076,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.12024739870223687,
+      "stability": 0.10798070591589473,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.09841134492309767,
+      "stability": 0.09925639735823114,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/visa_macaroni",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

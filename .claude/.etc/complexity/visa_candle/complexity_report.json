@@ -1,0 +1,93 @@
+{
+  "mci": 0.4277176538953491,
+  "cci": 0.2469612710193174,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.14630267339851355,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 1.9984815854730982,
+      "valley_count": 16.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.8210063167740974
+    },
+    "normalized": {
+      "entropy": 0.49962039636827454,
+      "valley_count": 0.3902439024390244,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.8210063167740974
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.17899368322590262
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 3.104204276093308,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.010839781912471178,
+      "orient_variance": 0.02808191395930171
+    },
+    "normalized": {
+      "texture_entropy": 0.3880255345116635,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.010839781912471178,
+      "orient_variance": 0.017551196224563567
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 57600
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.17629404911268648,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.32259672251120003,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.3003484552598373,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.21609925414511158,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/visa_candle",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

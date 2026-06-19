@@ -1,0 +1,95 @@
+{
+  "mci": 0.44321814621236244,
+  "cci": 0.43040829941197256,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.0026106512469642462,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.202461150168516,
+      "valley_count": 13.0,
+      "class_diversity": 1.9990028529305908,
+      "inv_silhouette": 0.5720906162206233
+    },
+    "normalized": {
+      "entropy": 0.550615287542129,
+      "valley_count": 0.3170731707317073,
+      "class_diversity": 0.33309351035499035,
+      "inv_silhouette": 0.5720906162206233
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.4279093837793767
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.403466146322292,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.014457061068558392,
+      "orient_variance": 1.3365028749767582
+    },
+    "normalized": {
+      "texture_entropy": 0.3004332682902865,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.014457061068558392,
+      "orient_variance": 0.8353142968604739
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 58848
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.4245967866439222,
+      "stability": 0.40609394235911644,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.42198613539695795,
+      "stability": 0.42198613539695795,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.49957390398451307,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.1073214610558794,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/isp_LSM_1",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

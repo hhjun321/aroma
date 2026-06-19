@@ -1,0 +1,66 @@
+import torch
+import numpy as np
+from PIL import Image
+from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel, DDIMScheduler
+
+def run_aroma_latent_fusion(
+    base_image_path, 
+    mask_image_path, 
+    seed_edge_path, 
+    metadata, 
+    device="cuda"
+):
+    # 1. 모델 로드 (Inpainting + ControlNet 결합 구조)
+    # ControlNet은 Stage 2의 기하학적 형태(Edge)를 고정하는 역할
+    controlnet = ControlNetModel.from_pretrained(
+        "lllyasviel/sd-controlnet-canny", torch_dtype=torch.float16
+    )
+    pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained(
+        "runwayml/stable-diffusion-inpainting",
+        controlnet=controlnet,
+        torch_dtype=torch.float16
+    ).to(device)
+
+    # 스케줄러 설정 (결정론적 생성을 위해 DDIM 권장)
+    pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+
+    # 2. 데이터 준비
+    init_image = Image.open(base_image_path).convert("RGB").resize((512, 512))
+    mask_image = Image.open(mask_image_path).convert("L").resize((512, 512))
+    control_image = Image.open(seed_edge_path).convert("L").resize((512, 512)) # Stage 2 Edge
+
+    # 3. Stage 1b 메타데이터를 활용한 프롬프트 생성 (Prompt Generator)
+    # CASDA 전략 B의 계승 및 강화
+    prompt = (
+        f"A professional industrial photo of a {metadata['category']} defect, "
+        f"with {metadata['linearity']:.2f} linearity and {metadata['solidity']:.2f} solidity, "
+        f"highly detailed texture, sharp edges, 8k resolution, seamless integration"
+    )
+    negative_prompt = "blurry, low quality, color bleeding, shadow artifacts, unrealistic texture"
+
+    # 4. Latent-level Fusion 실행
+    # 이 함수 내부에서 각 Denoising Step마다 마스크를 기준으로 Latent를 융합함
+    generator = torch.Generator(device=device).manual_seed(42)
+    
+    result_image = pipe(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        image=init_image,
+        mask_image=mask_image,
+        control_image=control_image,
+        num_inference_steps=30,      # Denoising 스텝 수
+        strength=0.8,                # 원본 배경 유지 강도 (0.8이면 배경의 20%는 유지하며 생성)
+        guidance_scale=7.5,
+        generator=generator
+    ).images[0]
+
+    return result_image
+
+# --- 실행 예시 ---
+# metadata = {
+#     "category": "metal_scratch",
+#     "linearity": 0.95,
+#     "solidity": 0.12
+# }
+# final_output = run_aroma_latent_fusion("good.png", "roi_mask.png", "seed_edge.png", metadata)
+# final_output.save("aroma_advanced_fusion.png")

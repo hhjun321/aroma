@@ -1,0 +1,93 @@
+{
+  "mci": 0.292671174371821,
+  "cci": 0.4508743227301659,
+  "morphology_policy": "gmm",
+  "context_policy": "gmm",
+  "stability_margin": 0.2024442201589337,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.142740155325068,
+      "valley_count": 3.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.5618289269487
+    },
+    "normalized": {
+      "entropy": 0.535685038831267,
+      "valley_count": 0.07317073170731707,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.5618289269487
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.43817107305129993
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 1.509714817354255,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.043354367322810346,
+      "orient_variance": 2.2725218300517858
+    },
+    "normalized": {
+      "texture_entropy": 0.18871435216928187,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.043354367322810346,
+      "orient_variance": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 15360
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.48013398218075565,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.27768976202182194,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.35721871892004564,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.20086550240215217,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_toothbrush",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

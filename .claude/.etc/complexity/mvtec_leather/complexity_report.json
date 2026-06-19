@@ -1,0 +1,101 @@
+{
+  "mci": 0.6451291762482108,
+  "cci": 0.2361340092465775,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.03348828628441314,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 0.8865408928192045,
+      "valley_count": 24.0,
+      "class_diversity": 4.995215379905247,
+      "inv_silhouette": 1.0
+    },
+    "normalized": {
+      "entropy": 0.2216352232048011,
+      "valley_count": 0.5853658536585366,
+      "class_diversity": 0.7735156281295051,
+      "inv_silhouette": 1.0
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": -0.002957582887176575
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.9809964477806346,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.000197392288996549,
+      "orient_variance": 0.0004568276738602665
+    },
+    "normalized": {
+      "texture_entropy": 0.3726245559725793,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.000197392288996549,
+      "orient_variance": 0.00028551729616266655
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 62720
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu",
+      "hierarchical"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.35391747062531287,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.4767977577148772,
+      "stability": 0.47679775771487715,
+      "axis": "morphology"
+    },
+    {
+      "policy": "hierarchical",
+      "silhouette": 0.44330947143046406,
+      "stability": 0.44330947143046406,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.16488492929293327,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.07638749893787879,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mvtec_leather",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}
