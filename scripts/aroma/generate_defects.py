@@ -130,7 +130,7 @@ def _alpha_composite(
         arr = np.array(msk, dtype=np.float32) / 255.0
         arr = _gauss(arr, sigma=feather_px)
         arr = np.clip(arr * 255, 0, 255).astype(np.uint8)
-        msk = PILImage.fromarray(arr, mode="L")
+        msk = PILImage.fromarray(arr)
 
     # Resize crop/mask to match if different size
     if crop.size != msk.size:
@@ -207,7 +207,7 @@ def copy_paste_synthesis(
         Y, X = np.ogrid[:ch, :cw]
         ellipse = ((X - cx) ** 2 / (rx ** 2) + (Y - cy) ** 2 / (ry ** 2)) <= 1.0
         mask_arr[ellipse] = 255
-        mask = PILImage.fromarray(mask_arr, mode="L")
+        mask = PILImage.fromarray(mask_arr)
 
         defect_rgba = defect_img.convert("RGBA")
         position = _random_paste_position(normal_img.size, defect_rgba.size, rng)
