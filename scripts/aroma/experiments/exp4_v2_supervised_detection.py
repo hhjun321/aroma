@@ -1137,6 +1137,7 @@ def _run_yolo_condition(
     imgsz: int = 256,
     seed: int = 42,
     device: int = 0,
+    patience: int = 0,
 ) -> Dict[str, Any]:
     """
     하나의 (model, condition) 조합을 학습/평가.
@@ -1267,6 +1268,7 @@ def _run_yolo_condition(
                     save=do_save,    # baseline: True → best.pt written
                     device=device,
                     exist_ok=True,
+                    patience=patience,  # 0=disabled (default), N>0=EarlyStopping
                 )
 
             logger.info(
@@ -1362,6 +1364,7 @@ def _run_detection_mode(
     output_path: Optional[str] = None,
     yolo_cache_dir: Optional[str] = None,
     local_cache: bool = True,
+    patience: int = 0,
 ) -> Dict[str, Any]:
     """
     Iterate datasets x models x conditions (COCO pretrained start).
@@ -1547,6 +1550,7 @@ def _run_detection_mode(
                         imgsz=imgsz,
                         seed=seed,
                         device=device,
+                        patience=patience,
                     )
                     model_results[cond] = res
                     logger.info(
@@ -1680,6 +1684,7 @@ def run(
     resume: bool = False,
     yolo_cache_dir: Optional[str] = None,
     local_cache: bool = True,
+    patience: int = 0,
 ) -> Dict[str, Any]:
     if not _CV2_AVAILABLE:
         logger.error("OpenCV (cv2) not installed. Run: pip install opencv-python-headless")
@@ -1721,6 +1726,7 @@ def run(
         output_path=output_path,
         yolo_cache_dir=yolo_cache_dir,
         local_cache=local_cache,
+        patience=patience,
     )
 
     save_json(results, output_path)
@@ -1796,6 +1802,14 @@ def _parse_args(argv=None) -> argparse.Namespace:
             "지정 시 --max_synth_per_ds 무시. None=비활성(기본)."
         ),
     )
+    p.add_argument(
+        "--patience", type=int, default=0,
+        help=(
+            "YOLOv8 EarlyStopping patience (default: 0=비활성). "
+            "best mAP50-95 갱신 없이 N epoch 경과 시 훈련 조기 종료. "
+            "권장: 10~20 (epochs=50 기준). 0=끝까지 훈련."
+        ),
+    )
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
     p.add_argument("--seed",   type=int, default=42)
@@ -1840,6 +1854,7 @@ def main(argv=None) -> None:
         resume=args.resume,
         yolo_cache_dir=args.yolo_cache_dir,
         local_cache=not args.no_local_cache,
+        patience=args.patience,
     )
     status = result.get("status", "unknown")
     n_ds   = len(result.get("results", {}))
