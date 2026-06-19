@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (baseline-then-finetune)
+AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (COCO pretrained start)
 
 CASDA-style 재설계: 세 조건 모두 "real labeled defect"를 공통 토대로 학습한다.
 
 | 조건     | 시작 weights         | 학습 데이터                                   |
 |----------|----------------------|-----------------------------------------------|
 | baseline | COCO (yolov8n.pt)    | real labeled defect (train split) → best.pt 저장 |
-| random   | baseline best.pt     | real labeled defect + random synth (finetune) |
-| aroma    | baseline best.pt     | real labeled defect + aroma synth  (finetune) |
+| random   | COCO (yolov8n.pt)    | real labeled defect + random synth (처음부터) |
+| aroma    | COCO (yolov8n.pt)    | real labeled defect + aroma synth  (처음부터) |
 
 핵심 변경:
 - real defect 이미지를 train/val 로 seeded split (이전엔 전부 val) → baseline 이
   real positive 를 학습하고, val 은 disjoint real-only 로 유지.
 - synthetic 은 random/aroma 에서만 real 위에 "추가"되는 데이터.
 - baseline 은 COCO 에서 시작 + save=True 로 best.pt 영속화.
-  random/aroma 는 그 best.pt 를 YOLO(best.pt) 로 로드해 finetune.
+  random/aroma 도 COCO 에서 시작, real+synth 처음부터 학습.
 
 Synthetic label 유도:
 - composite(synth) 와 background(normal) 의 image diff → threshold → contour bbox.
@@ -44,7 +44,6 @@ Usage (Colab):
         --yolo_cache_dir       $EXP4_OUT/yolo_cache \\
         --seed 42 \\
         --baseline_epochs 50 \\
-        --finetune_epochs 30 \\
         --val_frac 0.5 \\
         --resume
 """
@@ -1121,7 +1120,7 @@ def _build_or_load_real_yolo_dataset(
 
 
 # ---------------------------------------------------------------------------
-# Per-condition YOLO runner (baseline-then-finetune)
+# Per-condition YOLO runner (COCO pretrained start)
 # ---------------------------------------------------------------------------
 
 def _run_yolo_condition(
@@ -1134,9 +1133,7 @@ def _run_yolo_condition(
     mask_map: Dict[str, str],
     checkpoint_dir: str,
     real_sets: Dict[str, Tuple[List[str], List[str], int]],
-    baseline_weights_path: Optional[str] = None,
     baseline_epochs: int = 50,
-    finetune_epochs: int = 30,
     imgsz: int = 256,
     seed: int = 42,
     device: int = 0,
@@ -1147,8 +1144,8 @@ def _run_yolo_condition(
     모든 조건이 real labeled defect (train split)를 공통으로 학습한다.
       baseline:        real labeled defect 만 (+ 약간의 real normal background) →
                        COCO 에서 시작, save=True 로 best.pt 영속화.
-      random / aroma:  real labeled defect + synth (additive) → baseline best.pt
-                       에서 finetune, save=False.
+      random / aroma:  real labeled defect + synth → COCO 에서 처음부터 학습,
+                       save=False.
 
     Returns {map50, map50_95, precision, recall, n_train, n_real_train,
              n_synth_train, weights_path(baseline only)}.
@@ -1193,13 +1190,13 @@ def _run_yolo_condition(
             # --- TRAIN: add synthetic (random/aroma only) ---
             n_synth = 0
             if condition != "baseline":
-                # An empty synth set means this finetune would be identical to
+                # An empty synth set means this run would be identical to
                 # baseline (real-only) yet get reported as "random"/"aroma" — a
                 # misleading row. Refuse instead of silently producing it.
                 if not synth_annotations:
                     logger.error(
                         "    %s/%s: no synthetic annotations — refusing to report "
-                        "real-only finetune as '%s'. Check %s annotations.json.",
+                        "real-only run as '%s'. Check %s annotations.json.",
                         model_name, condition, condition, condition,
                     )
                     return {"error": "no_synth_annotations"}
@@ -1248,17 +1245,12 @@ def _run_yolo_condition(
                 epochs = baseline_epochs
                 do_save = True                    # MUST persist best.pt
             else:
-                weights = baseline_weights_path   # finetune source
-                epochs = finetune_epochs
+                # scratch: random/aroma도 COCO에서 시작, real+synth 처음부터 학습
+                weights = f"{model_name}.pt"
+                epochs = baseline_epochs
                 do_save = False
-                if not weights or not Path(weights).exists():
-                    logger.error(
-                        "    %s/%s: baseline weights missing (%s) — cannot finetune",
-                        model_name, condition, weights,
-                    )
-                    return {"error": "baseline_weights_missing"}
 
-            # YOLO("best.pt") loads weights + architecture; .train() = transfer/finetune.
+            # YOLO("{model}.pt") loads COCO pretrained weights; .train() = transfer learning.
             # NOTE: do NOT pass resume=True (would continue the same run's epoch counter).
             model = YOLO(weights)
 
@@ -1361,7 +1353,6 @@ def _run_detection_mode(
     real_data_dir: str,
     output_dir: str,
     baseline_epochs: int = 50,
-    finetune_epochs: int = 30,
     val_frac: float = 0.5,
     max_synth_per_ds: Optional[int] = None,
     imgsz: int = 256,
@@ -1372,13 +1363,13 @@ def _run_detection_mode(
     local_cache: bool = True,
 ) -> Dict[str, Any]:
     """
-    Iterate datasets x models x conditions (baseline-then-finetune).
+    Iterate datasets x models x conditions (COCO pretrained start).
     Output: {dataset: {model: {condition: {map50, map50_95, precision, recall,
              n_train, n_real_train, n_synth_train, weights_path?}}}}
 
     CRITICAL:
     - real defect 는 seeded split 으로 train/val 분리 (disjoint). Val = real only.
-    - baseline 을 항상 먼저 학습해 best.pt 를 만들고, random/aroma 가 그걸 finetune.
+    - baseline 을 항상 먼저 학습. random/aroma 도 COCO 에서 독립적으로 처음부터 학습.
     - checkpoint 는 {output_dir}/{ds}/{model}/baseline/weights/best.pt 에 영속.
     """
     device = _check_gpu()
@@ -1474,13 +1465,11 @@ def _run_detection_mode(
         for model_name in model_keys:
             model_results: Dict[str, Any] = dict(ds_results.get(model_name, {}))
 
-            # FORCE baseline first, then the rest (so finetune always has weights)
+            # Run baseline first for result ordering; random/aroma are independent
             ordered = (
                 [c for c in condition_keys if c == "baseline"]
                 + [c for c in condition_keys if c != "baseline"]
             )
-
-            baseline_weights: Optional[str] = None  # per (ds, model)
 
             def _save_incremental() -> None:
                 if not output_path:
@@ -1491,37 +1480,6 @@ def _run_detection_mode(
                     save_json(results, output_path)
                 except Exception as _e:
                     logger.warning("Incremental save failed: %s", _e)
-
-            def _run_baseline() -> Dict[str, Any]:
-                """Train baseline (real-only) and return its result dict."""
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                gc.collect()
-                logger.info(
-                    "    [baseline] %s / %s  real_train=%d",
-                    ds, model_name, len(train_defect),
-                )
-                return _run_yolo_condition(
-                    model_name=model_name,
-                    condition="baseline",
-                    synth_annotations=[],
-                    train_defect_paths=train_defect,
-                    train_normal_paths=train_normal,
-                    val_defect_paths=val_defect,
-                    mask_map=mask_map,
-                    checkpoint_dir=str(Path(ckpt_base) / model_name),
-                    real_sets=real_sets,
-                    baseline_weights_path=None,
-                    baseline_epochs=baseline_epochs,
-                    finetune_epochs=finetune_epochs,
-                    imgsz=imgsz,
-                    seed=seed,
-                    device=device,
-                )
 
             for cond in ordered:
                 if cond not in synth_by_cond:
@@ -1536,40 +1494,7 @@ def _run_detection_mode(
                         "  RESUME skip %s / %s / %s  (cached map50=%s)",
                         ds, model_name, cond, _cached.get("map50"),
                     )
-                    if cond == "baseline":
-                        # recover weights path for downstream finetune
-                        baseline_weights = _cached.get("weights_path")
                     continue
-
-                # If a finetune cond is requested but we have no usable baseline
-                # weights on disk, run baseline implicitly first.
-                if cond != "baseline" and not (
-                    baseline_weights and Path(baseline_weights).exists()
-                ):
-                    logger.info(
-                        "  baseline weights missing for %s/%s — running baseline first",
-                        ds, model_name,
-                    )
-                    base_res = _run_baseline()
-                    baseline_weights = base_res.get("weights_path")
-                    if "baseline" in condition_keys:
-                        model_results["baseline"] = base_res
-                        logger.info(
-                            "    map50=%s  map50_95=%s  P=%s  R=%s",
-                            base_res.get("map50"), base_res.get("map50_95"),
-                            base_res.get("precision"), base_res.get("recall"),
-                        )
-                        _save_incremental()
-                    if not (baseline_weights and Path(baseline_weights).exists()):
-                        logger.error(
-                            "  baseline failed to produce weights for %s/%s — "
-                            "skipping finetune conditions",
-                            ds, model_name,
-                        )
-                        # record the failed finetune attempt and move on
-                        model_results[cond] = {"error": "baseline_weights_missing"}
-                        _save_incremental()
-                        continue
 
                 run_idx += 1
                 synth_ann = synth_by_cond[cond]
@@ -1596,16 +1521,11 @@ def _run_detection_mode(
                     mask_map=mask_map,
                     checkpoint_dir=str(Path(ckpt_base) / model_name),
                     real_sets=real_sets,
-                    baseline_weights_path=(None if cond == "baseline" else baseline_weights),
                     baseline_epochs=baseline_epochs,
-                    finetune_epochs=finetune_epochs,
                     imgsz=imgsz,
                     seed=seed,
                     device=device,
                 )
-                if cond == "baseline":
-                    baseline_weights = res.get("weights_path")
-
                 model_results[cond] = res
                 logger.info(
                     "    map50=%s  map50_95=%s  P=%s  R=%s",
@@ -1640,7 +1560,7 @@ def _fmt_delta(x: Dict[str, Any], y: Dict[str, Any]) -> str:
 
 def _build_summary(results: Dict[str, Any]) -> str:
     """
-    Build Markdown summary (baseline-then-finetune).
+    Build Markdown summary (COCO pretrained start).
     Per dataset/model: rows=conditions, cols=metrics.
     Delta section: AROMA − Baseline and AROMA − Random (CASDA-style, pp).
     """
@@ -1649,7 +1569,7 @@ def _build_summary(results: Dict[str, Any]) -> str:
         "",
         "비교: Baseline (real-only) vs Random ROI (real+synth) vs AROMA ROI (real+synth)",
         "모든 조건이 real labeled defect (train split) 위에서 학습.",
-        "baseline: COCO→real-only 학습 후 best.pt 저장. random/aroma: baseline best.pt 에서 finetune.",
+        "baseline: COCO→real-only 학습. random/aroma: COCO에서 real+synth 처음부터 학습.",
         "Val = real defect (GT mask → bbox), train 과 disjoint.",
         "",
     ]
@@ -1716,7 +1636,6 @@ def run(
     real_data_dir: str,
     output_dir: str,
     baseline_epochs: int = 50,
-    finetune_epochs: int = 30,
     val_frac: float = 0.5,
     max_synth_per_ds: Optional[int] = None,
     imgsz: int = 256,
@@ -1756,7 +1675,6 @@ def run(
         real_data_dir=real_data_dir,
         output_dir=output_dir,
         baseline_epochs=baseline_epochs,
-        finetune_epochs=finetune_epochs,
         val_frac=val_frac,
         max_synth_per_ds=max_synth_per_ds,
         imgsz=imgsz,
@@ -1783,7 +1701,7 @@ def run(
 
 def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (baseline-then-finetune)"
+        description="AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (COCO pretrained start)"
     )
     p.add_argument(
         "--model",
@@ -1825,8 +1743,6 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument("--baseline_epochs", type=int, default=50,
                    help="baseline(real-only) 학습 epoch (default: 50)")
-    p.add_argument("--finetune_epochs", type=int, default=30,
-                   help="random/aroma finetune epoch (default: 30)")
     p.add_argument("--val_frac", type=float, default=0.3,
                    help="real defect 중 val 비율 (나머지는 train, default: 0.3)")
     p.add_argument(
@@ -1870,7 +1786,6 @@ def main(argv=None) -> None:
         real_data_dir=args.real_data_dir,
         output_dir=args.output_dir,
         baseline_epochs=args.baseline_epochs,
-        finetune_epochs=args.finetune_epochs,
         val_frac=args.val_frac,
         max_synth_per_ds=args.max_synth_per_ds,
         imgsz=args.imgsz,
