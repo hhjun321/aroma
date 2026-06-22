@@ -2,7 +2,8 @@
 
 **목적**: Random ROI vs AROMA ROI 비교 — YOLOv8 지도학습 기반 결함 검출 성능 비교 (mAP)  
 **런타임**: GPU 필수 (Colab Pro A100 권장)  
-**전제**: Step 3 + Step 4가 4개 데이터셋에서 완료 (`synthetic/`, `synthetic_random/` 존재)
+**전제**: Step 3 + Step 4가 데이터셋에서 완료 (`synthetic/`, `synthetic_random/` 존재)  
+**대상**: GT mask 보유 `mvtec_cable visa_cashew visa_pcb` (3개). ISP는 GT mask 없어 제외 — exp3 unsupervised AD로만 평가
 
 ---
 
@@ -228,15 +229,17 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
 
 ---
 
-## 전체 실행 (4개 데이터셋)
+## 전체 실행 (3개 데이터셋 — GT mask 보유만)
 
-3조건 × 4데이터셋 = 12회 학습. 모든 조건이 독립적으로 COCO에서 출발한다.
+3조건 × 3데이터셋 = 9회 학습. 모든 조건이 독립적으로 COCO에서 출발한다.
+
+> ⚠️ **ISP(isp_LSM_1) 제외**: ISP는 GT 결함 mask가 없어 Otsu fallback이 이미지의 62~85%를 결함으로 잡음 → defect_bbox·val GT 모두 full-image라 supervised detection 부적합. ISP는 **exp3 unsupervised AD(image-level)** 로만 평가한다. exp4v2 대상 = GT mask 보유 `mvtec_cable visa_cashew visa_pcb`.
 
 ```python
 !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
     --model yolov8n \
     --condition all \
-    --dataset_keys isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
+    --dataset_keys mvtec_cable visa_cashew visa_pcb \
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
@@ -248,7 +251,7 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
     --baseline_epochs 300
 ```
 
-> **소요 시간**: Colab Pro A100 기준 약 3-5시간 (12회 학습, epochs=300).  
+> **소요 시간**: Colab Pro A100 기준 약 2-4시간 (9회 학습, epochs=300).  
 > 단일 조건만 실행하려면 `--condition random` 또는 `--condition aroma` 등으로 지정.
 
 ### `--synth_ratio` 사용 예시
@@ -259,7 +262,7 @@ print("EXP4V2_OUT       :", os.environ['EXP4V2_OUT'])
 !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
     --model yolov8n \
     --condition all \
-    --dataset_keys isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
+    --dataset_keys mvtec_cable visa_cashew visa_pcb \
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
@@ -283,7 +286,7 @@ EarlyStopping을 활성화해 불필요한 후반 epoch을 건너뛴다.
 !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
     --model yolov8n \
     --condition all \
-    --dataset_keys isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
+    --dataset_keys mvtec_cable visa_cashew visa_pcb \
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
@@ -308,7 +311,7 @@ EarlyStopping을 활성화해 불필요한 후반 epoch을 건너뛴다.
 !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
     --model yolov8n \
     --condition all \
-    --dataset_keys isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
+    --dataset_keys mvtec_cable visa_cashew visa_pcb \
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \

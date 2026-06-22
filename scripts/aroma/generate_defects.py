@@ -68,6 +68,13 @@ except ImportError:
     HAS_SCIPY = False
     _gauss = None  # type: ignore[assignment]
 
+try:
+    import cv2  # type: ignore[import]
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+    cv2 = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # I/O bootstrap
@@ -153,6 +160,131 @@ def _random_paste_position(
     x = rng.randint(0, max(0, bw - cw))
     y = rng.randint(0, max(0, bh - ch))
     return x, y
+
+
+def _foreground_mask(normal_img: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Estimate the object foreground region of a normal (good) image.
+
+    Strategy:
+        1. Convert to grayscale and Otsu-threshold (binary split).
+        2. Decide which class is BACKGROUND by majority vote over the four
+           corner pixels — this handles both bright-object/dark-background and
+           dark-object/bright-background datasets. Foreground = the other class.
+        3. Keep only the largest connected component (drops speckle / texture).
+        4. Reject degenerate splits: if foreground area is <2% or >90% of the
+           frame, object/background separation is meaningless → return None so
+           the caller falls back to random placement.
+
+    The result is deterministic given a fixed input (Otsu has no RNG), satisfying
+    the reproducibility contract. Returns a uint8 mask (255 = foreground, 0 =
+    background) or None when foreground estimation is not useful / cv2 missing.
+    """
+    if not HAS_CV2:
+        return None
+
+    try:
+        arr = np.asarray(normal_img)
+        if arr.ndim == 3:
+            # PIL gives RGB; cv2 expects BGR but grayscale luminance is close
+            # enough for thresholding — convert via cv2 for consistency.
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = arr.astype(np.uint8)
+
+        h, w = gray.shape[:2]
+        if h < 2 or w < 2:
+            return None
+
+        # Otsu split: pixels >= threshold become 255 (the "bright" class).
+        _thr, binary = cv2.threshold(
+            gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+
+        # Corner majority vote → background class. Corners are the 4 pixels.
+        corners = [
+            int(binary[0, 0]), int(binary[0, w - 1]),
+            int(binary[h - 1, 0]), int(binary[h - 1, w - 1]),
+        ]
+        bright_corners = sum(1 for c in corners if c >= 128)
+        # If majority of corners are bright, background is the bright class →
+        # foreground is the dark class, and vice versa.
+        if bright_corners >= 2:
+            fg = (binary < 128).astype(np.uint8) * 255
+        else:
+            fg = (binary >= 128).astype(np.uint8) * 255
+
+        # Largest connected component only.
+        n_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            fg, connectivity=8
+        )
+        if n_labels <= 1:
+            return None
+        # label 0 is background; pick the largest non-zero label by area.
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        largest = int(np.argmax(areas)) + 1
+        fg_mask = (labels == largest).astype(np.uint8) * 255
+
+        ratio = float(np.count_nonzero(fg_mask)) / float(h * w)
+        if ratio < 0.02 or ratio > 0.90:
+            return None
+
+        return fg_mask
+    except Exception:
+        return None
+
+
+def _foreground_paste_position(
+    fg_mask: np.ndarray,
+    bg_size: Tuple[int, int],
+    crop_size: Tuple[int, int],
+    mask_crop: "Image",
+    rng: random.Random,
+    max_tries: int = 20,
+) -> Optional[Tuple[int, int]]:
+    """
+    Sample a paste position whose defect lands inside the object foreground.
+
+    Args:
+        fg_mask:    uint8 foreground mask (255=fg) for the background image,
+                    shape (bg_h, bg_w) — as returned by _foreground_mask.
+        bg_size:    (bg_w, bg_h) of the background image.
+        crop_size:  (crop_w, crop_h) of the defect crop.
+        mask_crop:  L-mode PIL Image of the defect-region mask (crop-sized).
+        rng:        seeded random.Random — same seed → same sequence.
+        max_tries:  number of random (x, y) samples to attempt.
+
+    Returns:
+        (x, y) top-left paste position such that the centroid of the defect
+        mask, once pasted, lands on a foreground pixel; or None after max_tries.
+    """
+    bw, bh = bg_size
+    cw, ch = crop_size
+    if cw > bw or ch > bh:
+        return None
+
+    # Defect centroid within the crop (foreground pixels of the defect mask).
+    msk_arr = np.asarray(mask_crop.convert("L"))
+    ys, xs = np.nonzero(msk_arr >= 128)
+    if xs.size == 0:
+        # No defect foreground pixels — use crop geometric center.
+        cx_off, cy_off = cw / 2.0, ch / 2.0
+    else:
+        cx_off = float(xs.mean())
+        cy_off = float(ys.mean())
+
+    x_max = max(0, bw - cw)
+    y_max = max(0, bh - ch)
+    fh, fw = fg_mask.shape[:2]
+
+    for _ in range(max(1, max_tries)):
+        x = rng.randint(0, x_max)
+        y = rng.randint(0, y_max)
+        px = int(round(x + cx_off))
+        py = int(round(y + cy_off))
+        if 0 <= px < fw and 0 <= py < fh and fg_mask[py, px] >= 128:
+            return x, y
+    return None
 
 
 def copy_paste_synthesis(
@@ -273,7 +405,20 @@ def copy_paste_synthesis(
             )
             return None
 
-        position = _random_paste_position(normal_img.size, defect_crop.size, rng)
+        # Constrain placement to the object foreground when one can be estimated
+        # (object-centric datasets like visa_pcb). Falls back to fully random
+        # placement when no useful foreground is found (full-frame objects like
+        # mvtec_cable, detection failure, or cv2 unavailable) — preserving the
+        # legacy behavior exactly. Both the foreground sampling and the fallback
+        # draw from `rng`, so a fixed seed yields a deterministic result.
+        fg_mask = _foreground_mask(np.asarray(normal_img.convert("RGB")))
+        position = None
+        if fg_mask is not None:
+            position = _foreground_paste_position(
+                fg_mask, normal_img.size, defect_crop.size, mask, rng
+            )
+        if position is None:
+            position = _random_paste_position(normal_img.size, defect_crop.size, rng)
         result = _alpha_composite(normal_img, defect_crop, mask, position, feather_px)
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
