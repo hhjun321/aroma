@@ -252,10 +252,14 @@ def _get_image_lists(
             **_resolve_isp_masks(points_defects, str(ds / "ground_truth" / "points")),
         }
 
-    elif dataset_key == "mvtec_cable":
-        ds = base / "mvtec" / "cable"
+    elif dataset_key.startswith("mvtec_"):
+        # Generic MVTec handler — all categories share the same layout:
+        #   mvtec/{category}/{train/good, test/{defect_types}, ground_truth}
+        # category may contain underscores (e.g. mvtec_metal_nut → metal_nut).
+        category = dataset_key.split("_", 1)[1]
+        ds = base / "mvtec" / category
         if not ds.exists():
-            logger.warning("mvtec_cable not found: %s", ds)
+            logger.warning("%s not found: %s", dataset_key, ds)
             return None
         train_normal = _glob_images(str(ds / "train" / "good"))
         test_good    = _glob_images(str(ds / "test" / "good"))
