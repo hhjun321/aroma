@@ -30,3 +30,4 @@ aroma_exp4v2_supervised-yolo-detection.md
 aroma_exp4v2_synth-ratio-optimization.md
 aroma_exp4v2_synth-mask-bbox-persistence.md
 aroma_exp4v2_defect-bbox-pipeline.md
+aroma_exp4v2_foreground-placement.md
