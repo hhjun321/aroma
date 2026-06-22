@@ -2,25 +2,32 @@
   "mvtec_cable": {
     "yolov8n": {
       "baseline": {
-        "map50": 0.0,
-        "map50_95": 0.0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "n_train": 224
+        "map50": 0.4751,
+        "map50_95": 0.2851,
+        "precision": 0.5285,
+        "recall": 0.4308,
+        "n_train": 46,
+        "n_real_train": 46,
+        "n_synth_train": 0,
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2/mvtec_cable/yolov8n/baseline/weights/best.pt"
       },
       "random": {
-        "map50": 0.0,
-        "map50_95": 0.0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "n_train": 600
+        "map50": 0.2079,
+        "map50_95": 0.0784,
+        "precision": 0.0898,
+        "recall": 0.0769,
+        "n_train": 646,
+        "n_real_train": 46,
+        "n_synth_train": 600
       },
       "aroma": {
-        "map50": 0.0,
-        "map50_95": 0.0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "n_train": 0
+        "map50": 0.3446,
+        "map50_95": 0.2073,
+        "precision": 0.1893,
+        "recall": 0.6,
+        "n_train": 646,
+        "n_real_train": 46,
+        "n_synth_train": 600
       }
     }
   }
