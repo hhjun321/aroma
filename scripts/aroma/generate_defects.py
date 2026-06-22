@@ -162,7 +162,8 @@ def copy_paste_synthesis(
     blend_mode: str = "alpha",
     feather_px: int = 4,
     rng: Optional[random.Random] = None,
-) -> bool:
+    mask_output_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Paste the defect region from roi_entry onto the normal image.
 
@@ -173,13 +174,21 @@ def copy_paste_synthesis(
         blend_mode:         'alpha' (always) — 'poisson' reserved for future
         feather_px:         Edge feathering sigma in pixels
         rng:                Optional seeded random.Random for reproducibility
+        mask_output_path:   Optional PNG path to persist the GT defect mask.
+                            When given, a full-frame (background-sized) mask is
+                            saved so downstream supervised pipelines can recover
+                            an exact bbox instead of re-deriving one by image
+                            differencing. None → no mask written (legacy).
 
     Returns:
-        True on success, False on error (image missing or PIL unavailable)
+        On success, a dict ``{"bbox": [x, y, w, h], "mask_path": <str|None>}``
+        in the synthetic-image coordinate system. None on error (image missing
+        or PIL unavailable). The pre-feather ellipse is used for the GT mask so
+        bbox geometry is independent of feathering / scipy availability.
     """
     if not HAS_PIL:
         logger.error("Pillow required for copy_paste — install with: pip install Pillow")
-        return False
+        return None
 
     from PIL import Image as PILImage
 
@@ -189,11 +198,11 @@ def copy_paste_synthesis(
     defect_path = roi_entry.get("image_path", "")
     if not defect_path or not Path(defect_path).exists():
         logger.warning("Defect image not found: %s", defect_path)
-        return False
+        return None
 
     if not Path(normal_image_path).exists():
         logger.warning("Normal image not found: %s", normal_image_path)
-        return False
+        return None
 
     try:
         defect_img = PILImage.open(defect_path).convert("RGB")
@@ -215,11 +224,33 @@ def copy_paste_synthesis(
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         result.convert("RGB").save(output_path)
-        return True
+
+        # Persist GT mask + bbox in the composite (background) coordinate system.
+        # Mask saving is isolated so a mask-write failure degrades gracefully to
+        # mask_path=None (legacy behaviour) rather than discarding an already-
+        # saved composite image (which would leave an orphan .jpg with no ann).
+        x, y = int(position[0]), int(position[1])
+        bbox = [x, y, int(cw), int(ch)]
+        saved_mask_path: Optional[str] = None
+        if mask_output_path is not None:
+            try:
+                bw, bh = normal_img.size  # (width, height)
+                full_mask = PILImage.new("L", (bw, bh), 0)
+                full_mask.paste(mask, (x, y))  # crisp pre-feather ellipse at paste pos
+                Path(mask_output_path).parent.mkdir(parents=True, exist_ok=True)
+                full_mask.save(mask_output_path)  # PNG (lossless) — caller uses .png
+                saved_mask_path = mask_output_path
+            except Exception as mexc:
+                logger.warning(
+                    "GT mask save failed for %s (composite kept, mask_path=None): %s",
+                    output_path, mexc,
+                )
+
+        return {"bbox": bbox, "mask_path": saved_mask_path}
 
     except Exception as exc:
         logger.error("copy_paste_synthesis failed for %s: %s", defect_path, exc)
-        return False
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +262,7 @@ def controlnet_synthesis(
     normal_image_path: str,
     output_path: str,
     **kwargs: Any,
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     """
     ControlNet-based defect generation stub.
     Implement in Colab using the diffusers library with a GPU runtime.
@@ -247,7 +278,7 @@ def inpainting_synthesis(
     normal_image_path: str,
     output_path: str,
     **kwargs: Any,
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     """
     Inpainting-based defect generation stub.
     Implement in Colab using the diffusers library with a GPU runtime.
@@ -436,6 +467,8 @@ def run(
     out = Path(work_output_dir)
     img_dir = out / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
+    mask_dir = out / "masks"
+    mask_dir.mkdir(parents=True, exist_ok=True)
 
     rng = random.Random(seed)
     annotations: List[Dict[str, Any]] = []
@@ -443,13 +476,17 @@ def run(
     n_skip = 0
 
     drive_img_dir = Path(output_dir) / "images"
+    drive_mask_dir = Path(output_dir) / "masks"
 
     for roi_idx, roi_entry in enumerate(selected):
         for rep_idx in range(n_per_roi):
             fname = f"syn_{roi_idx:05d}_{rep_idx:02d}.jpg"
+            mask_fname = f"syn_{roi_idx:05d}_{rep_idx:02d}.png"
             local_out_path = str(img_dir / fname)
+            local_mask_path = str(mask_dir / mask_fname)
             # Annotation stores the final Drive path
             final_out_path = str(drive_img_dir / fname) if local_staging else local_out_path
+            final_mask_path = str(drive_mask_dir / mask_fname) if local_staging else local_mask_path
 
             if not normal_images:
                 annotations.append({
@@ -463,22 +500,27 @@ def run(
                     "blend_mode":    blend_mode,
                     "roi_score":     roi_entry.get("roi_score", 0.0),
                     "deficit":       roi_entry.get("deficit", 0.0),
+                    "mask_path":     None,
+                    "bbox":          None,
                     "dry_run":       True,
                 })
                 n_ok += 1
                 continue
 
             normal_path = rng.choice(normal_images)
-            ok = synthesis_fn(
+            meta = synthesis_fn(
                 roi_entry=roi_entry,
                 normal_image_path=normal_path,
                 output_path=local_out_path,
                 blend_mode=blend_mode,
                 feather_px=feather_px,
                 rng=rng,
+                mask_output_path=local_mask_path,
             )
-            if ok:
+            if meta:
                 n_ok += 1
+                # Record the durable Drive mask path only when a mask was saved.
+                ann_mask_path = final_mask_path if meta.get("mask_path") else None
                 annotations.append({
                     "image_path":    final_out_path,
                     "source_roi":    orig_source_roi[roi_idx],
@@ -491,6 +533,8 @@ def run(
                     "blend_mode":    blend_mode,
                     "roi_score":     roi_entry.get("roi_score", 0.0),
                     "deficit":       roi_entry.get("deficit", 0.0),
+                    "mask_path":     ann_mask_path,
+                    "bbox":          meta.get("bbox"),
                     "dry_run":       False,
                 })
             else:
@@ -500,6 +544,9 @@ def run(
     if local_staging and staging_dir and img_dir.exists():
         n_copied = _push_outputs(img_dir, drive_img_dir)
         logger.info("Pushed %d images to Drive → %s", n_copied, drive_img_dir)
+        if mask_dir.exists():
+            n_masks = _push_outputs(mask_dir, drive_mask_dir)
+            logger.info("Pushed %d masks to Drive → %s", n_masks, drive_mask_dir)
 
     drive_out = Path(output_dir)
     drive_out.mkdir(parents=True, exist_ok=True)

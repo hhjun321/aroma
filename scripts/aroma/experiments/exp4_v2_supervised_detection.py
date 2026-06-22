@@ -496,9 +496,11 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
             continue
         norm_p = _resolve_path(e.get("normal_image"))
         # Prefer an explicit GT mask when the synthesis pipeline persists one.
-        # AROMA's generate_defects.py currently writes no mask, but other
-        # pipelines (e.g. stage4 fmt='cls') write '{stem}_mask.png'. Accept
-        # any of these keys, plus a sibling masks/ file as a last resort.
+        # generate_defects.py now writes a full-frame mask PNG + 'mask_path'
+        # (and 'bbox') per synthesized image, so the exact-bbox path below is
+        # the primary route. Other pipelines (e.g. stage4 fmt='cls') write
+        # '{stem}_mask.png'. Accept any of these keys, plus a sibling masks/
+        # file as a last resort. Image-diff fallback only when no mask resolves.
         mask_raw = (
             e.get("mask")
             or e.get("roi_mask")
@@ -784,13 +786,23 @@ def _local_cache_for_yolo(
                 if ann.get("normal_image"):
                     norm_dst = cond_imgs / f"nrm_{j:05d}{Path(ann['normal_image']).suffix}"
                     f_norm = ex.submit(_copy_if_missing, ann["normal_image"], norm_dst)
-                futs_list.append((ann, f_img, f_norm))
+                # GT mask (exact-bbox path) — stage to local cache too, else the
+                # rewritten image_path points at /tmp while mask stays on Drive
+                # (loses /tmp acceleration and breaks if Drive unmounts mid-run).
+                f_mask = None
+                mask_src = ann.get("mask_path")
+                if mask_src and Path(mask_src).exists():
+                    mask_dst = cond_imgs / f"msk_{j:05d}{Path(mask_src).suffix}"
+                    f_mask = ex.submit(_copy_if_missing, mask_src, mask_dst)
+                futs_list.append((ann, f_img, f_norm, f_mask))
             new_anns = []
-            for ann, f_img, f_norm in futs_list:
+            for ann, f_img, f_norm, f_mask in futs_list:
                 new_ann = dict(ann)
                 new_ann["image_path"] = f_img.result()
                 if f_norm is not None:
                     new_ann["normal_image"] = f_norm.result()
+                if f_mask is not None:
+                    new_ann["mask_path"] = f_mask.result()
                 new_anns.append(new_ann)
             new_synth_by_cond[cond] = new_anns
             # copy annotations.json for fidelity
@@ -1214,7 +1226,7 @@ def _run_yolo_condition(
                     synth_annotations=synth_annotations,
                     label_dir=train_lbl,
                     image_dir_out=train_img,
-                    min_area=200,
+                    min_area=50,  # unify with real val GT (_build_real min_area=50)
                 )
                 logger.info(
                     "    %s train: %d/%d synth imgs labeled (additive)",

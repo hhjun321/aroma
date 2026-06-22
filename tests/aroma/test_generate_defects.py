@@ -179,7 +179,7 @@ def test_annotation_schema(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 5. copy_paste_synthesis — missing files → False, no crash
+# 5. copy_paste_synthesis — missing files → None, no crash
 # ---------------------------------------------------------------------------
 
 def test_copy_paste_missing_defect(tmp_path):
@@ -189,7 +189,7 @@ def test_copy_paste_missing_defect(tmp_path):
         normal_image_path=str(tmp_path / "normal.jpg"),
         output_path=str(tmp_path / "out.jpg"),
     )
-    assert ok is False
+    assert ok is None
 
 
 def test_copy_paste_missing_normal(tmp_path):
@@ -200,7 +200,7 @@ def test_copy_paste_missing_normal(tmp_path):
         normal_image_path=str(tmp_path / "no_normal.jpg"),
         output_path=str(tmp_path / "out.jpg"),
     )
-    assert ok is False
+    assert ok is None
 
 
 @pytest.mark.skipif(not HAS_PIL, reason="Pillow not installed")
@@ -216,7 +216,8 @@ def test_copy_paste_produces_file(tmp_path):
         output_path=str(out),
         feather_px=2,
     )
-    assert ok is True
+    assert isinstance(ok, dict)
+    assert ok["bbox"] is not None
     assert out.exists()
     assert out.stat().st_size > 0
 
