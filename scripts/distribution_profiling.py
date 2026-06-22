@@ -93,6 +93,7 @@ _MORPH_CSV_FIELDS = [
     "image_id", "image_path", "defect_type", "domain", "mask_source",
     "linearity", "solidity", "extent", "aspect_ratio",
     "eccentricity", "circularity", "area",
+    "defect_bbox", "defect_mask_path",
 ]
 _CONTEXT_CSV_FIELDS = [
     "image_id", "image_type", "patch_xy",
@@ -225,6 +226,13 @@ def _morph_worker(task: dict) -> Optional[dict]:
         if mask is None or mask.max() == 0:
             return None
 
+        # Align mask resolution to the source image so bbox coordinates are in
+        # the ORIGINAL image coordinate system (GT masks may be downscaled).
+        # INTER_NEAREST preserves the binary nature (no interpolated greys).
+        if mask.shape[:2] != img_color.shape[:2]:
+            ih, iw = img_color.shape[:2]
+            mask = cv2.resize(mask, (iw, ih), interpolation=cv2.INTER_NEAREST)
+
         char = DefectCharacterizer()
         metrics = char.analyze_defect_region(mask)
         if metrics is None:
@@ -242,6 +250,27 @@ def _morph_worker(task: dict) -> Optional[dict]:
         else:
             eccentricity = 0.0
             circularity = 0.0
+        # defect_bbox spans ALL foreground components (matches the full-frame
+        # mask PNG saved below) so the synthesis crop captures the whole defect,
+        # not just the largest blob. eccentricity/circularity stay max-area only
+        # (those are single-region morphology features).
+        bx, by, bw, bh = cv2.boundingRect(binary)
+        bx, by, bw, bh = int(bx), int(by), int(bw), int(bh)
+
+        # Persist a full-frame binary (0/255) mask spanning ALL components so the
+        # synthesis step can crop the exact defect region instead of re-deriving
+        # one. Saving is isolated: a write failure degrades to empty mask path
+        # (synthesis falls back to the legacy ellipse) rather than dropping row.
+        defect_mask_path = ""
+        mask_out_path = task.get("mask_out_path")
+        if mask_out_path:
+            try:
+                full_binary = (binary * 255).astype(np.uint8)
+                Path(mask_out_path).parent.mkdir(parents=True, exist_ok=True)
+                if cv2.imwrite(str(mask_out_path), full_binary):
+                    defect_mask_path = str(mask_out_path)
+            except Exception as mexc:
+                logger.warning(f"[morph_worker] mask save failed {mask_out_path}: {mexc}")
 
         return {
             "image_id": image_path.stem,
@@ -256,6 +285,8 @@ def _morph_worker(task: dict) -> Optional[dict]:
             "eccentricity": eccentricity,
             "circularity": circularity,
             "area": int(metrics["area"]),
+            "defect_bbox": f"{bx},{by},{bw},{bh}",
+            "defect_mask_path": defect_mask_path,
         }
     except Exception as exc:
         logger.warning(f"[morph_worker] {task.get('image_path', '?')}: {exc}")
@@ -483,6 +514,9 @@ class DistributionProfiler:
 
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "figures").mkdir(exist_ok=True)
+        # Created once here in the main process; workers only write into it
+        # (avoids a mkdir race across ProcessPoolExecutor workers).
+        (output_dir / "defect_masks").mkdir(parents=True, exist_ok=True)
 
         # Populated in step1
         self.morph_tasks: List[dict] = []
@@ -540,7 +574,16 @@ class DistributionProfiler:
                     "domain": domain,
                     "checkpoint": self.checkpoint,
                 }
-                self.morph_tasks.append(task_base)
+                # Per-task output path for the persisted full-frame mask.
+                # _morph_worker is a module-level pickle-safe function and cannot
+                # see self.output_dir, so the destination is passed via the task.
+                # defect_type prefix avoids stem collisions across seed_dirs.
+                self.morph_tasks.append({
+                    **task_base,
+                    "mask_out_path": str(
+                        self.output_dir / "defect_masks" / f"{defect_type}_{p.stem}.png"
+                    ),
+                })
                 self.context_tasks.append({
                     **task_base,
                     "image_type": "defect",

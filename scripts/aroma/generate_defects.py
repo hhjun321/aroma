@@ -182,9 +182,12 @@ def copy_paste_synthesis(
 
     Returns:
         On success, a dict ``{"bbox": [x, y, w, h], "mask_path": <str|None>}``
-        in the synthetic-image coordinate system. None on error (image missing
-        or PIL unavailable). The pre-feather ellipse is used for the GT mask so
-        bbox geometry is independent of feathering / scipy availability.
+        in the synthetic-image coordinate system, where bbox describes ONLY the
+        pasted defect region. None on error (image missing, PIL unavailable, or
+        the defect crop is larger than the background). When ``roi_entry``
+        carries ``defect_bbox`` + ``defect_mask_path`` the real GT mask is used;
+        otherwise a pre-feather ellipse fallback keeps bbox geometry independent
+        of feathering / scipy availability.
     """
     if not HAS_PIL:
         logger.error("Pillow required for copy_paste — install with: pip install Pillow")
@@ -208,35 +211,88 @@ def copy_paste_synthesis(
         defect_img = PILImage.open(defect_path).convert("RGB")
         normal_img = PILImage.open(normal_image_path).convert("RGBA")
 
-        # Use full defect image as crop; create a simple elliptical mask
-        cw, ch = defect_img.size
-        mask_arr = np.zeros((ch, cw), dtype=np.uint8)
-        cy, cx = ch // 2, cw // 2
-        ry, rx = max(1, ch // 2 - 2), max(1, cw // 2 - 2)
-        Y, X = np.ogrid[:ch, :cw]
-        ellipse = ((X - cx) ** 2 / (rx ** 2) + (Y - cy) ** 2 / (ry ** 2)) <= 1.0
-        mask_arr[ellipse] = 255
-        mask = PILImage.fromarray(mask_arr)
+        # --- Resolve the defect crop + region mask ----------------------------
+        # Preferred path (B-plan): an exact GT bbox + full-frame binary mask were
+        # persisted upstream (distribution_profiling → roi_selection). Crop both
+        # the defect and its mask to that bbox so we paste ONLY the real defect
+        # region. Legacy fallback: full-image crop + synthetic ellipse mask.
+        defect_bbox = roi_entry.get("defect_bbox")
+        defect_mask_path = roi_entry.get("defect_mask_path") or ""
 
-        defect_rgba = defect_img.convert("RGBA")
-        position = _random_paste_position(normal_img.size, defect_rgba.size, rng)
-        result = _alpha_composite(normal_img, defect_rgba, mask, position, feather_px)
+        use_real_mask = (
+            isinstance(defect_bbox, (list, tuple)) and len(defect_bbox) == 4
+            and defect_mask_path and Path(defect_mask_path).exists()
+        )
+
+        # Validate bbox lies within the defect image (stale roi_selected.json may
+        # reference a different-resolution image). Out-of-bounds → ellipse fallback.
+        if use_real_mask:
+            try:
+                bx, by, bw_box, bh_box = (int(v) for v in defect_bbox)
+            except (TypeError, ValueError):
+                use_real_mask = False
+            else:
+                dw, dh = defect_img.size  # (width, height)
+                if not (
+                    bw_box > 0 and bh_box > 0
+                    and bx >= 0 and by >= 0
+                    and bx + bw_box <= dw and by + bh_box <= dh
+                ):
+                    logger.warning(
+                        "defect_bbox %s out of bounds for defect image %dx%d — "
+                        "ellipse fallback for %s",
+                        defect_bbox, dw, dh, defect_path,
+                    )
+                    use_real_mask = False
+
+        if use_real_mask:
+            mask_full = PILImage.open(defect_mask_path).convert("L")
+            box = (bx, by, bx + bw_box, by + bh_box)
+            defect_crop = defect_img.crop(box).convert("RGBA")
+            mask = mask_full.crop(box)
+        else:
+            # Legacy: use full defect image as crop with a simple elliptical mask
+            cw, ch = defect_img.size
+            mask_arr = np.zeros((ch, cw), dtype=np.uint8)
+            cy, cx = ch // 2, cw // 2
+            ry, rx = max(1, ch // 2 - 2), max(1, cw // 2 - 2)
+            Y, X = np.ogrid[:ch, :cw]
+            ellipse = ((X - cx) ** 2 / (rx ** 2) + (Y - cy) ** 2 / (ry ** 2)) <= 1.0
+            mask_arr[ellipse] = 255
+            mask = PILImage.fromarray(mask_arr)
+            defect_crop = defect_img.convert("RGBA")
+
+        crop_w, crop_h = defect_crop.size
+        bw_norm, bh_norm = normal_img.size  # (width, height) of background
+
+        # Defect crop must fit inside the background; otherwise skip cleanly.
+        if crop_w > bw_norm or crop_h > bh_norm:
+            logger.warning(
+                "Defect crop (%dx%d) larger than normal image (%dx%d) — skipping %s",
+                crop_w, crop_h, bw_norm, bh_norm, defect_path,
+            )
+            return None
+
+        position = _random_paste_position(normal_img.size, defect_crop.size, rng)
+        result = _alpha_composite(normal_img, defect_crop, mask, position, feather_px)
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         result.convert("RGB").save(output_path)
 
-        # Persist GT mask + bbox in the composite (background) coordinate system.
-        # Mask saving is isolated so a mask-write failure degrades gracefully to
-        # mask_path=None (legacy behaviour) rather than discarding an already-
-        # saved composite image (which would leave an orphan .jpg with no ann).
-        x, y = int(position[0]), int(position[1])
-        bbox = [x, y, int(cw), int(ch)]
+        # bbox is reported in the COMPOSITE (background) coordinate system and
+        # describes only the pasted defect region — fixing the prior bug where
+        # the full image footprint [0,0,W,H] was returned.
+        x_paste, y_paste = int(position[0]), int(position[1])
+        bbox = [x_paste, y_paste, int(crop_w), int(crop_h)]
+
+        # Persist GT mask in the composite coordinate system. Mask saving is
+        # isolated so a write failure degrades to mask_path=None (legacy) rather
+        # than discarding the already-saved composite image.
         saved_mask_path: Optional[str] = None
         if mask_output_path is not None:
             try:
-                bw, bh = normal_img.size  # (width, height)
-                full_mask = PILImage.new("L", (bw, bh), 0)
-                full_mask.paste(mask, (x, y))  # crisp pre-feather ellipse at paste pos
+                full_mask = PILImage.new("L", (bw_norm, bh_norm), 0)
+                full_mask.paste(mask, (x_paste, y_paste))  # crisp pre-feather mask
                 Path(mask_output_path).parent.mkdir(parents=True, exist_ok=True)
                 full_mask.save(mask_output_path)  # PNG (lossless) — caller uses .png
                 saved_mask_path = mask_output_path

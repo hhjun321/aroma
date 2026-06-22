@@ -162,6 +162,24 @@ def score_roi(
     return float(np.clip(score, 0.0, 1.0))
 
 
+def _parse_bbox(bbox_str: str) -> Any:
+    """Parse a 'x,y,w,h' comma-separated bbox string → [int, int, int, int].
+
+    Returns None for empty strings or any malformed input (wrong field count,
+    non-integer tokens) so downstream synthesis can cleanly fall back to the
+    legacy ellipse path.
+    """
+    if not bbox_str:
+        return None
+    parts = str(bbox_str).split(",")
+    if len(parts) != 4:
+        return None
+    try:
+        return [int(p.strip()) for p in parts]
+    except (ValueError, TypeError):
+        return None
+
+
 def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Score all (morph_row × context_bin) candidates.
@@ -209,6 +227,8 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     for row in morph_rows:
         image_id   = str(row.get("image_id", ""))
         image_path = str(row.get("image_path", ""))
+        defect_bbox = _parse_bbox(row.get("defect_bbox", ""))
+        defect_mask_path = str(row.get("defect_mask_path", ""))
 
         cluster_id = assignments.get(image_id)
         if cluster_id is None:
@@ -244,6 +264,8 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "prompt":      prompt_entry.get("prompt", ""),
                 "morph_label": morph_label,
                 "ctx_label":   prompt_entry.get("context_descriptor", ""),
+                "defect_bbox": defect_bbox,
+                "defect_mask_path": defect_mask_path,
             })
 
     logger.info("Scored %d ROI candidates from %d morph rows", len(candidates), len(morph_rows))
