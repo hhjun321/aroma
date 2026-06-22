@@ -1271,10 +1271,14 @@ def _run_yolo_condition(
                 epochs = baseline_epochs
                 do_save = True                    # MUST persist best.pt
             else:
-                # scratch: random/aroma도 COCO에서 시작, real+synth 처음부터 학습
+                # scratch: random/aroma도 COCO에서 시작, real+synth 처음부터 학습.
+                # do_save=True 필수: save=False면 train 종료 후 model에 best 가중치가
+                # 복원되지 않아 model.val()이 학습 전(COCO) 가중치를 측정 → map50 붕괴
+                # (P~0.004, epoch 무관 동일값). 조건별 checkpoint_dir(name=condition)로
+                # 분리되어 baseline best.pt를 덮어쓰지 않음.
                 weights = f"{model_name}.pt"
                 epochs = baseline_epochs
-                do_save = False
+                do_save = True
 
             # YOLO("{model}.pt") loads COCO pretrained weights; .train() = transfer learning.
             # NOTE: do NOT pass resume=True (would continue the same run's epoch counter).
