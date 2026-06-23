@@ -235,5 +235,16 @@
     "image_dir": "/content/drive/MyDrive/data/Aroma/visa/pipe_fryum/train/good",
     "seed_dir": "/content/drive/MyDrive/data/Aroma/visa/pipe_fryum/test/anomaly",
     "notes": "Run prepare_visa.py first"
+  },
+  "severstal": {
+    "domain": "severstal",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/severstal/train/good",
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/severstal/test/class1",
+      "/content/drive/MyDrive/data/Aroma/severstal/test/class2",
+      "/content/drive/MyDrive/data/Aroma/severstal/test/class3",
+      "/content/drive/MyDrive/data/Aroma/severstal/test/class4"
+    ],
+    "notes": "1600x256px. 4 defect classes (ClassId 1-4 -> defect_type class1..class4; Class2 rare -> Neff<4 imbalance). Run prepare_severstal.py first (RLE->PNG masks under masks/ + masks/class{c}/). Baseline real-only scope; masks resolved from masks/ not ground_truth/. exp4v2 --class_mode {single,multi}."
   }
 }
