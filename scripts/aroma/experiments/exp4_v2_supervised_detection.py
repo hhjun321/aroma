@@ -225,15 +225,49 @@ def _resolve_visa_masks(defect_paths: List[str], masks_dir: str) -> Dict[str, st
     return mapping
 
 
+def _resolve_severstal_masks(
+    defect_paths: List[str], masks_dir: str, class_mode: str = "single",
+) -> Tuple[Dict[str, str], Dict[str, Dict[int, str]]]:
+    """Severstal: masks/{stem}.png (merged) + masks/class{c}/{stem}.png (per-class).
+
+    Returns (mask_map, class_mask_map):
+      mask_map        — {defect_img: merged_mask_png}  (always; single-mode + val GT)
+      class_mask_map  — {defect_img: {class_id: per_class_png}}  (multi mode only;
+                        empty dict when class_mode='single').
+    """
+    m_dir = Path(masks_dir)
+    mask_map: Dict[str, str] = {}
+    class_mask_map: Dict[str, Dict[int, str]] = {}
+    for img_p in defect_paths:
+        stem = Path(img_p).stem
+        merged = m_dir / f"{stem}.png"
+        if merged.exists():
+            mask_map[img_p] = str(merged)
+        if class_mode == "multi":
+            per_class: Dict[int, str] = {}
+            for c in range(1, 5):
+                pc = m_dir / f"class{c}" / f"{stem}.png"
+                if pc.exists():
+                    per_class[c] = str(pc)
+            if per_class:
+                class_mask_map[img_p] = per_class
+    return mask_map, class_mask_map
+
+
 def _get_image_lists(
     dataset_key: str,
     real_data_dir: str,
     seed: int = 42,
     test_split: float = 0.2,
+    class_mode: str = "single",
 ) -> Optional[Dict[str, Any]]:
     """
     Returns {train_normal, test_good, test_defect, mask_map} or None if missing.
     mask_map: {defect_img_path: mask_path}
+
+    For dataset_key == 'severstal' with class_mode == 'multi', an extra
+    'class_mask_map' key is included ({defect_img: {class_id: per_class_png}}).
+    All other datasets / single mode are unaffected (no extra key).
     """
     base = Path(real_data_dir)
 
@@ -288,6 +322,68 @@ def _get_image_lists(
         train_normal, test_good = _split_normal(all_normal, test_split=test_split, seed=seed)
         test_defect  = _glob_images(str(ds / "Images" / "Anomaly"))
         mask_map     = _resolve_visa_masks(test_defect, str(ds / "Masks" / "Anomaly"))
+
+    elif dataset_key == "severstal":
+        # prepare_severstal.py layout:
+        #   train/good/  test/class{1..4}/  masks/{stem}.png + masks/class{c}/{stem}.png
+        ds = base / "severstal"
+        if not ds.exists():
+            logger.warning("severstal not found: %s", ds)
+            return None
+        all_normal = _glob_images(str(ds / "train" / "good"))
+        # Context prototypes (if selected) restrict the normal background pool to
+        # the K distribution-representative images.
+        proto_json = ds / "context_select" / "context_prototypes.json"
+        if proto_json.exists():
+            try:
+                payload = load_json(str(proto_json))
+                names = set(payload.get("prototypes") or [])
+                if names:
+                    filtered = [p for p in all_normal if Path(p).name in names]
+                    if filtered:
+                        logger.info(
+                            "severstal: context prototypes applied (%d/%d normals)",
+                            len(filtered), len(all_normal),
+                        )
+                        all_normal = filtered
+                    else:
+                        logger.warning(
+                            "severstal: context_prototypes.json had %d names but 0 "
+                            "matched train/good — using ALL %d normals (check name basis)",
+                            len(names), len(all_normal),
+                        )
+            except Exception as exc:
+                logger.warning("severstal: failed to read context prototypes: %s", exc)
+        else:
+            # Silent fallback to all normals would change the experiment (no
+            # 1000-prototype pool). Surface it explicitly so it isn't mistaken
+            # for the intended config.
+            logger.warning(
+                "severstal: context_prototypes.json NOT found at %s — using ALL %d "
+                "normals (run select_context_prototypes.py with --output %s)",
+                proto_json, len(all_normal), str(ds / "context_select"),
+            )
+        train_normal, test_good = _split_normal(all_normal, test_split=test_split, seed=seed)
+        test_defect = []
+        for c in range(1, 5):
+            test_defect.extend(_glob_images(str(ds / "test" / f"class{c}")))
+        mask_map, class_mask_map = _resolve_severstal_masks(
+            test_defect, str(ds / "masks"), class_mode=class_mode,
+        )
+        logger.info(
+            "severstal: train_normal=%d  test_good=%d  test_defect=%d  masks_matched=%d "
+            "(class_mode=%s)",
+            len(train_normal), len(test_good), len(test_defect), len(mask_map), class_mode,
+        )
+        result = dict(
+            train_normal=train_normal,
+            test_good=test_good,
+            test_defect=test_defect,
+            mask_map=mask_map,
+        )
+        if class_mode == "multi":
+            result["class_mask_map"] = class_mask_map
+        return result
 
     else:
         logger.warning("Unknown dataset_key: %s", dataset_key)
@@ -726,6 +822,8 @@ def _local_cache_for_yolo(
 
     Returns (new_lists, new_synth_by_cond) with paths rewritten to /tmp.
     Idempotent per-file. mask_map keys rewritten in lockstep with test_defect.
+    class_mask_map (severstal multi mode), when present in `lists`, has its keys
+    rewritten in lockstep too (values/per-class PNGs stay on Drive).
     """
     if num_workers is None:
         num_workers = min(32, (os.cpu_count() or 4) * 2)
@@ -773,6 +871,21 @@ def _local_cache_for_yolo(
                 )
         for local_p, fut in mask_futs.items():
             local_mask_map[local_p] = fut.result()
+
+        # class_mask_map (severstal multi mode): rewrite keys lockstep with
+        # test_defect so per-class lookups by /tmp image path resolve. Without
+        # this, _get_real_test_images_and_labels does class_mask_map.get(img_p)
+        # with img_p=/tmp/td_* and misses every Drive-keyed entry -> 0 labels.
+        # Per-class PNG values stay on Drive (only the key is remapped); they are
+        # read once at bbox-extraction time, so /tmp acceleration of the merged
+        # mask + image is preserved without staging every per-class mask.
+        local_class_mask_map: Optional[Dict[str, Dict[int, str]]] = None
+        src_cmm = lists.get("class_mask_map")
+        if isinstance(src_cmm, dict):
+            local_class_mask_map = {}
+            for orig_p, local_p in zip(lists["test_defect"], local_td):
+                if orig_p in src_cmm:
+                    local_class_mask_map[local_p] = src_cmm[orig_p]
 
         # synth per condition
         synth_roots = {"random": random_synth_dir, "aroma": aroma_synth_dir}
@@ -827,6 +940,8 @@ def _local_cache_for_yolo(
         "test_defect": local_td,
         "mask_map": local_mask_map,
     }
+    if local_class_mask_map is not None:
+        new_lists["class_mask_map"] = local_class_mask_map
     return new_lists, new_synth_by_cond
 
 
@@ -837,6 +952,7 @@ def _get_real_test_images_and_labels(
     image_dir_out: str,
     min_area: int = 50,
     force_copy: bool = False,
+    class_mask_map: Optional[Dict[str, Dict[int, str]]] = None,
 ) -> int:
     """
     real defect 이미지 + GT mask → YOLO label set 구성 (condition-agnostic).
@@ -848,6 +964,11 @@ def _get_real_test_images_and_labels(
       - YOLO label 작성
       - 이미지 stage
     mask 가 없는 defect 이미지는 제외 (label 없으면 학습/평가 모두 불가).
+
+    class_mask_map (severstal multi mode only): {img: {class_id(1..4): per_class_png}}.
+    When provided, each per-class mask contributes bboxes with class_id-1 (0-indexed
+    for YOLO nc=4). When None (default, every existing dataset + single mode), the
+    merged mask_map drives a single class_id=0 — byte-identical to prior behavior.
 
     Returns count of images with labels.
     """
@@ -865,6 +986,40 @@ def _get_real_test_images_and_labels(
         img_w, img_h = _image_size(img_p)
         if img_w <= 0 or img_h <= 0:
             n_bad_size += 1
+            continue
+
+        # --- MULTI MODE (severstal): per-class masks → multi-class YOLO lines ---
+        if class_mask_map is not None:
+            per_class = class_mask_map.get(img_p)
+            if not per_class:
+                n_no_bbox += 1
+                continue
+            lines: List[str] = []
+            for cls in sorted(per_class):
+                pc_path = per_class[cls]
+                c_bboxes, mw, mh = _mask_to_bboxes(pc_path, min_area=min_area)
+                if not c_bboxes:
+                    continue
+                if (mw, mh) != (img_w, img_h) and mw > 0 and mh > 0:
+                    sx = img_w / mw
+                    sy = img_h / mh
+                    c_bboxes = [
+                        (int(x * sx), int(y * sy), int(bw * sx), int(bh * sy))
+                        for (x, y, bw, bh) in c_bboxes
+                    ]
+                lines.extend(
+                    _bboxes_to_yolo_lines(c_bboxes, img_w, img_h, class_id=cls - 1)
+                )
+            if not lines:
+                n_no_lines += 1
+                continue
+            stem = f"real_{i:06d}"
+            img_dst = str(Path(image_dir_out) / f"{stem}{Path(img_p).suffix}")
+            _link_or_copy(img_p, img_dst, force_copy=force_copy)
+            (Path(label_dir) / f"{stem}.txt").write_text(
+                "\n".join(lines) + "\n", encoding="utf-8"
+            )
+            n += 1
             continue
 
         m_bboxes, mw, mh = _mask_to_bboxes(mask_p, min_area=min_area)
@@ -910,14 +1065,26 @@ def _write_yolo_yaml(
     train_img_subdir: str,
     val_img_subdir: str,
     yaml_path: str,
+    class_mode: str = "single",
 ) -> None:
-    """Write ultralytics dataset YAML."""
+    """Write ultralytics dataset YAML.
+
+    class_mode='single' (default): nc=1, names=['defect'] — byte-identical to the
+    historical output for all existing datasets. class_mode='multi': nc=4,
+    names=['c1','c2','c3','c4'] (severstal 4-class).
+    """
+    if class_mode == "multi":
+        nc_line = "nc: 4\n"
+        names_line = "names: ['c1', 'c2', 'c3', 'c4']\n"
+    else:
+        nc_line = "nc: 1\n"
+        names_line = "names: ['defect']\n"
     content = (
         f"path: {root_dir}\n"
         f"train: {train_img_subdir}\n"
         f"val: {val_img_subdir}\n"
-        f"nc: 1\n"
-        f"names: ['defect']\n"
+        f"{nc_line}"
+        f"{names_line}"
     )
     Path(yaml_path).write_text(content, encoding="utf-8")
 
@@ -1022,6 +1189,7 @@ def _build_or_load_real_yolo_dataset(
     min_area: int = 50,
     val_frac: float = 0.5,
     split_seed: int = 42,
+    class_mask_map: Optional[Dict[str, Dict[int, str]]] = None,
 ) -> Dict[str, Tuple[List[str], List[str], int]]:
     """
     Build or load cached per-split real YOLO dataset.
@@ -1032,7 +1200,9 @@ def _build_or_load_real_yolo_dataset(
     When cache_dir provided: checks Drive cache, builds+saves on miss.
     """
     use_cache = cache_dir is not None
-    cache_root = Path(cache_dir) / ds_key / "real" if use_cache else None
+    # Isolate multi-class caches from single so the two label sets never collide.
+    cache_leaf = "real_multi" if class_mask_map is not None else "real"
+    cache_root = Path(cache_dir) / ds_key / cache_leaf if use_cache else None
 
     # --- CACHE HIT ---
     n_source_defects = sum(len(v) for v in defect_splits.values())
@@ -1089,6 +1259,7 @@ def _build_or_load_real_yolo_dataset(
             image_dir_out=str(img_out),
             min_area=min_area,
             force_copy=use_cache,
+            class_mask_map=class_mask_map,
         )
         imgs = sorted(
             str(p)
@@ -1163,6 +1334,7 @@ def _run_yolo_condition(
     seed: int = 42,
     device: int = 0,
     patience: int = 0,
+    class_mode: str = "single",
 ) -> Dict[str, Any]:
     """
     하나의 (model, condition) 조합을 학습/평가.
@@ -1256,6 +1428,7 @@ def _run_yolo_condition(
                 train_img_subdir="train/images",
                 val_img_subdir="val/images",
                 yaml_path=yaml_path,
+                class_mode=class_mode,
             )
 
             # --- Weights selection: baseline=COCO, others=baseline best.pt ---
@@ -1394,6 +1567,7 @@ def _run_detection_mode(
     yolo_cache_dir: Optional[str] = None,
     local_cache: bool = True,
     patience: int = 0,
+    class_mode: str = "single",
 ) -> Dict[str, Any]:
     """
     Iterate datasets x models x conditions (COCO pretrained start).
@@ -1429,7 +1603,11 @@ def _run_detection_mode(
     for ds in dataset_keys:
         try:
             logger.info("=== Detection dataset: %s ===", ds)
-            lists = _get_image_lists(ds, real_data_dir, seed=seed)
+            # class_mode='multi' only affects severstal; other datasets ignore it.
+            ds_class_mode = class_mode if ds == "severstal" else "single"
+            lists = _get_image_lists(
+                ds, real_data_dir, seed=seed, class_mode=ds_class_mode,
+            )
             if lists is None:
                 logger.warning("Detection skip %s — dataset not found", ds)
                 continue
@@ -1460,6 +1638,12 @@ def _run_detection_mode(
                 lists, synth_by_cond = _local_cache_for_yolo(
                     ds, lists, synth_by_cond, random_synthetic_dir, aroma_synthetic_dir,
                 )
+
+            # Read class_mask_map AFTER local caching: _local_cache_for_yolo
+            # rewrites its keys to /tmp paths in lockstep with test_defect.
+            # Reading it before would retain Drive-path keys that never match the
+            # /tmp test_defect paths used downstream -> 0 multi-mode labels.
+            class_mask_map = lists.get("class_mask_map") if ds_class_mode == "multi" else None
 
             train_normal = lists["train_normal"]
             all_defect   = lists["test_defect"]
@@ -1509,6 +1693,7 @@ def _run_detection_mode(
                 min_area=50,
                 val_frac=val_frac,
                 split_seed=seed,
+                class_mask_map=class_mask_map,
             )
 
             # checkpoint base persists under output_dir so best.pt survives the run.
@@ -1583,6 +1768,7 @@ def _run_detection_mode(
                         seed=seed,
                         device=device,
                         patience=patience,
+                        class_mode=ds_class_mode,
                     )
                     model_results[cond] = res
                     logger.info(
@@ -1961,6 +2147,7 @@ def run(
     yolo_cache_dir: Optional[str] = None,
     local_cache: bool = True,
     patience: int = 0,
+    class_mode: str = "single",
 ) -> Dict[str, Any]:
     if not _CV2_AVAILABLE:
         logger.error("OpenCV (cv2) not installed. Run: pip install opencv-python-headless")
@@ -2022,6 +2209,7 @@ def run(
                 yolo_cache_dir=yolo_cache_dir,
                 local_cache=local_cache,
                 patience=patience,
+                class_mode=class_mode,
             )
             per_seed_results[s] = res_s
             save_json(res_s, seed_output_path)
@@ -2128,6 +2316,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
+    p.add_argument(
+        "--class_mode",
+        choices=["single", "multi"],
+        default="single",
+        help=(
+            "단일(single)=nc1 'defect' (기존 전 데이터셋 동작 불변, default). "
+            "multi=nc4 (severstal 4-class 전용; 다른 데이터셋엔 영향 없음)."
+        ),
+    )
     p.add_argument("--seed",   type=int, default=42,
                    help="단일 seed (default: 42). --seeds 미지정 시 사용.")
     p.add_argument(
@@ -2191,6 +2388,7 @@ def main(argv=None) -> None:
         yolo_cache_dir=args.yolo_cache_dir,
         local_cache=not args.no_local_cache,
         patience=args.patience,
+        class_mode=args.class_mode,
     )
     status = result.get("status", "unknown")
     n_ds   = len(result.get("results", {}))

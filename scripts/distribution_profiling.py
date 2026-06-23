@@ -141,6 +141,19 @@ def _find_mask_path(domain: str, image_path: Path, defect_type: str) -> Optional
             if candidate.exists():
                 return candidate
 
+    elif domain == "severstal":
+        # prepare_severstal.py writes RLE→PNG masks:
+        #   per-class : .../severstal/masks/{defect_type}/{stem}.png  (defect_type=classN)
+        #   merged    : .../severstal/masks/{stem}.png
+        # image_path : .../severstal/test/{defect_type}/{stem}.png
+        sev_root = image_path.parent.parent.parent  # .../severstal/
+        per_class = sev_root / "masks" / defect_type / f"{stem}.png"
+        if per_class.exists():
+            return per_class
+        merged = sev_root / "masks" / f"{stem}.png"
+        if merged.exists():
+            return merged
+
     # isp: no ground-truth masks; other domains also return None → fallback
     return None
 
