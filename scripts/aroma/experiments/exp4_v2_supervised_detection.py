@@ -1657,7 +1657,10 @@ def _run_yolo_condition(
                     names = getattr(val_results, "names", None)
                     if names is None:
                         names = {0: "c1", 1: "c2", 2: "c3", 3: "c4"}
-                    idxs = list(getattr(box, "ap_class_index", []) or [])
+                    # ap_class_index 는 numpy 배열 → `or []` 같은 truthiness 평가
+                    # 금지(원소>1 이면 "ambiguous truth value" 예외). None 만 분기.
+                    _idx_raw = getattr(box, "ap_class_index", None)
+                    idxs = [] if _idx_raw is None else list(_idx_raw)
                     for i, cls_id in enumerate(idxs):
                         cls_id = int(cls_id)
                         # class_result(i) → (P, R, AP@0.5, AP@0.5:0.95)
