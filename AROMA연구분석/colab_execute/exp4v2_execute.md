@@ -139,6 +139,44 @@ YOLOv8 EarlyStopping을 활성화한다. best mAP50-95 갱신 없이 N epoch이 
 > **주의**: EarlyStopping 기준은 `mAP50-95`이다. 실험 목표가 `mAP50` 최대화라면 두 지표의 peak epoch이 다를 수 있다.  
 > 조건 간 공정 비교를 위해 모든 조건(baseline/random/aroma)에 동일한 patience가 적용된다.
 
+### `--batch` / `--cache` / `--rect` (선택) — 학습 속도 인자
+
+`model.train()`에 전달되는 YOLO 학습 속도 인자 3종. **세 인자 모두 기본값=Ultralytics 기본(현행)** 이라 미지정 시 기존 동작과 byte-identical. 전 조건(baseline/random/aroma)에 동일하게 적용되어 비교 공정성·val 셋 불변.
+
+| 인자 | 기본값 | 설명 |
+|------|--------|------|
+| `--batch` | 16 | YOLO train batch size. A100에서 step 과다로 GPU 저활용 시 **64/128**로 상향 권장. `-1`=auto(GPU 60% VRAM)도 가능하나 method/조건간 실제 batch가 달라져 공정성·재현성을 해치므로 고정값 권장 |
+| `--cache` | `""` (False) | 데이터 캐싱. `""`=비캐싱(매 epoch 디스크 재디코드). `ram`=RAM 캐시(최고속, 메모리 충분 시), `disk`=디스크 캐시, `True`=`ram` 별칭. I/O 병목 시 속도 향상 |
+| `--rect` | False | rectangular training. 활성화 시 배치 내 종횡비 유사 이미지를 묶어 letterbox 회색 패딩을 최소화 → 속도 향상. 단 batch 내 이미지 크기 변동으로 결과가 미세하게 달라질 수 있고, Ultralytics가 shuffle을 비활성화한다(opt-in, 전 조건 동일 적용이라 공정성 불변) |
+
+> **현행 보존**: 세 인자 미지정 시 batch=16 / cache off / rect off = 기존과 동일. 회귀 없음.
+> **cache 파싱**: `""`/None → False, `ram`/`True` → `ram`, `disk` → `disk`.
+> **RAM 부족**: `--cache ram` OOM 시 `--cache disk`로 폴백.
+
+```python
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolov8n \
+    --condition all \
+    --dataset_keys mvtec_cable visa_cashew mvtec_carpet mvtec_leather \
+    --random_synthetic_dir $RANDOM_SYNTH_DIR \
+    --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
+    --real_data_dir        $AROMA_DATA \
+    --output_dir           $EXP4V2_OUT \
+    --yolo_cache_dir       $AROMA_OUT/yolo_cache \
+    --imgsz 640 \
+    --val_frac 0.3 \
+    --synth_ratio 0.5 \
+    --baseline_epochs 300 \
+    --patience 50 \
+    --batch 64 \
+    --cache ram \
+    --rect \
+    --resume
+```
+
+> `--batch 64 --cache ram --rect` → step 수 감소 + 디스크 재디코드 제거 + 패딩 연산 절감으로 학습 속도 개선.  
+> Severstal류 고종횡비(1600×256, 6.25:1) 이미지에서 `--rect` 효과가 특히 크다(정사각 letterbox 시 ~84% 회색 패딩).
+
 ### Local image cache (자동)
 
 Linux / Colab 환경에서는 CLI 인자 없이 자동으로 활성화된다.  
@@ -488,6 +526,7 @@ for ds in sorted(results):
 - **파라미터 변경 후 재실행 시 결과 초기화 필요**: `val_frac`, `max_synth_per_ds`, `imgsz`, `baseline_epochs` 등 학습 조건이 변경되면 이전 `exp4v2_results.json`의 캐시 결과가 불일치한다. `--resume` 사용 시 기존 결과가 skip 조건으로 판정되어 재학습이 일어나지 않는다. 해당 데이터셋 조건의 결과를 json에서 직접 삭제하거나 파일 전체를 삭제 후 재실행.
 - **baseline_epochs=300 수렴 안정**: 소규모 데이터(42~70장)는 300 epoch이 안전한 상한. EarlyStopping(`--patience 50`)을 함께 사용하면 실제 수렴 시점에서 자동 종료된다.
 - **imgsz=640 권장**: 기본값 256은 고해상도 이미지에서 small defect 검출 능력 저하. 640 사용 시 약간 느리지만 검출 정확도 개선.
+- **학습 속도 인자(`--batch`/`--cache`/`--rect`)**: 세 인자 모두 기본값=현행이라 미지정 시 회귀 없음. 전 조건에 동일 적용되어 공정성 불변. `--batch -1`(auto)은 조건간 batch가 달라질 수 있어 비권장. 상세는 "선택적 CLI 인자 — 속도 최적화" 섹션 참고.
 - **Test set 원칙**: 합성 이미지는 train에만 포함. test/defect는 항상 real 이미지만 사용.
 - **mvtec_carpet / mvtec_leather**: texture 계열, exp4v2 신규 추가(visa_pcb 대체). full-frame 표면이라 배경 void 없음.
 - **GPU 필수**: YOLO 학습은 CUDA 없이 실행 불가.

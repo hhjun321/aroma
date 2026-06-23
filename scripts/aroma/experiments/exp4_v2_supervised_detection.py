@@ -1386,7 +1386,9 @@ def _run_yolo_condition(
                        save=False.
 
     Returns {map50, map50_95, precision, recall, n_train, n_real_train,
-             n_synth_train, weights_path(baseline only)}.
+             n_synth_train, weights_path(baseline only),
+             per_class(class_mode=='multi' only): {name: {map50, map50_95,
+             precision, recall}}}.
     """
     try:
         from ultralytics import YOLO  # type: ignore[import]
@@ -1573,6 +1575,42 @@ def _run_yolo_condition(
                 "n_real_train": int(n_real),
                 "n_synth_train": int(n_synth),
             }
+
+            # multi 모드: 클래스별 metric 기록 (single/타 데이터셋은 미추가 →
+            # 기존 JSON byte-identical). out["per_class"] = {name: {map50, ...}}.
+            if class_mode == "multi":
+                per_class: Dict[str, Dict[str, float]] = {}
+                try:
+                    # val_results.names: {cls_id: name}; fallback ['c1'..'c4'].
+                    # is None 체크: 빈 dict를 유효 매핑으로 오인하지 않음.
+                    names = getattr(val_results, "names", None)
+                    if names is None:
+                        names = {0: "c1", 1: "c2", 2: "c3", 3: "c4"}
+                    idxs = list(getattr(box, "ap_class_index", []) or [])
+                    for i, cls_id in enumerate(idxs):
+                        cls_id = int(cls_id)
+                        # class_result(i) → (P, R, AP@0.5, AP@0.5:0.95)
+                        p, r, ap50, ap = box.class_result(i)
+                        if isinstance(names, dict):
+                            name = names.get(cls_id, f"class{cls_id}")
+                        elif 0 <= cls_id < len(names):
+                            name = names[cls_id]
+                        else:
+                            name = f"class{cls_id}"
+                        per_class[name] = {
+                            "map50":     round(float(ap50), 4),
+                            "map50_95":  round(float(ap), 4),
+                            "precision": round(float(p), 4),
+                            "recall":    round(float(r), 4),
+                        }
+                except Exception as _pc_exc:
+                    logger.warning(
+                        "    %s/%s: per-class extract failed: %s",
+                        model_name, condition, _pc_exc,
+                    )
+                # 빈 dict 가능(검출 전무) — multi 모드면 키는 항상 존재
+                out["per_class"] = per_class
+
             # baseline best.pt 위치를 caller 가 재사용할 수 있도록 보고
             if condition == "baseline":
                 out["weights_path"] = str(
@@ -1871,6 +1909,51 @@ def _fmt_delta(x: Dict[str, Any], y: Dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _per_class_block(m_data: Dict[str, Any], conds: List[str]) -> List[str]:
+    """multi 모드 per-class map50 표 (rows=class, cols=조건 + Δ(A-R)).
+
+    조건 셀의 per_class(단일=실측, 멀티시드=클래스별 mean)에서 map50을 읽는다.
+    per_class가 어떤 조건에도 없으면(=single 모드/타 데이터셋) [] 반환 → 표 미출력.
+    값 전체(map50_95/precision/recall)는 JSON 참조.
+    """
+    names: List[str] = []
+    seen = set()
+    for cond in conds:
+        pc = (m_data.get(cond, {}) or {}).get("per_class") or {}
+        for cname in pc:
+            if cname not in seen:
+                seen.add(cname)
+                names.append(cname)
+    if not names:
+        return []
+    names = sorted(names)
+
+    out_cols = list(conds) + ["Δ(A-R)"]
+    lines = ["#### per-class map50 (multi)", ""]
+    header = " | ".join(f"{c:>10}" for c in out_cols)
+    lines.append(f"| {'class':<8} | {header} |")
+    sep = " | ".join("-" * 10 for _ in out_cols)
+    lines.append(f"|{'-' * 10}|{sep}|")
+    for cname in names:
+        vals: Dict[str, Optional[float]] = {}
+        cells = []
+        for cond in conds:
+            pc = (m_data.get(cond, {}) or {}).get("per_class") or {}
+            v = (pc.get(cname) or {}).get("map50")
+            v = v if isinstance(v, (int, float)) else None
+            vals[cond] = v
+            cells.append(f"{v:.4f}" if v is not None else "N/A")
+        a, r = vals.get("aroma"), vals.get("random")
+        if isinstance(a, (int, float)) and isinstance(r, (int, float)):
+            cells.append(f"{(a - r) * 1.0:+.4f}")
+        else:
+            cells.append("N/A")
+        row = " | ".join(f"{c:>10}" for c in cells)
+        lines.append(f"| {cname:<8} | {row} |")
+    lines.append("")
+    return lines
+
+
 def _build_summary(results: Dict[str, Any]) -> str:
     """
     Build Markdown summary (COCO pretrained start).
@@ -1933,6 +2016,9 @@ def _build_summary(results: Dict[str, Any]) -> str:
             lines.append("**Delta (AROMA − Random)**:   " + _fmt_delta(a, r))
             lines.append("")
 
+            # per-class map50 표 (multi 모드에서만; single은 [] 반환)
+            lines += _per_class_block(m_data, list(all_conds))
+
     return "\n".join(lines)
 
 
@@ -1980,6 +2066,8 @@ def _aggregate_seeds(
         int_fields: Dict[str, Optional[int]] = {k: None for k in _INT_FIELDS}
         int_conflict = False
         weights_path: Optional[str] = None
+        # per_class(멀티시드): {class_name: {metric: [seed별 값,...]}} — 클래스 union
+        pc_samples: Dict[str, Dict[str, List[float]]] = {}
 
         for s in seed_list:
             cell = (
@@ -2002,6 +2090,17 @@ def _aggregate_seeds(
                 else:
                     ps_metrics[k] = None
             per_seed_cell[str(s)] = ps_metrics
+            # per_class 수집: seed마다 등장 클래스 집합이 다를 수 있어 union 누적
+            pc = cell.get("per_class")
+            if isinstance(pc, dict):
+                for cname, cmetrics in pc.items():
+                    if not isinstance(cmetrics, dict):
+                        continue
+                    slot = pc_samples.setdefault(cname, {m: [] for m in _AGG_METRICS})
+                    for m in _AGG_METRICS:
+                        cv = cmetrics.get(m)
+                        if isinstance(cv, (int, float)):
+                            slot[m].append(float(cv))
             # integer fields: expect identical across seeds; flag if not
             for k in _INT_FIELDS:
                 v = cell.get(k)
@@ -2062,6 +2161,17 @@ def _aggregate_seeds(
         }
         if weights_path is not None:
             agg_cell["weights_path"] = weights_path
+
+        # per_class mean 부착 (멀티시드): 클래스별·metric별로 값이 있는 seed만 평균.
+        # 하나도 없으면 키 미추가 → single/multi 비-멀티클래스 셀은 byte-identical.
+        if pc_samples:
+            per_class_mean: Dict[str, Dict[str, Optional[float]]] = {}
+            for cname, slot in pc_samples.items():
+                per_class_mean[cname] = {
+                    m: (round(float(np.mean(slot[m])), 4) if slot[m] else None)
+                    for m in _AGG_METRICS
+                }
+            agg_cell["per_class"] = per_class_mean
 
         out.setdefault(ds, {}).setdefault(model, {})[cond] = agg_cell
 
@@ -2175,6 +2285,9 @@ def _build_summary_multiseed(results: Dict[str, Any], seed_list: List[int]) -> s
             lines.append("**Delta (AROMA − Baseline)**: " + _fmt_mean_std_delta(a, b))
             lines.append("**Delta (AROMA − Random)**:   " + _fmt_mean_std_delta(a, r))
             lines.append("")
+
+            # per-class map50 표 (multi 모드; 멀티시드는 클래스별 mean). single은 [] 반환
+            lines += _per_class_block(m_data, list(all_conds))
 
     return "\n".join(lines)
 
