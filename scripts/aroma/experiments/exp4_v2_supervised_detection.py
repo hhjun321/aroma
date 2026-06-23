@@ -1521,6 +1521,25 @@ def _run_yolo_condition(
                 )
             n_train = n_real + n_synth
 
+            # Per-class instance histogram over staged train labels (real defect
+            # + synth). Surfaces rare-class starvation (e.g. a class with ~0 train
+            # boxes) right in the log instead of needing an external diagnostic.
+            # Background negatives carry no label file, so they're excluded.
+            try:
+                _cls_hist: Dict[int, int] = {}
+                for _lf in Path(train_lbl).glob("*.txt"):
+                    for _ln in _lf.read_text().splitlines():
+                        _tok = _ln.split()
+                        if _tok:
+                            _c = int(_tok[0])
+                            _cls_hist[_c] = _cls_hist.get(_c, 0) + 1
+                logger.info(
+                    "    train label instances per class (yolo idx): %s",
+                    {k: _cls_hist[k] for k in sorted(_cls_hist)},
+                )
+            except Exception as _h_exc:
+                logger.warning("    train class histogram failed: %s", _h_exc)
+
             # --- VAL: real labeled defects (disjoint from train) ---
             _stage_pairs_into(
                 real_sets["val"], val_img, val_lbl,
