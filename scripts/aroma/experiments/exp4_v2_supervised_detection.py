@@ -1511,8 +1511,11 @@ def _run_detection_mode(
                 split_seed=seed,
             )
 
-            # checkpoint base persists under output_dir so best.pt survives the run
-            ckpt_base = str(Path(output_dir) / ds)
+            # checkpoint base persists under output_dir so best.pt survives the run.
+            # Multi-seed: isolate per seed so seeds don't overwrite each other's
+            # best.pt. Single-seed runs still get a _seeds/seed{N}/ subtree (the
+            # weights are scratch-rebuilt anyway, so the path change is harmless).
+            ckpt_base = str(Path(output_dir) / "_seeds" / f"seed{seed}" / ds)
 
             ds_results: Dict[str, Any] = dict(existing.get(ds, {}))
 
@@ -1693,6 +1696,249 @@ def _build_summary(results: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Multi-seed aggregation
+# ---------------------------------------------------------------------------
+
+_AGG_METRICS = ("map50", "map50_95", "precision", "recall")
+_INT_FIELDS = ("n_train", "n_real_train", "n_synth_train")
+
+
+def _aggregate_seeds(
+    per_seed_results: Dict[int, Dict[str, Any]],
+    seed_list: List[int],
+) -> Dict[str, Any]:
+    """
+    Aggregate per-seed results into mean ± std + 95% CI per (ds, model, cond).
+
+    per_seed_results: {seed: results_dict} where results_dict is the standard
+    {ds: {model: {cond: {map50, map50_95, precision, recall, n_*, ...}}}}.
+
+    Returns the SAME nested shape with top-level metric keys = mean (backward
+    compatible: plot_exp4v2_results.py reads results[ds][model][cond]["map50"]).
+    Adds per_seed{}, std{}, ci95{}, n_seeds. Failed seeds (missing cell or
+    map50 is None) are dropped from a cell's aggregation; k = #successful seeds.
+    """
+    # Enumerate every (ds, model, cond) that appears in any seed.
+    cells: Dict[Tuple[str, str, str], None] = {}
+    for s in seed_list:
+        rs = per_seed_results.get(s) or {}
+        for ds, m_data in rs.items():
+            if not isinstance(m_data, dict):
+                continue
+            for model, c_data in m_data.items():
+                if not isinstance(c_data, dict):
+                    continue
+                for cond in c_data:
+                    cells[(ds, model, cond)] = None
+
+    out: Dict[str, Any] = {}
+    for (ds, model, cond) in cells:
+        # Collect per-seed metric vectors (only seeds with a valid map50 count).
+        per_seed_cell: Dict[str, Dict[str, Any]] = {}
+        metric_samples: Dict[str, List[float]] = {k: [] for k in _AGG_METRICS}
+        int_fields: Dict[str, Optional[int]] = {k: None for k in _INT_FIELDS}
+        int_conflict = False
+        weights_path: Optional[str] = None
+
+        for s in seed_list:
+            cell = (
+                (per_seed_results.get(s) or {})
+                .get(ds, {})
+                .get(model, {})
+                .get(cond)
+            )
+            if not isinstance(cell, dict):
+                continue
+            if cell.get("map50") is None:
+                # failed/incomplete seed for this cell — skip from aggregation
+                continue
+            ps_metrics: Dict[str, Any] = {}
+            for k in _AGG_METRICS:
+                v = cell.get(k)
+                if isinstance(v, (int, float)):
+                    metric_samples[k].append(float(v))
+                    ps_metrics[k] = float(v)
+                else:
+                    ps_metrics[k] = None
+            per_seed_cell[str(s)] = ps_metrics
+            # integer fields: expect identical across seeds; flag if not
+            for k in _INT_FIELDS:
+                v = cell.get(k)
+                if isinstance(v, int):
+                    if int_fields[k] is None:
+                        int_fields[k] = v
+                    elif int_fields[k] != v:
+                        int_conflict = True
+            if cond == "baseline" and weights_path is None and cell.get("weights_path"):
+                weights_path = cell.get("weights_path")
+
+        k = len(per_seed_cell)
+        if k == 0:
+            # Every seed failed for this cell — DROP it (don't write a None
+            # placeholder). Readers use .get(cond, {}) → defaults; resume sees
+            # the cell absent → re-runs. A None-filled cell would instead crash
+            # plot_exp4v2_results.py (int(None)) and persist a dead entry.
+            logger.warning(
+                "  [Aggregate] %s/%s/%s: all %d seeds failed — cell dropped",
+                ds, model, cond, len(seed_list),
+            )
+            continue
+
+        if int_conflict:
+            logger.warning(
+                "  [Aggregate] %s/%s/%s: integer fields differ across seeds "
+                "(n_train/n_real_train/n_synth_train) — using a representative value",
+                ds, model, cond,
+            )
+
+        mean: Dict[str, float] = {}
+        std: Dict[str, float] = {}
+        ci95: Dict[str, List[float]] = {}
+        for col in _AGG_METRICS:
+            samples = metric_samples[col]
+            if samples:
+                m = float(np.mean(samples))
+                # sample std (ddof=1); 0.0 when fewer than 2 samples
+                s_std = float(np.std(samples, ddof=1)) if len(samples) >= 2 else 0.0
+            else:
+                m, s_std = 0.0, 0.0
+            mean[col] = round(m, 4)
+            std[col] = round(s_std, 4)
+            ci95[col] = _ci95(samples, m, s_std)
+
+        agg_cell = {
+            "map50":        mean["map50"],
+            "map50_95":     mean["map50_95"],
+            "precision":    mean["precision"],
+            "recall":       mean["recall"],
+            "n_train":      int_fields["n_train"],
+            "n_real_train": int_fields["n_real_train"],
+            "n_synth_train": int_fields["n_synth_train"],
+            "n_seeds":      k,
+            "per_seed":     per_seed_cell,
+            "std":          std,
+            "ci95":         ci95,
+        }
+        if weights_path is not None:
+            agg_cell["weights_path"] = weights_path
+
+        out.setdefault(ds, {}).setdefault(model, {})[cond] = agg_cell
+
+    return out
+
+
+def _ci95(samples: List[float], mean: float, std: float) -> List[float]:
+    """95% CI half-width via t-distribution (small samples); fallback 1.96·SE.
+
+    Returns [lo, hi]. k<2 → [mean, mean] (no spread estimable).
+    """
+    k = len(samples)
+    if k < 2:
+        return [round(mean, 4), round(mean, 4)]
+    se = std / (k ** 0.5)
+    tcrit: Optional[float] = None
+    try:
+        from scipy import stats  # type: ignore[import]
+        tcrit = float(stats.t.ppf(0.975, df=k - 1))
+    except Exception:
+        tcrit = None
+    if tcrit is None:
+        # small-sample t critical values (two-sided 95%); fall back to 1.96
+        _T = {2: 12.706, 3: 4.303, 4: 3.182, 5: 2.776, 6: 2.571,
+              7: 2.447, 8: 2.365, 9: 2.306, 10: 2.262}
+        tcrit = _T.get(k, 1.96)
+    half = tcrit * se
+    return [round(mean - half, 4), round(mean + half, 4)]
+
+
+# ---------------------------------------------------------------------------
+# Multi-seed summary builder (mean ± std)
+# ---------------------------------------------------------------------------
+
+def _fmt_mean_std_delta(x: Dict[str, Any], y: Dict[str, Any]) -> str:
+    """Format (mean(x) - mean(y)) in pp + combined std for the core metrics."""
+    parts = []
+    for col in _AGG_METRICS:
+        xv, yv = x.get(col), y.get(col)
+        if isinstance(xv, (int, float)) and isinstance(yv, (int, float)):
+            d = (xv - yv) * 100
+            xs = (x.get("std") or {}).get(col, 0.0)
+            ys = (y.get("std") or {}).get(col, 0.0)
+            comb = ((float(xs) ** 2 + float(ys) ** 2) ** 0.5) * 100
+            parts.append(f"{col} {d:+.2f}±{comb:.2f}pp")
+        else:
+            parts.append(f"{col} N/A")
+    return ", ".join(parts)
+
+
+def _build_summary_multiseed(results: Dict[str, Any], seed_list: List[int]) -> str:
+    """
+    Build Markdown summary with mean ± std per condition (multi-seed).
+
+    Falls back to the single-seed table layout but renders each metric cell as
+    'mean ± std' and prints n_seeds. Delta panel reports mean delta ± combined std.
+    """
+    lines = [
+        "# AROMA Exp 4 v2 — Supervised YOLOv8 Defect Detection 평가 (multi-seed)",
+        "",
+        f"seeds = {seed_list}  (n_seeds={len(seed_list)})",
+        "각 셀 = mean ± std (sample std, ddof=1; n_seeds<2면 std=0). 95% CI는 JSON ci95 참조.",
+        "비교: Baseline (real-only) vs Random ROI (real+synth) vs AROMA ROI (real+synth)",
+        "Val = real defect (GT mask → bbox), train 과 disjoint. seed별 독립 split.",
+        "",
+    ]
+
+    all_conds = ALL_CONDITION_KEYS
+    metric_cols = list(_AGG_METRICS)
+    int_cols = ["n_real_train", "n_synth_train", "n_seeds"]
+
+    for ds in sorted(results):
+        ds_data = results[ds]
+        lines += [f"## {ds}", ""]
+
+        models_present = [m for m in ALL_MODEL_KEYS if m in ds_data]
+        if not models_present:
+            models_present = sorted(ds_data.keys())
+
+        for model_name in models_present:
+            m_data = ds_data.get(model_name, {})
+            lines += [f"### {model_name}", ""]
+
+            cols = metric_cols + int_cols
+            header = " | ".join(f"{c:>16}" for c in cols)
+            lines.append(f"| {'조건':<10} | {header} |")
+            sep = " | ".join("-" * 16 for _ in cols)
+            lines.append(f"|{'-' * 12}|{sep}|")
+
+            for cond in all_conds:
+                cm = m_data.get(cond, {})
+                std = cm.get("std") or {}
+                cells = []
+                for col in metric_cols:
+                    val = cm.get(col)
+                    if isinstance(val, (int, float)):
+                        sv = std.get(col, 0.0)
+                        cells.append(f"{val:.4f}±{float(sv):.4f}")
+                    else:
+                        cells.append("N/A")
+                for col in int_cols:
+                    val = cm.get(col)
+                    cells.append(str(val) if isinstance(val, int) else "N/A")
+                row = " | ".join(f"{c:>16}" for c in cells)
+                lines.append(f"| {cond:<10} | {row} |")
+            lines.append("")
+
+            a = m_data.get("aroma", {})
+            b = m_data.get("baseline", {})
+            r = m_data.get("random", {})
+            lines.append("**Delta (AROMA − Baseline)**: " + _fmt_mean_std_delta(a, b))
+            lines.append("**Delta (AROMA − Random)**:   " + _fmt_mean_std_delta(a, r))
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -1710,6 +1956,7 @@ def run(
     synth_ratio: Optional[float] = None,
     imgsz: int = 256,
     seed: int = 42,
+    seeds: Optional[List[int]] = None,
     resume: bool = False,
     yolo_cache_dir: Optional[str] = None,
     local_cache: bool = True,
@@ -1719,51 +1966,91 @@ def run(
         logger.error("OpenCV (cv2) not installed. Run: pip install opencv-python-headless")
         return {"status": "error", "results": {}}
 
+    # --seeds 우선; 미지정 시 단일 [seed] (기존 단일-seed 동작과 동일하게 흡수)
+    seed_list = seeds or [seed]
+
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     output_path = str(out / "exp4v2_results.json")
 
-    existing_results: Dict[str, Any] = {}
-    if resume and Path(output_path).exists():
-        try:
-            existing_results = load_json(output_path)
-            n = sum(
-                1
-                for ds in existing_results
-                for m in existing_results[ds]
-                for c in existing_results[ds][m]
-            )
-            logger.info("Resume: loaded %d existing results from %s", n, output_path)
-        except Exception as e:
-            logger.warning("Resume: failed to load existing results: %s — starting fresh", e)
+    per_seed_results: Dict[int, Dict[str, Any]] = {}
+    for s in seed_list:
+        # Per-seed results live under _seeds/seed{N}/ so each seed resumes
+        # independently and never overwrites another seed's JSON.
+        seed_dir = out / "_seeds" / f"seed{s}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        seed_output_path = str(seed_dir / "exp4v2_results.json")
 
-    results = _run_detection_mode(
-        model_keys=model_keys,
-        condition_keys=condition_keys,
-        dataset_keys=dataset_keys,
-        random_synthetic_dir=random_synthetic_dir,
-        aroma_synthetic_dir=aroma_synthetic_dir,
-        real_data_dir=real_data_dir,
-        output_dir=output_dir,
-        baseline_epochs=baseline_epochs,
-        val_frac=val_frac,
-        max_synth_per_ds=max_synth_per_ds,
-        synth_ratio=synth_ratio,
-        imgsz=imgsz,
-        seed=seed,
-        existing_results=existing_results,
-        output_path=output_path,
-        yolo_cache_dir=yolo_cache_dir,
-        local_cache=local_cache,
-        patience=patience,
-    )
+        existing_results: Dict[str, Any] = {}
+        if resume and Path(seed_output_path).exists():
+            try:
+                existing_results = load_json(seed_output_path)
+                n = sum(
+                    1
+                    for ds in existing_results
+                    for m in existing_results[ds]
+                    for c in existing_results[ds][m]
+                )
+                logger.info(
+                    "Resume[seed%s]: loaded %d existing results from %s",
+                    s, n, seed_output_path,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Resume[seed%s]: failed to load existing results: %s — starting fresh",
+                    s, e,
+                )
+
+        logger.info("=== SEED %s (%d of %d) ===", s, seed_list.index(s) + 1, len(seed_list))
+        try:
+            res_s = _run_detection_mode(
+                model_keys=model_keys,
+                condition_keys=condition_keys,
+                dataset_keys=dataset_keys,
+                random_synthetic_dir=random_synthetic_dir,
+                aroma_synthetic_dir=aroma_synthetic_dir,
+                real_data_dir=real_data_dir,
+                output_dir=output_dir,
+                baseline_epochs=baseline_epochs,
+                val_frac=val_frac,
+                max_synth_per_ds=max_synth_per_ds,
+                synth_ratio=synth_ratio,
+                imgsz=imgsz,
+                seed=s,
+                existing_results=existing_results,
+                output_path=seed_output_path,
+                yolo_cache_dir=yolo_cache_dir,
+                local_cache=local_cache,
+                patience=patience,
+            )
+            per_seed_results[s] = res_s
+            save_json(res_s, seed_output_path)
+        except Exception as exc:
+            logger.error("Seed %s failed entirely: %s — continuing with other seeds", s, exc)
+            # keep whatever partial JSON exists so this seed still contributes
+            if Path(seed_output_path).exists():
+                try:
+                    per_seed_results[s] = load_json(seed_output_path)
+                except Exception:
+                    per_seed_results[s] = {}
+            else:
+                per_seed_results[s] = {}
+
+    # Aggregate across seeds → top-level metrics = mean (backward compatible),
+    # plus per_seed/std/ci95/n_seeds.
+    results = _aggregate_seeds(per_seed_results, seed_list)
 
     save_json(results, output_path)
-    (out / "exp4v2_summary.md").write_text(_build_summary(results), encoding="utf-8")
+    if len(seed_list) > 1:
+        summary = _build_summary_multiseed(results, seed_list)
+    else:
+        # single seed → keep the original summary layout (no ± noise)
+        summary = _build_summary(results)
+    (out / "exp4v2_summary.md").write_text(summary, encoding="utf-8")
 
     logger.info(
-        "Saved exp4v2_results.json + exp4v2_summary.md -> %s  (%d datasets)",
-        out, len(results),
+        "Saved exp4v2_results.json + exp4v2_summary.md -> %s  (%d datasets, %d seeds)",
+        out, len(results), len(seed_list),
     )
     return {"status": "ok", "results": results}
 
@@ -1841,7 +2128,16 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
-    p.add_argument("--seed",   type=int, default=42)
+    p.add_argument("--seed",   type=int, default=42,
+                   help="단일 seed (default: 42). --seeds 미지정 시 사용.")
+    p.add_argument(
+        "--seeds", type=int, nargs="+", default=None,
+        help=(
+            "multi-seed 반복 목록 (예: --seeds 42 1 2). 지정 시 각 seed로 "
+            "독립 학습(train/val split·synth subsample·YOLO train 모두 seed 종속) 후 "
+            "조건별 mean±std + 95% CI 집계. 미지정 시 [--seed] 단일 실행(기존 동작)."
+        ),
+    )
     p.add_argument("--resume", action="store_true",
                    help="기존 exp4v2_results.json에서 완료된 run을 skip하고 재개")
     p.add_argument(
@@ -1866,6 +2162,16 @@ def main(argv=None) -> None:
     model_keys = ALL_MODEL_KEYS if args.model == "all" else [args.model]
     condition_keys = ALL_CONDITION_KEYS if args.condition == "all" else [args.condition]
 
+    # --seeds 우선; 미지정 시 단일 [--seed] (기존 동작과 동일)
+    seed_list = args.seeds if args.seeds else [args.seed]
+    # Dedup while preserving order — duplicate seeds would share one _seeds/seedN
+    # dir (resume-skip the 2nd) and collapse per_seed dict, falsely shrinking std.
+    _seen: set = set()
+    _deduped = [s for s in seed_list if not (s in _seen or _seen.add(s))]
+    if len(_deduped) != len(seed_list):
+        logger.warning("Duplicate seeds removed: %s → %s", seed_list, _deduped)
+    seed_list = _deduped
+
     result = run(
         model_keys=model_keys,
         condition_keys=condition_keys,
@@ -1880,6 +2186,7 @@ def main(argv=None) -> None:
         synth_ratio=args.synth_ratio,
         imgsz=args.imgsz,
         seed=args.seed,
+        seeds=seed_list,
         resume=args.resume,
         yolo_cache_dir=args.yolo_cache_dir,
         local_cache=not args.no_local_cache,
