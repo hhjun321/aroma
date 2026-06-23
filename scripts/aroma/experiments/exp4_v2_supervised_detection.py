@@ -644,24 +644,80 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
 
 
 # ---------------------------------------------------------------------------
-# Image staging helper (symlink on posix, copy on windows)
+# Image staging helper (hardlink first, copy fallback)
 # ---------------------------------------------------------------------------
 
-def _link_or_copy(src: str, dst: str, force_copy: bool = False) -> None:
-    # force_copy=True: always copy bytes (e.g. building a persistent YOLO cache
-    # that must survive the tmpdir / live on a different filesystem). Symlinks
-    # into a tmpdir would dangle once the tmpdir is cleaned up.
-    use_symlink = os.name != "nt" and not force_copy
-    if use_symlink:
-        if not Path(dst).exists():
-            try:
-                os.symlink(src, dst)
-                return
-            except OSError:
-                pass
-        else:
-            return
+def _link_or_copy(src: str, dst: str, force_copy: bool = False) -> str:
+    """Stage one file, hardlink-first. Returns "link" or "copy" (which path ran).
+
+    Hardlink shares the same inode (zero extra bytes) and, unlike a symlink,
+    keeps dst valid even after the original tmpdir is cleaned up. YOLO reads
+    staged images read-only, so a shared inode is safe.
+
+    Callers must ensure dst is unique within a staging batch (real images are
+    named ``real_*``; background ``bg_*``; synth ``syn_*`` — disjoint), so two
+    threads never target the same dst.
+
+    force_copy=True: always copy bytes (e.g. building a persistent YOLO cache
+    that must survive on a different filesystem than the source). Hardlinks
+    cannot span filesystems (EXDEV) anyway, so the copy fallback below also
+    covers the cross-device case.
+    """
+    if not force_copy:
+        # Stale dst (e.g. a prior partial run) would make os.link raise EEXIST.
+        # Remove it first so re-staging is deterministic; identical content makes
+        # this harmless. A genuinely undeletable dst is surfaced at debug so the
+        # confusing downstream shutil error has context.
+        try:
+            if os.path.lexists(dst):
+                os.remove(dst)
+        except OSError as _rm_exc:
+            logger.debug("stage: could not clear dst %s: %s", dst, _rm_exc)
+        try:
+            os.link(src, dst)
+            return "link"
+        except OSError:
+            # cross-device (EXDEV), unsupported FS, or a race on dst — fall back.
+            pass
     shutil.copy2(src, dst)
+    return "copy"
+
+
+def _bulk_link_or_copy(
+    pairs: List[Tuple[str, str]],
+    label: str,
+    max_workers: Optional[int] = None,
+    force_copy: bool = False,
+) -> int:
+    """Stage (src, dst) pairs in parallel via _link_or_copy.
+
+    Drive I/O is latency-bound, so a thread pool overlaps the per-file syscalls.
+    Emits exactly two log lines (start / done) — no per-file logging. The done
+    line reports how many were hardlinked vs byte-copied, so a silent fallback
+    to copy (e.g. ds_stage on a different mount than the tmpdir) is visible
+    instead of just looking slow. The first failing file re-raises (fail-fast);
+    other in-flight ops finish as the pool shuts down.
+    Returns the number of pairs processed (missing sources are skipped).
+    """
+    todo = [(s, d) for (s, d) in pairs if Path(s).exists()]
+    n = len(todo)
+    if n == 0:
+        logger.info("[Stage] %s: 0 files", label)
+        return 0
+    if max_workers is None:
+        max_workers = min(16, (os.cpu_count() or 4) * 4)
+    logger.info("[Stage] %s: %d files", label, n)
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = [ex.submit(_link_or_copy, s, d, force_copy) for (s, d) in todo]
+        modes = [f.result() for f in futs]
+    n_link = modes.count("link")
+    n_copy = modes.count("copy")
+    logger.info(
+        "[Stage] %s: done %d in %.1fs (hardlink=%d copy=%d)",
+        label, n, time.time() - t0, n_link, n_copy,
+    )
+    return n
 
 
 def _image_size(path: str) -> Tuple[int, int]:
@@ -830,16 +886,20 @@ def _stage_background_images(
     image_dir_out: str,
     prefix: str = "bg",
 ) -> int:
-    """Stage normal/background images into train images (no label = negative)."""
+    """Stage normal/background images into train images (no label = negative).
+
+    Preserves the prefixed rename (``{prefix}_{i:06d}``) so background filenames
+    never collide with defect/synth images; staging itself is parallel +
+    hardlink-first via _bulk_link_or_copy.
+    """
     Path(image_dir_out).mkdir(parents=True, exist_ok=True)
-    n = 0
+    pairs: List[Tuple[str, str]] = []
     for i, p in enumerate(normal_paths):
         if not Path(p).exists():
             continue
         dst = str(Path(image_dir_out) / f"{prefix}_{i:06d}{Path(p).suffix}")
-        _link_or_copy(p, dst)
-        n += 1
-    return n
+        pairs.append((p, dst))
+    return _bulk_link_or_copy(pairs, label=f"bg:{prefix}")
 
 
 # ---------------------------------------------------------------------------
@@ -1203,19 +1263,24 @@ def _stage_pairs_into(
     triple: Tuple[List[str], List[str], int],
     img_dst_dir: str,
     lbl_dst_dir: str,
+    label: str = "stage",
 ) -> None:
-    """Copy cached (image, label) pairs into a condition tmpdir.
+    """Stage cached (image, label) pairs into a condition tmpdir.
 
-    Always copies bytes (not symlinks): cache may live on a different
-    filesystem (Drive) than the tmpdir.
+    Uses _bulk_link_or_copy: when the source already lives on the same local
+    filesystem (e.g. the per-dataset staging dir) this is an instant hardlink;
+    cross-device sources fall back to a parallel byte copy. Labels are tiny text
+    files but are staged the same way for consistency.
     """
     img_paths, lbl_paths, _ = triple
-    for ip in img_paths:
-        shutil.copy2(ip, Path(img_dst_dir) / Path(ip).name)
-    for lp in lbl_paths:
-        dst = Path(lbl_dst_dir) / Path(lp).name
-        if Path(lp).is_file():
-            shutil.copy2(lp, dst)
+    img_pairs = [(ip, str(Path(img_dst_dir) / Path(ip).name)) for ip in img_paths]
+    _bulk_link_or_copy(img_pairs, label=f"{label}/images")
+    lbl_pairs = [
+        (lp, str(Path(lbl_dst_dir) / Path(lp).name))
+        for lp in lbl_paths
+        if Path(lp).is_file()
+    ]
+    _bulk_link_or_copy(lbl_pairs, label=f"{label}/labels")
 
 
 def _build_or_load_real_yolo_dataset(
@@ -1411,7 +1476,10 @@ def _run_yolo_condition(
             # --- TRAIN: real labeled defects (ALL conditions) ---
             # Pre-built/cached real (image,label) pairs are staged in;
             # the build itself happened once per dataset in the caller.
-            _stage_pairs_into(real_sets["train"], train_img, train_lbl)
+            _stage_pairs_into(
+                real_sets["train"], train_img, train_lbl,
+                label=f"{model_name}/{condition} train",
+            )
             n_real = real_sets["train"][2]
             logger.info("    train real labeled defects: %d", n_real)
             if n_real == 0:
@@ -1454,7 +1522,10 @@ def _run_yolo_condition(
             n_train = n_real + n_synth
 
             # --- VAL: real labeled defects (disjoint from train) ---
-            _stage_pairs_into(real_sets["val"], val_img, val_lbl)
+            _stage_pairs_into(
+                real_sets["val"], val_img, val_lbl,
+                label=f"{model_name}/{condition} val",
+            )
             n_val = real_sets["val"][2]
             logger.info("    val: %d real defect imgs with labels", n_val)
             if n_val == 0:
@@ -1691,6 +1762,7 @@ def _run_detection_mode(
     run_idx = 0
 
     for ds in dataset_keys:
+        ds_stage: Optional[str] = None  # per-dataset real staging dir (cleaned in finally)
         try:
             logger.info("=== Detection dataset: %s ===", ds)
             # class_mode='multi' only affects severstal; other datasets ignore it.
@@ -1786,6 +1858,54 @@ def _run_detection_mode(
                 class_mask_map=class_mask_map,
             )
 
+            # --- Per-dataset real staging (ONCE) -------------------------------
+            # The real (image,label) set is byte-identical across baseline/random/
+            # aroma, so stage it into one dataset-scoped local dir here and let each
+            # condition hardlink from it (zero extra bytes) instead of copying the
+            # whole real set 3x from Drive. real_sets paths may point at Drive
+            # (yolo_cache) or already-local /tmp (cache-miss build); the first
+            # staging copies Drive->local once, then per-condition staging is an
+            # instant local->local hardlink.
+            #
+            # Resume guard: if every (model,cond) for this dataset already has a
+            # valid cached map50, no condition will actually run -> skip staging.
+            any_to_run = any(
+                existing.get(ds, {}).get(m, {}).get(c, {}).get("map50") is None
+                for m in model_keys
+                for c in condition_keys
+            )
+            real_sets_local = real_sets
+            if any_to_run:
+                ds_stage = tempfile.mkdtemp(
+                    prefix=f"exp4v2_real_{ds}_",
+                    dir="/tmp" if os.name != "nt" else None,
+                )
+                _stage_dirs = {}
+                for split in ("train", "val"):
+                    img_d = Path(ds_stage) / split / "images"
+                    lbl_d = Path(ds_stage) / split / "labels"
+                    img_d.mkdir(parents=True, exist_ok=True)
+                    lbl_d.mkdir(parents=True, exist_ok=True)
+                    _stage_dirs[split] = (img_d, lbl_d)
+                real_sets_local = {}
+                for split in ("train", "val"):
+                    img_paths, lbl_paths, n_lab = real_sets.get(split, ([], [], 0))
+                    img_d, lbl_d = _stage_dirs[split]
+                    img_pairs = [
+                        (ip, str(img_d / Path(ip).name)) for ip in img_paths
+                    ]
+                    lbl_pairs = [
+                        (lp, str(lbl_d / Path(lp).name))
+                        for lp in lbl_paths
+                        if Path(lp).is_file()
+                    ]
+                    _bulk_link_or_copy(img_pairs, label=f"{ds} real {split} images")
+                    _bulk_link_or_copy(lbl_pairs, label=f"{ds} real {split} labels")
+                    local_imgs = [p for _, p in img_pairs]
+                    local_lbls = [p for _, p in lbl_pairs]
+                    real_sets_local[split] = (local_imgs, local_lbls, n_lab)
+                real_sets_local["test"] = real_sets.get("test", ([], [], 0))
+
             # checkpoint base persists under output_dir so best.pt survives the run.
             # Multi-seed: isolate per seed so seeds don't overwrite each other's
             # best.pt. Single-seed runs still get a _seeds/seed{N}/ subtree (the
@@ -1852,7 +1972,7 @@ def _run_detection_mode(
                         val_defect_paths=val_defect,
                         mask_map=mask_map,
                         checkpoint_dir=str(Path(ckpt_base) / model_name),
-                        real_sets=real_sets,
+                        real_sets=real_sets_local,
                         baseline_epochs=baseline_epochs,
                         imgsz=imgsz,
                         batch=batch,
@@ -1889,6 +2009,11 @@ def _run_detection_mode(
                 except Exception as _save_exc:
                     logger.warning("Error save failed: %s", _save_exc)
             continue
+        finally:
+            # Drop the per-dataset real staging dir (normal or error path). Only
+            # hardlinks/copies live here; the persistent yolo_cache is untouched.
+            if ds_stage is not None:
+                shutil.rmtree(ds_stage, ignore_errors=True)
 
     return results
 
