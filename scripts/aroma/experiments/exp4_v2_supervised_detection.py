@@ -55,6 +55,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -718,11 +719,35 @@ def _template_match_bbox(
     return [(int(x), int(y), int(bw), int(bh))]
 
 
+def _parse_severstal_class(source_roi: Optional[str]) -> Optional[int]:
+    """
+    Severstal source_roi 경로(.../test/class{N}/{id}.png)에서 0-indexed class id 추출.
+
+    'class{N}' 의 N (1~4) → N-1 (0~3) 반환. 패턴 미발견 또는 범위 밖이면 None.
+    real path(_get_real_test_images_and_labels)가 cls-1 을 쓰므로 synth 도 동일하게 N-1.
+    """
+    if not source_roi:
+        return None
+    # Anchor to a real .../class{N}/ path segment (between separators) so a stray
+    # 'class<digits>' elsewhere in the path can't be mis-parsed. Fallback to the
+    # loose match only if the anchored form misses.
+    m = re.search(r"[\\/]class(\d+)[\\/]", str(source_roi)) or re.search(
+        r"class(\d+)", str(source_roi)
+    )
+    if not m:
+        return None
+    cls = int(m.group(1)) - 1
+    if 0 <= cls <= 3:
+        return cls
+    return None
+
+
 def _write_yolo_labels(
     synth_annotations: List[Dict[str, Any]],
     label_dir: str,
     image_dir_out: str,
     min_area: int = 200,
+    class_mode: str = "single",
 ) -> int:
     """
     synthetic annotation 마다 defect bbox 추출 후 YOLO label 작성.
@@ -777,7 +802,19 @@ def _write_yolo_labels(
             # no label file → treated as background negative
             continue
 
-        lines = _bboxes_to_yolo_lines(bboxes, img_w, img_h, class_id=0)
+        if class_mode == "multi":
+            cls_id = _parse_severstal_class(ann.get("source_roi"))
+            if cls_id is None:
+                logger.warning(
+                    "multi mode: could not parse severstal class from source_roi=%s "
+                    "(synth idx %d) -> defaulting to class 0",
+                    ann.get("source_roi"), i,
+                )
+                cls_id = 0
+        else:
+            cls_id = 0
+
+        lines = _bboxes_to_yolo_lines(bboxes, img_w, img_h, class_id=cls_id)
         if not lines:
             continue
 
@@ -1403,6 +1440,7 @@ def _run_yolo_condition(
                     label_dir=train_lbl,
                     image_dir_out=train_img,
                     min_area=50,  # unify with real val GT (_build_real min_area=50)
+                    class_mode=class_mode,
                 )
                 logger.info(
                     "    %s train: %d/%d synth imgs labeled (additive)",

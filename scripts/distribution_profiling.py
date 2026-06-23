@@ -1136,6 +1136,7 @@ class DistributionProfiler:
 
     def _plot_figures(self) -> None:
         figs_dir = self.output_dir / "figures"
+        figs_dir.mkdir(parents=True, exist_ok=True)  # ensure exists before savefig
         morph_rows = _load_csv(self.output_dir / "morphology_features.csv")
         analysis: dict = {}
         try:
