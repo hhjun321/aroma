@@ -1368,6 +1368,9 @@ def _run_yolo_condition(
     real_sets: Dict[str, Tuple[List[str], List[str], int]],
     baseline_epochs: int = 50,
     imgsz: int = 256,
+    batch: int = 16,
+    cache: str = "",
+    rect: bool = False,
     seed: int = 42,
     device: int = 0,
     patience: int = 0,
@@ -1495,6 +1498,11 @@ def _run_yolo_condition(
             # NOTE: do NOT pass resume=True (would continue the same run's epoch counter).
             model = YOLO(weights)
 
+            # Normalize --cache: ""/None→False (no cache), "ram"/"true"→"ram",
+            # "disk"→"disk". Avoids relying on Ultralytics string coercion.
+            _c = (cache or "").strip().lower()
+            train_cache = "ram" if _c in ("ram", "true") else ("disk" if _c == "disk" else False)
+
             def _do_train():
                 return model.train(
                     data=yaml_path,
@@ -1509,6 +1517,9 @@ def _run_yolo_condition(
                     device=device,
                     exist_ok=True,
                     patience=patience,  # 0=disabled (default), N>0=EarlyStopping
+                    batch=batch,      # 16=Ultralytics default (기존 동작 불변)
+                    cache=train_cache,  # ""→False=비캐싱(기존), ram/disk opt-in
+                    rect=rect,        # False=정사각 letterbox (기존 동작 불변)
                 )
 
             logger.info(
@@ -1599,6 +1610,9 @@ def _run_detection_mode(
     max_synth_per_ds: Optional[int] = None,
     synth_ratio: Optional[float] = None,
     imgsz: int = 256,
+    batch: int = 16,
+    cache: str = "",
+    rect: bool = False,
     seed: int = 42,
     existing_results: Optional[Dict[str, Any]] = None,
     output_path: Optional[str] = None,
@@ -1803,6 +1817,9 @@ def _run_detection_mode(
                         real_sets=real_sets,
                         baseline_epochs=baseline_epochs,
                         imgsz=imgsz,
+                        batch=batch,
+                        cache=cache,
+                        rect=rect,
                         seed=seed,
                         device=device,
                         patience=patience,
@@ -2179,6 +2196,9 @@ def run(
     max_synth_per_ds: Optional[int] = None,
     synth_ratio: Optional[float] = None,
     imgsz: int = 256,
+    batch: int = 16,
+    cache: str = "",
+    rect: bool = False,
     seed: int = 42,
     seeds: Optional[List[int]] = None,
     resume: bool = False,
@@ -2241,6 +2261,9 @@ def run(
                 max_synth_per_ds=max_synth_per_ds,
                 synth_ratio=synth_ratio,
                 imgsz=imgsz,
+                batch=batch,
+                cache=cache,
+                rect=rect,
                 seed=s,
                 existing_results=existing_results,
                 output_path=seed_output_path,
@@ -2355,6 +2378,30 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--imgsz",  type=int, default=256,
                    help="YOLO image size (default: 256)")
     p.add_argument(
+        "--batch", type=int, default=16,
+        help=(
+            "YOLO train batch size (default: 16 = Ultralytics 기본). "
+            "-1=auto(GPU 60%% VRAM) 가능하나 method/조건간 실제 batch가 달라져 "
+            "공정성·재현성을 해칠 수 있어 고정값 권장."
+        ),
+    )
+    p.add_argument(
+        "--cache", type=str, default="",
+        help=(
+            "YOLO 데이터 캐싱 (default: '' → False=비캐싱, 기존 동작). "
+            "'ram'=RAM 캐시(최고속, 메모리 충분 시), 'disk'=디스크 캐시, "
+            "'True'=ram 별칭. I/O 병목 시 속도 향상."
+        ),
+    )
+    p.add_argument(
+        "--rect", action="store_true",
+        help=(
+            "rectangular training 활성화 (default: False=정사각 letterbox, 기존 동작). "
+            "배치 내 종횡비 유사 이미지 묶어 패딩 최소화 → 속도 향상. "
+            "단 batch 내 이미지 크기 변동으로 결과가 미세하게 달라질 수 있음."
+        ),
+    )
+    p.add_argument(
         "--class_mode",
         choices=["single", "multi"],
         default="single",
@@ -2420,6 +2467,9 @@ def main(argv=None) -> None:
         max_synth_per_ds=args.max_synth_per_ds,
         synth_ratio=args.synth_ratio,
         imgsz=args.imgsz,
+        batch=args.batch,
+        cache=args.cache,
+        rect=args.rect,
         seed=args.seed,
         seeds=seed_list,
         resume=args.resume,
