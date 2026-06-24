@@ -37,6 +37,8 @@ import os
 import random
 import shutil
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -584,15 +586,110 @@ def _stage_inputs(
     return staged_selected, staged_normal, normal_map
 
 
+# Push-out copy concurrency. Same workload shape as the adapter's stage-IN
+# (latency-bound FUSE round-trips, NOT CPU-bound), so we reuse the SAME
+# AROMA_STAGE_WORKERS knob and deliberately do NOT key off os.cpu_count()
+# (Colab = 2 vCPU). These helpers are duplicated (not imported) from
+# casda_roi_adapter.py ON PURPOSE: the adapter imports generate_defects, so
+# importing it back here would create a circular import. The ~15 duplicated
+# lines are preferred over a new shared module.
+_DEFAULT_STAGE_WORKERS = 16
+_STAGE_WORKERS_MIN = 1
+_STAGE_WORKERS_MAX = 64
+_COPY_RETRIES = 3                 # total attempts per file
+_COPY_BACKOFF = (0.5, 1.0, 2.0)   # sleep before retry attempts 2,3,...
+
+
+def _push_workers() -> int:
+    """Resolve push concurrency from AROMA_STAGE_WORKERS, clamped to a sane range."""
+    raw = os.environ.get("AROMA_STAGE_WORKERS")
+    if not raw:
+        return _DEFAULT_STAGE_WORKERS
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("AROMA_STAGE_WORKERS=%r not an int — using default %d",
+                       raw, _DEFAULT_STAGE_WORKERS)
+        return _DEFAULT_STAGE_WORKERS
+    clamped = max(_STAGE_WORKERS_MIN, min(_STAGE_WORKERS_MAX, n))
+    if clamped != n:
+        logger.warning("AROMA_STAGE_WORKERS=%d clamped to %d (range %d..%d)",
+                       n, clamped, _STAGE_WORKERS_MIN, _STAGE_WORKERS_MAX)
+    return clamped
+
+
+def _push_one(src: str, dst: str) -> str:
+    """Copy one file src → dst with retry/backoff. Returns 'staged'|'skipped'|'failed'.
+
+    - The dst parent dir (drive_img_dir) is pre-created once by the caller (main
+      thread) before any worker runs, so this performs NO mkdir.
+    - Skip (cheap stat) if dst already exists on Drive with the same size — lets
+      a Colab --resume re-run avoid re-pushing everything.
+    - On transient FUSE errors, retry up to _COPY_RETRIES with exponential backoff.
+    - Terminal failure: log a WARNING and return 'failed' (do NOT raise) so one
+      failed file never aborts the whole push.
+    """
+    dst_path = Path(dst)
+
+    # Same-size skip: identical file already present on Drive.
+    try:
+        if dst_path.exists() and dst_path.stat().st_size == os.path.getsize(src):
+            return "skipped"
+    except OSError:
+        pass  # fall through to (re)copy
+
+    last_err: Optional[Exception] = None
+    for attempt in range(_COPY_RETRIES):
+        try:
+            shutil.copy2(src, dst)
+            return "staged"
+        except Exception as e:  # noqa: BLE001 — transient FUSE EIO/5xx
+            last_err = e
+            if attempt < _COPY_RETRIES - 1:
+                sleep_s = _COPY_BACKOFF[min(attempt, len(_COPY_BACKOFF) - 1)]
+                time.sleep(sleep_s)
+    logger.warning("Failed to push %s → %s after %d attempts: %s — left on local staging",
+                   src, dst, _COPY_RETRIES, last_err)
+    return "failed"
+
+
 def _push_outputs(local_img_dir: Path, drive_img_dir: Path) -> int:
-    """Copy synthesized images from local staging to Drive. Returns count copied."""
-    drive_img_dir.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for img_path in sorted(local_img_dir.iterdir()):
-        if img_path.is_file():
-            shutil.copy2(str(img_path), str(drive_img_dir / img_path.name))
-            n += 1
-    return n
+    """Parallel-copy synthesized files from local staging to Drive.
+
+    Mirror of the adapter's stage-IN: output volume = n_rois * n_per_roi (tens of
+    thousands of files), each a high-latency per-file FUSE write. A sequential
+    loop took tens of minutes to hours; copies are dispatched on a bounded
+    ThreadPoolExecutor instead (FUSE round-trips, not CPU, are the bottleneck).
+
+    Returns the number of files now PRESENT on Drive (staged + skipped) so the
+    call-site "Pushed %d ..." logs stay truthful; terminally failed files are
+    excluded from the count and surfaced in the breakdown log.
+    """
+    drive_img_dir.mkdir(parents=True, exist_ok=True)  # pre-created ONCE in main thread
+
+    files = [p for p in sorted(local_img_dir.iterdir()) if p.is_file()]
+    if not files:
+        return 0
+
+    workers = _push_workers()
+    counts = {"staged": 0, "skipped": 0, "failed": 0}
+
+    def _task(p: Path) -> str:
+        return _push_one(str(p), str(drive_img_dir / p.name))
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        # Mutate counts ONLY in the main-thread as_completed loop.
+        for fut in as_completed(ex.submit(_task, p) for p in files):
+            counts[fut.result()] += 1
+
+    logger.info(
+        "push_outputs → %s: %d staged, %d skipped (already on Drive), %d failed "
+        "(left on local staging) of %d files using %d workers",
+        drive_img_dir, counts["staged"], counts["skipped"], counts["failed"],
+        len(files), workers,
+    )
+    # Files now present on Drive = staged + skipped (failed are NOT on Drive).
+    return counts["staged"] + counts["skipped"]
 
 
 # ---------------------------------------------------------------------------
