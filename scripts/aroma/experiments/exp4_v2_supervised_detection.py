@@ -135,7 +135,7 @@ except ImportError:
 
 
 ALL_MODEL_KEYS = ["yolov8n", "yolov8s", "yolov8m"]
-ALL_CONDITION_KEYS = ["baseline", "random", "aroma"]
+ALL_CONDITION_KEYS = ["baseline", "random", "casda", "aroma"]
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
@@ -623,6 +623,12 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
             "normal_image": norm_p,
             "source_roi": e.get("source_roi"),
             "mask_path": mask_p,
+            # Robust class signal for severstal multi mode. CASDA's source_roi is
+            # an ROI-crop path with no .../class{N}/ segment, so it can't be
+            # parsed; cluster_id (Severstal class 1-4, set by casda_roi_adapter)
+            # is the fallback. For random/aroma source_roi parses fine so this is
+            # only consulted when source_roi is unparseable.
+            "cluster_id": e.get("cluster_id"),
         })
 
     log_fn = logger.info if valid else logger.error
@@ -798,6 +804,34 @@ def _parse_severstal_class(source_roi: Optional[str]) -> Optional[int]:
     return None
 
 
+def _resolve_synth_class(ann: Dict[str, Any]) -> Optional[int]:
+    """0-indexed severstal class for a synth annotation (multi mode).
+
+    Priority:
+      1. source_roi .../class{N}/ path parse — correct for random/aroma whose
+         source_roi points at real test images.
+      2. cluster_id fallback — CASDA's source_roi is an ROI-crop path with no
+         class{N} segment, so it never parses; casda_roi_adapter writes
+         cluster_id = Severstal class 1-4, so cluster_id-1 gives the 0-indexed
+         class. Validated to 0..3; out-of-range (e.g. an AROMA morphology
+         cluster id, which would only appear here if source_roi unexpectedly
+         failed to parse) is rejected.
+
+    Returns None when neither signal yields a valid 0..3 class.
+    """
+    cls = _parse_severstal_class(ann.get("source_roi"))
+    if cls is not None:
+        return cls
+    raw = ann.get("cluster_id")
+    try:
+        cid = int(raw) - 1
+    except (TypeError, ValueError):
+        return None
+    if 0 <= cid <= 3:
+        return cid
+    return None
+
+
 def _write_yolo_labels(
     synth_annotations: List[Dict[str, Any]],
     label_dir: str,
@@ -859,12 +893,13 @@ def _write_yolo_labels(
             continue
 
         if class_mode == "multi":
-            cls_id = _parse_severstal_class(ann.get("source_roi"))
+            cls_id = _resolve_synth_class(ann)
             if cls_id is None:
                 logger.warning(
-                    "multi mode: could not parse severstal class from source_roi=%s "
-                    "(synth idx %d) -> defaulting to class 0",
-                    ann.get("source_roi"), i,
+                    "multi mode: could not resolve severstal class "
+                    "(source_roi=%s cluster_id=%s, synth idx %d) -> defaulting to "
+                    "class 0",
+                    ann.get("source_roi"), ann.get("cluster_id"), i,
                 )
                 cls_id = 0
         else:
@@ -912,6 +947,7 @@ def _local_cache_for_yolo(
     synth_by_cond: Dict[str, List[Dict[str, Any]]],
     random_synth_dir: str,
     aroma_synth_dir: str,
+    casda_synth_dir: Optional[str] = None,
     cache_base: str = "/tmp/aroma_exp4v2_cache",
     num_workers: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]]]]:
@@ -939,7 +975,7 @@ def _local_cache_for_yolo(
         return str(dst)
 
     n_real = len(lists["train_normal"]) + len(lists["test_defect"])
-    n_synth = sum(len(synth_by_cond.get(c, [])) for c in ("random", "aroma"))
+    n_synth = sum(len(synth_by_cond.get(c, [])) for c in ("random", "casda", "aroma"))
     logger.info("[LocalCache] %s: copying %d images -> %s", ds, n_real + n_synth, cache_base)
     t0 = time.time()
 
@@ -986,10 +1022,14 @@ def _local_cache_for_yolo(
 
         # synth per condition
         synth_roots = {"random": random_synth_dir, "aroma": aroma_synth_dir}
+        if casda_synth_dir:
+            synth_roots["casda"] = casda_synth_dir
         new_synth_by_cond: Dict[str, List[Dict[str, Any]]] = {
             "baseline": list(synth_by_cond.get("baseline", []))
         }
-        for cond in ("random", "aroma"):
+        # Iterate only conditions present in synth_roots so casda is staged when
+        # its dir was provided; absent → casda annotations carried through below.
+        for cond in [c for c in ("random", "casda", "aroma") if c in synth_roots]:
             cond_imgs = cache_ds / cond / "images"
             anns = synth_by_cond.get(cond, [])
             futs_list = []
@@ -1024,11 +1064,20 @@ def _local_cache_for_yolo(
             if src_json.exists():
                 _copy_if_missing(str(src_json), cache_ds / cond / "annotations.json")
 
+    # Carry through any non-baseline condition that wasn't staged above (e.g.
+    # casda when --casda_synthetic_dir was omitted): keep its (possibly empty)
+    # annotations on their original paths so the cap/refusal logic still sees it.
+    for cond, anns in synth_by_cond.items():
+        if cond not in new_synth_by_cond:
+            new_synth_by_cond[cond] = list(anns)
+
     elapsed = time.time() - t0
     logger.info(
-        "[LocalCache] %s ready: %.1fs (train_normal=%d defect=%d masks=%d random=%d aroma=%d)",
+        "[LocalCache] %s ready: %.1fs (train_normal=%d defect=%d masks=%d random=%d casda=%d aroma=%d)",
         ds, elapsed, len(local_tn), len(local_td), len(local_mask_map),
-        len(new_synth_by_cond.get("random", [])), len(new_synth_by_cond.get("aroma", [])),
+        len(new_synth_by_cond.get("random", [])),
+        len(new_synth_by_cond.get("casda", [])),
+        len(new_synth_by_cond.get("aroma", [])),
     )
 
     new_lists = {
@@ -1495,8 +1544,13 @@ def _run_yolo_condition(
             )
             logger.info("    train background negatives: %d", n_bg)
 
-            # --- TRAIN: add synthetic (random/aroma only) ---
+            # --- TRAIN: add synthetic (random/casda/aroma only) ---
             n_synth = 0
+            # Per-class synth count (multi mode transparency): how many synth
+            # annotations each defect class contributed. Parsed from source_roi
+            # via _parse_severstal_class (0-indexed). Exposes CASDA c4/c2
+            # starvation. Keyed by 0-indexed class id (matches YOLO nc=4 idx).
+            n_synth_per_class: Dict[int, int] = {}
             if condition != "baseline":
                 # An empty synth set means this run would be identical to
                 # baseline (real-only) yet get reported as "random"/"aroma" — a
@@ -1519,6 +1573,23 @@ def _run_yolo_condition(
                     "    %s train: %d/%d synth imgs labeled (additive)",
                     condition, n_synth, len(synth_annotations),
                 )
+                # Per-class synth distribution (multi mode only — single mode has
+                # no class signal). Count over the *input* annotations by parsed
+                # source_roi class so c4/c2 starvation is visible per condition.
+                if class_mode == "multi":
+                    for _ann in synth_annotations:
+                        # Same resolver _write_yolo_labels uses (source_roi parse,
+                        # then cluster_id fallback) so the diagnostic matches what
+                        # actually gets labeled — CASDA c4/c2 starvation surfaces
+                        # here instead of collapsing into the -1 bucket.
+                        _cls = _resolve_synth_class(_ann)
+                        _key = _cls if _cls is not None else -1  # -1 = unresolved
+                        n_synth_per_class[_key] = n_synth_per_class.get(_key, 0) + 1
+                    logger.info(
+                        "    %s synth per-class (0-idx, -1=unparsed): %s",
+                        condition,
+                        {k: n_synth_per_class[k] for k in sorted(n_synth_per_class)},
+                    )
             n_train = n_real + n_synth
 
             # Per-class instance histogram over staged train labels (real defect
@@ -1703,6 +1774,11 @@ def _run_yolo_condition(
                     )
                 # 빈 dict 가능(검출 전무) — multi 모드면 키는 항상 존재
                 out["per_class"] = per_class
+                # 조건별 synth의 class별 카운트(0-idx 문자열 키로 JSON 직렬화).
+                # CASDA c4/c2 starvation 투명화 — n_synth_train과 parity 비교용.
+                out["n_synth_per_class"] = {
+                    str(k): v for k, v in sorted(n_synth_per_class.items())
+                }
 
             # baseline best.pt 위치를 caller 가 재사용할 수 있도록 보고
             if condition == "baseline":
@@ -1736,6 +1812,7 @@ def _run_detection_mode(
     aroma_synthetic_dir: str,
     real_data_dir: str,
     output_dir: str,
+    casda_synthetic_dir: Optional[str] = None,
     baseline_epochs: int = 50,
     val_frac: float = 0.5,
     max_synth_per_ds: Optional[int] = None,
@@ -1801,12 +1878,16 @@ def _run_detection_mode(
             synth_by_cond: Dict[str, List[Dict[str, Any]]] = {
                 "baseline": [],
                 "random":   _load_synth_annotations(random_synthetic_dir, ds),
+                "casda":    (
+                    _load_synth_annotations(casda_synthetic_dir, ds)
+                    if casda_synthetic_dir else []
+                ),
                 "aroma":    _load_synth_annotations(aroma_synthetic_dir, ds),
             }
 
             # Absolute cap (synth_ratio 미지정 시에만 적용).
             if max_synth_per_ds is not None and synth_ratio is None:
-                for cond in ("random", "aroma"):
+                for cond in ("random", "casda", "aroma"):
                     anns = synth_by_cond.get(cond, [])
                     if len(anns) > max_synth_per_ds:
                         rng_sub = random.Random(seed)
@@ -1821,6 +1902,7 @@ def _run_detection_mode(
             if local_cache and os.name != "nt":
                 lists, synth_by_cond = _local_cache_for_yolo(
                     ds, lists, synth_by_cond, random_synthetic_dir, aroma_synthetic_dir,
+                    casda_synth_dir=casda_synthetic_dir,
                 )
 
             # Read class_mask_map AFTER local caching: _local_cache_for_yolo
@@ -1850,7 +1932,7 @@ def _run_detection_mode(
             # Ratio-based synth cap (synth_ratio 지정 시 max_synth_per_ds 보다 우선).
             if synth_ratio is not None:
                 n_real_train = len(train_defect)
-                for cond in ("random", "aroma"):
+                for cond in ("random", "casda", "aroma"):
                     anns = synth_by_cond.get(cond, [])
                     cap = max(1, int(n_real_train * synth_ratio))
                     if len(anns) > cap:
@@ -2215,6 +2297,10 @@ def _aggregate_seeds(
         weights_path: Optional[str] = None
         # per_class(멀티시드): {class_name: {metric: [seed별 값,...]}} — 클래스 union
         pc_samples: Dict[str, Dict[str, List[float]]] = {}
+        # n_synth_per_class: synth set은 seed 간 동일(같은 annotations + 같은 cap)이라
+        # 결정적 → 처음 만난 seed 값을 그대로 채택해 top-level 집계에 전달한다.
+        # 빠지면 Colab per-class synth parity 셀이 None을 읽는다.
+        n_synth_per_class: Optional[Dict[str, int]] = None
 
         for s in seed_list:
             cell = (
@@ -2258,6 +2344,11 @@ def _aggregate_seeds(
                         int_conflict = True
             if cond == "baseline" and weights_path is None and cell.get("weights_path"):
                 weights_path = cell.get("weights_path")
+            # 결정적 필드: 처음 보이는 seed의 n_synth_per_class를 채택.
+            if n_synth_per_class is None:
+                _nspc = cell.get("n_synth_per_class")
+                if isinstance(_nspc, dict):
+                    n_synth_per_class = _nspc
 
         k = len(per_seed_cell)
         if k == 0:
@@ -2308,6 +2399,10 @@ def _aggregate_seeds(
         }
         if weights_path is not None:
             agg_cell["weights_path"] = weights_path
+        # n_synth_per_class 부착 (multi 모드만 존재). 없으면 키 미추가 →
+        # single/비-멀티 셀은 byte-identical.
+        if n_synth_per_class is not None:
+            agg_cell["n_synth_per_class"] = n_synth_per_class
 
         # per_class mean 부착 (멀티시드): 클래스별·metric별로 값이 있는 seed만 평균.
         # 하나도 없으면 키 미추가 → single/multi 비-멀티클래스 셀은 byte-identical.
@@ -2451,6 +2546,7 @@ def run(
     aroma_synthetic_dir: str,
     real_data_dir: str,
     output_dir: str,
+    casda_synthetic_dir: Optional[str] = None,
     baseline_epochs: int = 50,
     val_frac: float = 0.5,
     max_synth_per_ds: Optional[int] = None,
@@ -2516,6 +2612,7 @@ def run(
                 aroma_synthetic_dir=aroma_synthetic_dir,
                 real_data_dir=real_data_dir,
                 output_dir=output_dir,
+                casda_synthetic_dir=casda_synthetic_dir,
                 baseline_epochs=baseline_epochs,
                 val_frac=val_frac,
                 max_synth_per_ds=max_synth_per_ds,
@@ -2580,7 +2677,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument(
         "--condition",
-        choices=["baseline", "random", "aroma", "all"],
+        choices=["baseline", "random", "casda", "aroma", "all"],
         default="all",
         help="평가 조건 (default: all)",
     )
@@ -2594,6 +2691,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--random_synthetic_dir",
         required=True,
         help="Random synthetic 출력 루트 ({dir}/{dataset_key}/annotations.json)",
+    )
+    p.add_argument(
+        "--casda_synthetic_dir",
+        default=None,
+        help="CASDA synthetic 출력 루트 ({dir}/{dataset_key}/annotations.json). "
+             "생략 시 casda 조건은 합성 부재로 거부됨(no_synth_annotations).",
     )
     p.add_argument(
         "--aroma_synthetic_dir",
@@ -2722,6 +2825,7 @@ def main(argv=None) -> None:
         aroma_synthetic_dir=args.aroma_synthetic_dir,
         real_data_dir=args.real_data_dir,
         output_dir=args.output_dir,
+        casda_synthetic_dir=args.casda_synthetic_dir,
         baseline_epochs=args.baseline_epochs,
         val_frac=args.val_frac,
         max_synth_per_ds=args.max_synth_per_ds,

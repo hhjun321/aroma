@@ -517,6 +517,161 @@ for cls in classes:
 
 ---
 
+## CASDA를 4번째 조건으로 추가 (CASDA vs AROMA 공정 비교, Severstal)
+
+> ⚠️ **본 섹션은 Severstal multi-class 전용**이며 `baseline / random / casda / aroma` **4조건**을 동시 비교한다.
+> 세 합성 조건(random/casda/aroma)은 **동일 copy-paste 엔진**을 쓰고 **ROI 선택 전략만 다르다** → AROMA의 ROI 모델링 기여를 격리.
+> CASDA 합성은 `--casda_synthetic_dir`로 주입하며, 이 경로 아래 `{dataset_key}/annotations.json`이 존재해야 한다(`generate_casda.py`가 생성).
+> CASDA Drive 루트는 `/content/drive/MyDrive/data/Severstal`로 **AROMA Drive 루트(`.../data/Aroma`)와 다르다.** 둘 다 Colab에 마운트되어야 한다.
+
+### 공정성 불변식 (load-bearing)
+
+- `--synth_ratio` 동일 적용 → random/casda/aroma 모두 동일한 synth cap(`max(1, int(n_real_train × ratio))`). 결과 JSON의 `n_synth_train`이 세 조건 **동일**해야 공정. 다르면 cap 누락 의심.
+- `--n_per_roi` 동일 → 세 생성기 동일값.
+- CASDA native(결정 A): `min_suitability=0.5`(CASDA 기본), `per_class_cap` 미지정(=None, 무제한). class balance 통제 안 함. c4/c2 starvation은 **정당한 발견**이며 `n_synth_per_class` 로깅/JSON 필드로 투명화된다.
+
+### 환경변수 (CASDA 전용 추가)
+
+```python
+import os
+
+# AROMA 측 (기존 셀에서 설정되었으면 생략)
+os.environ['AROMA_OUT']     = f"{os.environ['DRIVE']}/aroma_output"
+os.environ['AROMA_SCRIPTS'] = "/content/AROMA/scripts/aroma"
+os.environ['AROMA_DATA']    = f"{os.environ['DRIVE']}/Aroma"
+
+# CASDA 측 — Drive 루트가 AROMA와 다름에 주의
+os.environ['CASDA_DRIVE']  = "/content/drive/MyDrive/data/Severstal"
+os.environ['SCRIPTS']      = "/content/CASDA/scripts"                 # CASDA Stage A 스크립트
+os.environ['TRAIN_IMAGES'] = f"{os.environ['CASDA_DRIVE']}/train_images"
+os.environ['TRAIN_CSV']    = f"{os.environ['CASDA_DRIVE']}/train.csv"
+os.environ['ROI_DIR']      = f"{os.environ['CASDA_DRIVE']}/roi_patches_v5.1"
+os.environ['NORMAL_DIR']   = f"{os.environ['AROMA_DATA']}/severstal/train/good"  # 배경(정상) 이미지
+
+# 합성 출력 디렉터리 (3 조건 모두 동일 엔진)
+os.environ['RANDOM_SYNTH_DIR'] = f"{os.environ['AROMA_OUT']}/synthetic_random"
+os.environ['CASDA_SYNTH_DIR']  = f"{os.environ['AROMA_OUT']}/synthetic_casda"
+os.environ['AROMA_SYNTH_DIR']  = f"{os.environ['AROMA_OUT']}/synthetic"
+os.environ['EXP4V2_OUT']       = f"{os.environ['AROMA_OUT']}/exp4v2"
+
+# 합성 공통 파라미터 (3 조건 동일)
+os.environ['N_PER_ROI'] = "3"
+
+print("CASDA_DRIVE     :", os.environ['CASDA_DRIVE'])
+print("ROI_DIR         :", os.environ['ROI_DIR'])
+print("CASDA_SYNTH_DIR :", os.environ['CASDA_SYNTH_DIR'])
+```
+
+### Cell A — CASDA Stage A (CPU, clone + ROI 추출)
+
+> ROI 추출만 필요(Stage B/C/D의 ControlNet/GPU는 **불필요**). `roi_metadata.csv` + crops를 Drive에 1회 생성한다.
+> Stage A와 아래 generate_casda 셀은 **같은 Colab 세션**에서 연속 실행 권장(ROI 절대경로 drift 방지).
+
+```python
+!git clone --single-branch -b approve https://github.com/hhjun321/CASDA.git /content/CASDA
+
+!python $SCRIPTS/extract_rois.py \
+    --image_dir $TRAIN_IMAGES \
+    --train_csv $TRAIN_CSV \
+    --output_dir $ROI_DIR \
+    --roi_size 256 \
+    --min_suitability 0.5
+# → $ROI_DIR/roi_metadata.csv + images/*.png  (class{N} 정보 보유)
+```
+
+### Cell B — CASDA 합성 생성 (동일 copy-paste 엔진)
+
+> `casda_roi_adapter`가 `min_suitability=0.5`, `per_class_cap` 미지정(=None) 기본으로 동작(결정 A).
+> 로그에서 `n_missing_image ≈ 0`과 class별 ROI 수(c3/c4 포함)를 확인할 것.
+
+```python
+!python $AROMA_SCRIPTS/generate_casda.py \
+    --metadata_csv $ROI_DIR/roi_metadata.csv \
+    --normal_dir   $NORMAL_DIR \
+    --output_dir   $CASDA_SYNTH_DIR/severstal \
+    --n_per_roi    $N_PER_ROI \
+    --seed 42
+# → $CASDA_SYNTH_DIR/severstal/annotations.json + images/
+```
+
+### Cell C — 4조건 exp4v2 실행 (baseline / random / casda / aroma)
+
+```python
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolov8n \
+    --condition all \
+    --dataset_keys severstal \
+    --class_mode multi \
+    --random_synthetic_dir $RANDOM_SYNTH_DIR \
+    --casda_synthetic_dir  $CASDA_SYNTH_DIR \
+    --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
+    --real_data_dir        $AROMA_DATA \
+    --output_dir           $EXP4V2_OUT/severstal_casda \
+    --synth_ratio 1.0 \
+    --seeds 42 1337 2025 \
+    --imgsz 640 \
+    --val_frac 0.3 \
+    --baseline_epochs 100 \
+    --patience 20 \
+    --batch 64 \
+    --cache ram \
+    --rect \
+    --yolo_cache_dir $AROMA_OUT/yolo_cache \
+    --resume
+```
+
+| 항목 | 내용 |
+|------|------|
+| 조건 | `baseline / random / casda / aroma` (4) — `ALL_CONDITION_KEYS` 자동 확장 |
+| 공정성 | `--synth_ratio`가 random/casda/aroma에 동일 적용 → `n_synth_train` 3조건 동일 기대 |
+| `--n_per_roi` 없음 | exp4v2 스크립트에는 `--n_per_roi` 인자가 없다(주면 argparse가 즉시 종료). n_per_roi parity는 **생성 단계**(각 generate_* 셀, Cell B의 `$N_PER_ROI`)에서 보장하며 학습 단계에서 통제하지 않는다. synth 수 parity는 `--synth_ratio 1.0`이 담당 |
+| `--casda_synthetic_dir` 생략 시 | casda 조건은 합성 부재로 `no_synth_annotations` 거부(다른 조건은 정상 진행) |
+| per-class synth 투명성 | 각 조건 결과에 `n_synth_per_class` 추가 + 로그 `synth per-class (0-idx, -1=unparsed)` 출력 → CASDA c4/c2 starvation 확인 |
+
+> **소요 시간**: 단일 실행 × seed 수. 4조건 × 3 seed → 단일(약 3~5시간)의 약 3배. `--resume` 항상 함께 사용.
+
+### CASDA vs AROMA 결과 확인 (4조건 + per-class synth parity)
+
+```python
+import json, os
+
+with open(f"{os.environ['EXP4V2_OUT']}/severstal_casda/exp4v2_results.json") as f:
+    results = json.load(f)
+
+CONDS = ["baseline", "random", "casda", "aroma"]
+arms = results["severstal"]["yolov8n"]
+
+# (1) map50 (mean ± std) + 95% CI
+print(f"{'조건':<10}  {'map50 (mean±std)':>22}  {'95% CI':>20}  {'n_synth_train':>14}")
+print("-" * 72)
+for c in CONDS:
+    cell = arms.get(c, {})
+    m  = cell.get("map50")
+    sd = (cell.get("std") or {}).get("map50")
+    ci = (cell.get("ci95") or {}).get("map50")
+    ns = cell.get("n_synth_train")
+    if isinstance(m, float):
+        ms  = f"{m:.4f} ± {sd:.4f}" if isinstance(sd, float) else f"{m:.4f}"
+        cis = f"[{ci[0]:.4f}, {ci[1]:.4f}]" if isinstance(ci, list) and ci[0] is not None else "N/A"
+    else:
+        ms, cis = "N/A", "N/A"
+    print(f"{c:<10}  {ms:>22}  {cis:>20}  {str(ns):>14}")
+
+# (2) 공정성 parity: random/casda/aroma의 n_synth_train 동일해야 함
+ns = {c: arms.get(c, {}).get("n_synth_train") for c in ("random", "casda", "aroma")}
+print(f"\nn_synth_train parity {ns} -> {'OK' if len(set(v for v in ns.values() if v is not None)) <= 1 else '⚠️ 불일치(cap 누락 의심)'}")
+
+# (3) per-class synth 분포 (CASDA c4/c2 starvation 투명화)
+print(f"\n{'조건':<10}  per-class synth (0-idx, -1=unparsed)")
+print("-" * 56)
+for c in ("random", "casda", "aroma"):
+    print(f"{c:<10}  {arms.get(c, {}).get('n_synth_per_class')}")
+```
+
+> per-class AP(c1~c4)는 `arms[cond]['per_class']`에서 확인(위 multi 모드 per-class 확인 셀 재사용). 성공 기준: AROMA map50 > CASDA, 3-seed 95% CI 비겹침, `n_synth_train` 3조건 동일, 소수 클래스(c3·c4) AP에서 AROMA ≥ CASDA.
+
+---
+
 ## 결과 확인
 
 ```python
