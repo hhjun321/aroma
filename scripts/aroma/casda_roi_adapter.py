@@ -250,11 +250,12 @@ def _remap(p: str, drive_root: Path, local_root: Path) -> str:
 def _copy_one(
     src: str,
     dst: str,
-    created_dirs: set,
 ) -> str:
     """Copy one file src → dst with retry/backoff. Returns 'staged'|'skipped'|'failed'.
 
-    - mkdir of the dst parent is done once per unique dir (cached in created_dirs).
+    - The dst parent dir is pre-created once by the caller (main thread) before
+      any worker runs, so this function performs NO mkdir (avoids a worker-thread
+      check-then-act race on a shared set).
     - Skip (cheap stat) if dst already exists with the same size — lets Colab
       --resume re-runs avoid re-copying everything.
     - On transient FUSE errors, retry up to _COPY_RETRIES with exponential backoff.
@@ -262,10 +263,6 @@ def _copy_one(
       per-row exists()/Drive-fallback degrades gracefully.
     """
     dst_path = Path(dst)
-    parent = dst_path.parent
-    if parent not in created_dirs:
-        parent.mkdir(parents=True, exist_ok=True)
-        created_dirs.add(parent)
 
     # dirs_exist_ok-style skip: same size already present locally.
     try:
@@ -304,13 +301,19 @@ def _stage_manifest(
     round-trips, not CPU, are the bottleneck). Logs staged/skipped/failed counts
     so a degraded partial-staging run is visible, not silent.
     """
-    created_dirs: set = set()
     counts = {"staged": 0, "skipped": 0, "failed": 0}
 
-    def _task(src: str) -> str:
-        return _copy_one(src, _remap(src, drive_root, local_root), created_dirs)
-
     srcs = [s for s, _ in manifest]
+    dsts = {s: _remap(s, drive_root, local_root) for s in srcs}
+
+    # Pre-create the (few) unique destination parent dirs ONCE in the main thread,
+    # before any worker runs — eliminates a worker-thread mkdir race.
+    for parent in {Path(d).parent for d in dsts.values()}:
+        parent.mkdir(parents=True, exist_ok=True)
+
+    def _task(src: str) -> str:
+        return _copy_one(src, dsts[src])
+
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for fut in as_completed(ex.submit(_task, s) for s in srcs):
             counts[fut.result()] += 1
