@@ -303,6 +303,7 @@ def _pair_aware_allocation(
     top_k: int,
     per_pair_cap_frac: float | None = None,
     rarity_temp: float = 1.0,
+    pair_cap: int | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Two-phase ROI selection: Coverage-first + Quality-second.
@@ -314,24 +315,44 @@ def _pair_aware_allocation(
         3. Distribute remaining quota (top_k - n_pairs) proportional to
            PairDeficit via Hamilton / Largest-Remainder method.
            Pairs with deficit=0 receive no extra quota beyond the base.
-        3b. (per_pair_cap_frac only) Cap any single pair's quota at
-           ceil(per_pair_cap_frac * top_k) and round-robin the freed slots
+        3b. (cap-enabled only) Cap any single pair's quota at the effective
+           cap (``pair_cap`` when supplied — an ABSOLUTE global int — else
+           ceil(per_pair_cap_frac * top_k)) and round-robin the freed slots
            to under-saturated pairs by PairDeficit, breaking monoculture.
-           Skipped entirely when per_pair_cap_frac is None.
+           Skipped entirely when both per_pair_cap_frac and pair_cap are None.
         4. Within each pair, select candidates by moderated_score descending.
 
     Phase 2 — Quality backfill:
         If Phase 1 selected fewer than top_k candidates (slack from
         under-populated pairs), fill remaining slots from the unselected
-        pool ranked by global moderated_score.
+        pool ranked by global moderated_score. When a cap is active the
+        backfill is cap-aware: it skips candidates whose pair is already at
+        the effective cap (running per-pair counter), so an evicted pair's
+        high-score candidates cannot re-flood the freed slots.
 
-    Fallback: if top_k <= n_pairs, return moderated_score top-k globally.
+    Fallback: if top_k <= n_pairs, return moderated_score top-k globally
+    (cap-aware when a cap is active).
+
+    ``pair_cap`` (absolute int) overrides the per_pair_cap_frac-derived cap so
+    the stratified caller can enforce a single GLOBAL ceiling rather than a
+    per-bucket-local one. When None the cap (if any) is derived from
+    per_pair_cap_frac * top_k as before.
 
     moderated_score collapses to the raw roi_score when rarity_temp == 1.0
     (default), so the default path is byte-identical to the prior behaviour.
     """
     if not candidates:
         return []
+
+    # Effective per-pair cap: an absolute global int (pair_cap) takes
+    # precedence; otherwise derive from per_pair_cap_frac * top_k. None ⇒
+    # no cap ⇒ every cap branch below is skipped (byte-identical path).
+    if pair_cap is not None:
+        eff_cap: int | None = max(1, int(pair_cap))
+    elif per_pair_cap_frac is not None:
+        eff_cap = max(1, math.ceil(per_pair_cap_frac * top_k))
+    else:
+        eff_cap = None
 
     # --- Phase 1: pair-aware coverage + deficit allocation ---
     pair_groups: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
@@ -342,11 +363,25 @@ def _pair_aware_allocation(
     n_pairs = len(pairs)
 
     if top_k <= n_pairs:
-        return sorted(
+        ranked = sorted(
             candidates,
             key=lambda c: moderated_score(c, rarity_temp),
             reverse=True,
-        )[:top_k]
+        )
+        if eff_cap is None:
+            return ranked[:top_k]
+        # cap-aware top-k: skip a candidate once its pair hits eff_cap
+        picked: List[Dict[str, Any]] = []
+        pair_count: Dict[Any, int] = defaultdict(int)
+        for c in ranked:
+            if len(picked) >= top_k:
+                break
+            key = (c["cluster_id"], c["cell_key"])
+            if pair_count[key] >= eff_cap:
+                continue
+            picked.append(c)
+            pair_count[key] += 1
+        return picked
 
     pair_deficit = {
         p: float(np.mean([c["deficit"] for c in pair_groups[p]]))
@@ -377,14 +412,15 @@ def _pair_aware_allocation(
         quotas[p] += extra
 
     # --- Phase 1b: per-pair cap + redistribute (Fix1, opt-in) ---
-    # Caps the slots any single (cluster_id, cell_key) pair can claim at a
-    # budget-scaled ceiling (class-agnostic), preventing one pair from
-    # monopolising the selection (monoculture). Freed slots are handed,
-    # one at a time, to under-saturated pairs ordered by PairDeficit. Any
-    # slots that cannot be re-placed are absorbed by the Phase-2 backfill,
-    # so total selected stays <= top_k. Skipped when per_pair_cap_frac is None.
-    if per_pair_cap_frac is not None:
-        cap = max(1, math.ceil(per_pair_cap_frac * top_k))
+    # Caps the slots any single (cluster_id, cell_key) pair can claim at the
+    # effective ceiling (eff_cap — class-agnostic, GLOBAL when threaded by the
+    # stratified caller), preventing one pair from monopolising the selection
+    # (monoculture). Freed slots are handed, one at a time, to under-saturated
+    # pairs ordered by PairDeficit. Any slots that cannot be re-placed are
+    # absorbed by the Phase-2 backfill, so total selected stays <= top_k.
+    # Skipped when no cap is active.
+    if eff_cap is not None:
+        cap = eff_cap
         freed = 0
         for p in pairs:
             avail = len(pair_groups[p])
@@ -427,7 +463,25 @@ def _pair_aware_allocation(
             key=lambda c: moderated_score(c, rarity_temp),
             reverse=True,
         )
-        backfill = rest[:slack]
+        if eff_cap is None:
+            backfill = rest[:slack]
+        else:
+            # cap-aware backfill: track the running per-pair count of what is
+            # already selected, then skip any candidate whose pair is at
+            # eff_cap. This stops an evicted (capped) pair's high-score
+            # candidates from re-flooding the freed slots (the original bug).
+            pair_count: Dict[Any, int] = defaultdict(int)
+            for c in selected:
+                pair_count[(c["cluster_id"], c["cell_key"])] += 1
+            backfill = []
+            for c in rest:
+                if len(backfill) >= slack:
+                    break
+                key = (c["cluster_id"], c["cell_key"])
+                if pair_count[key] >= eff_cap:
+                    continue
+                backfill.append(c)
+                pair_count[key] += 1
         selected += backfill
         logger.info(
             "pair_aware_allocation: phase2 backfill %d / %d slack slots",
@@ -491,6 +545,16 @@ def _stratified_pair_aware(
     if K <= 1:
         return _pair_aware_allocation(candidates, top_k, per_pair_cap_frac, rarity_temp)
 
+    # GLOBAL per-pair cap, derived ONCE from the REAL (top-level) top_k — NOT
+    # from a per-bucket quota. Threaded into each bucket as an absolute int so
+    # no single (cluster_id, cell_key) pair can claim more than pair_cap across
+    # the whole concatenated selection. None ⇒ cap disabled (byte-identical).
+    pair_cap = (
+        max(1, math.ceil(per_pair_cap_frac * top_k))
+        if per_pair_cap_frac is not None
+        else None
+    )
+
     # --- per-class quota: symmetric floor + deficit-mass largest-remainder ---
     floor = top_k // K
     quotas: Dict[str, int] = {k: floor for k in keys}
@@ -542,16 +606,116 @@ def _stratified_pair_aware(
                     progressed = True
 
     # --- per-class allocation, then concat ---
+    # Per-class floor to protect during cap eviction: the symmetric floor
+    # (top_k // K), clamped to each class's actual selected count (a class with
+    # fewer than `floor` candidates can never be pushed below what it holds).
+    class_floor_target: Dict[str, int] = {k: min(floor, quotas[k]) for k in keys}
+
+    # --- per-class allocation, then concat ---
+    # IMPORTANT: cap enforcement is moved ENTIRELY to the global post-concat
+    # pass below (one of the two options the constraints explicitly permit).
+    # The per-bucket calls therefore run WITHOUT the cap (pair_cap=None and
+    # per_pair_cap_frac=None) so each class fills to its full quota q FIRST and
+    # the class floor is always met before any cap trimming. Threading the cap
+    # into the buckets would let a pair-diversity-starved class return fewer
+    # than q (n_distinct_pairs * cap < q), breaching its floor before the
+    # post-pass ever runs. With cap enforcement global-only, the only place a
+    # pair can exceed pair_cap is the post-concat union of buckets, which the
+    # eviction + class-aware backfill below resolves.
     selected: List[Dict[str, Any]] = []
+    sel_class: Dict[int, str] = {}  # id(candidate) -> owning class bucket
     for k in keys:
         q = quotas[k]
         if q <= 0:
             continue
-        selected.extend(
-            _pair_aware_allocation(buckets[k], q, per_pair_cap_frac, rarity_temp)
-        )
+        picked = _pair_aware_allocation(buckets[k], q, None, rarity_temp)
+        for c in picked:
+            sel_class[id(c)] = k
+        selected.extend(picked)
 
-    # --- global Phase-2 backfill to exactly top_k ---
+    if pair_cap is not None:
+        # --- POST-CONCAT cap eviction (Fix1 global invariant) ---
+        # The same (cluster_id, cell_key) pair can be filled inside multiple
+        # class buckets, so a pair within cap per-bucket can exceed pair_cap
+        # once concatenated (and, with cap-free buckets, even a single bucket's
+        # dominating pair now exceeds it). Trim each over-cap pair down to
+        # pair_cap by evicting its LOWEST-moderated_score members first.
+        #
+        # Unlike the previous (deadlocking) version, eviction is allowed to dip
+        # a class BELOW its floor temporarily — the class-aware backfill that
+        # follows restores every depleted class up to its floor from that
+        # class's OWN non-over-cap candidates before any global fill. This is
+        # what breaks the top_k % K == 0 deadlock: when every class sits exactly
+        # at its floor, the old pre-backfill guard refused all trimming; here we
+        # trim first and let the per-class refill recover the floor with other
+        # pairs in the same class.
+        by_pair: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
+        for c in selected:
+            by_pair[(c["cluster_id"], c["cell_key"])].append(c)
+
+        evicted_ids: set = set()
+        for key, members in by_pair.items():
+            if len(members) <= pair_cap:
+                continue
+            # lowest moderated_score evicted first; stable tie-break by id()
+            members_sorted = sorted(
+                members,
+                key=lambda c: (moderated_score(c, rarity_temp), -id(c)),
+            )
+            for c in members_sorted[: len(members) - pair_cap]:
+                evicted_ids.add(id(c))
+
+        if evicted_ids:
+            selected = [c for c in selected if id(c) not in evicted_ids]
+
+        # --- class-aware refill: restore each class to its floor first ---
+        # For every class depleted below class_floor_target by eviction, refill
+        # from that class's OWN unselected candidates, cap-aware (never push a
+        # pair back over pair_cap), ordered by moderated_score. This guarantees
+        # the floor survives the cap (the 50/50/50/50 invariant) using DIFFERENT
+        # pairs than the over-cap one. A class that genuinely lacks enough
+        # distinct pairs to both honour the cap AND reach its floor will fall
+        # short here; that is logged as a cap-vs-floor conflict (no silent
+        # violation), and the floor is preferred only insofar as its own pool
+        # allows without breaking the cap.
+        selected_ids = {id(c) for c in selected}
+        pair_count: Dict[Any, int] = defaultdict(int)
+        class_count: Dict[str, int] = defaultdict(int)
+        for c in selected:
+            pair_count[(c["cluster_id"], c["cell_key"])] += 1
+            class_count[sel_class[id(c)]] += 1
+
+        for k in keys:
+            need = class_floor_target[k] - class_count[k]
+            if need <= 0:
+                continue
+            pool = sorted(
+                (c for c in buckets[k] if id(c) not in selected_ids),
+                key=lambda c: moderated_score(c, rarity_temp),
+                reverse=True,
+            )
+            added = 0
+            for c in pool:
+                if added >= need:
+                    break
+                pkey = (c["cluster_id"], c["cell_key"])
+                if pair_count[pkey] >= pair_cap:
+                    continue
+                selected.append(c)
+                sel_class[id(c)] = k
+                selected_ids.add(id(c))
+                pair_count[pkey] += 1
+                class_count[k] += 1
+                added += 1
+            if class_count[k] < class_floor_target[k]:
+                logger.info(
+                    "stratified_pair_aware: class '%s' below floor (%d<%d) — "
+                    "insufficient pair diversity to satisfy both cap (%d) and "
+                    "floor; cap honoured, floor not fully met",
+                    k, class_count[k], class_floor_target[k], pair_cap,
+                )
+
+    # --- global Phase-2 backfill to exactly top_k (cap-aware when capping) ---
     slack = top_k - len(selected)
     if slack > 0:
         selected_ids = {id(c) for c in selected}
@@ -560,7 +724,22 @@ def _stratified_pair_aware(
             key=lambda c: moderated_score(c, rarity_temp),
             reverse=True,
         )
-        backfill = rest[:slack]
+        if pair_cap is None:
+            backfill = rest[:slack]
+        else:
+            # cap-aware: never let backfill re-flood a pair back over pair_cap.
+            pair_count = defaultdict(int)
+            for c in selected:
+                pair_count[(c["cluster_id"], c["cell_key"])] += 1
+            backfill = []
+            for c in rest:
+                if len(backfill) >= slack:
+                    break
+                key = (c["cluster_id"], c["cell_key"])
+                if pair_count[key] >= pair_cap:
+                    continue
+                backfill.append(c)
+                pair_count[key] += 1
         selected += backfill
         logger.info(
             "stratified_pair_aware: %d classes, global backfill %d / %d slack slots",
