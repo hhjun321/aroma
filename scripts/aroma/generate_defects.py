@@ -526,11 +526,28 @@ def _stage_inputs(
     defect_dir.mkdir(parents=True, exist_ok=True)
     normal_dir_local.mkdir(parents=True, exist_ok=True)
 
+    # An upstream step (e.g. casda_roi_adapter --local_staging) may already have
+    # staged the defect crops to the local /content disk. Re-copying a local file
+    # to another local dir is pure waste, so detect already-local defect paths and
+    # skip the redundant local->local copy (still record orig->orig so the remap
+    # below is a no-op identity). Normal backgrounds are NEVER pre-staged by the
+    # adapter, so their staging (below) is left untouched.
+    _local_roots = ("/content/", "\\content\\")
+
+    def _is_already_local(path: str) -> bool:
+        return any(path.startswith(r) for r in _local_roots)
+
     # Stage defect images (deduplicated)
     defect_map: Dict[str, str] = {}
+    n_defect_already_local = 0
     for entry in selected:
         orig = entry.get("image_path", "")
         if orig and orig not in defect_map and Path(orig).exists():
+            if _is_already_local(orig):
+                # Already on local disk — keep the path as-is, skip re-copy.
+                defect_map[orig] = orig
+                n_defect_already_local += 1
+                continue
             p = Path(orig)
             dst = defect_dir / p.name
             if dst.exists():
@@ -560,8 +577,9 @@ def _stage_inputs(
     staged_normal = [normal_map.get(p, p) for p in normal_images]
 
     logger.info(
-        "Staged %d defect images + %d normal images → %s",
-        len(defect_map), len(normal_map), staging_dir,
+        "Staged %d defect images (%d already local, copy skipped) + %d normal "
+        "images → %s",
+        len(defect_map), n_defect_already_local, len(normal_map), staging_dir,
     )
     return staged_selected, staged_normal, normal_map
 

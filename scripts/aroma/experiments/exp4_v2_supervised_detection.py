@@ -1577,6 +1577,11 @@ def _run_yolo_condition(
                 # no class signal). Count over the *input* annotations by parsed
                 # source_roi class so c4/c2 starvation is visible per condition.
                 if class_mode == "multi":
+                    # Distinct real source defects per class (synth diversity):
+                    # how many UNIQUE source_roi each class draws from. High synth
+                    # count + few distinct sources = low-diversity oversampling
+                    # (the severstal c2 coverage question). Keyed like n_synth_per_class.
+                    n_synth_src_per_class: Dict[int, set] = {}
                     for _ann in synth_annotations:
                         # Same resolver _write_yolo_labels uses (source_roi parse,
                         # then cluster_id fallback) so the diagnostic matches what
@@ -1585,10 +1590,19 @@ def _run_yolo_condition(
                         _cls = _resolve_synth_class(_ann)
                         _key = _cls if _cls is not None else -1  # -1 = unresolved
                         n_synth_per_class[_key] = n_synth_per_class.get(_key, 0) + 1
+                        _sr = _ann.get("source_roi")
+                        if _sr is not None:
+                            n_synth_src_per_class.setdefault(_key, set()).add(_sr)
                     logger.info(
                         "    %s synth per-class (0-idx, -1=unparsed): %s",
                         condition,
                         {k: n_synth_per_class[k] for k in sorted(n_synth_per_class)},
+                    )
+                    logger.info(
+                        "    %s synth distinct sources per-class (0-idx): %s",
+                        condition,
+                        {k: len(n_synth_src_per_class.get(k, ()))
+                         for k in sorted(n_synth_per_class)},
                     )
             n_train = n_real + n_synth
 

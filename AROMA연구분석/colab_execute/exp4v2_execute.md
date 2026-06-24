@@ -583,7 +583,8 @@ print("CASDA_SYNTH_DIR :", os.environ['CASDA_SYNTH_DIR'])
 
 > `casda_roi_adapter`가 `min_suitability=0.5`, `per_class_cap` 미지정(=None) 기본으로 동작(결정 A).
 > 로그에서 `n_missing_image ≈ 0`과 class별 ROI 수(c3/c4 포함)를 확인할 것.
-> `--local_staging`: `$ROI_DIR/{images,masks}`를 `/content`로 1회 bulk-copy 후 로컬에서 읽음(Drive FUSE 지연 회피 — adapter Step1 + 합성 Step2 모두 적용).
+> `--local_staging`: 살아남은 ROI 행이 실제 참조하는 crop+mask 파일만 `/content`로 병렬 복사 후 로컬에서 읽음(Drive FUSE 지연 회피 — adapter Step1 + 합성 Step2 모두 적용). 디렉터리 전체를 복사하지 않고 manifest(suitability·per_class_cap 통과분)만 복사.
+> 복사 동시성은 `AROMA_STAGE_WORKERS`로 조절(기본 16, 1~64 clamp). Colab은 vCPU가 적지만 작업이 latency-bound라 워커 수를 높게 두는 게 유리. 필요 시 별도 셀에서 `import os; os.environ['AROMA_STAGE_WORKERS'] = '24'`.
 
 ```python
 !python $AROMA_SCRIPTS/generate_casda.py \

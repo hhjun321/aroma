@@ -31,8 +31,10 @@ import logging
 import os
 import shutil
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 logging.basicConfig(
     level=logging.INFO,
@@ -191,8 +193,40 @@ def _csv_fallback_bbox(
 # The adapter touches every ROI crop + mask exactly once (a .size header read +
 # a single full mask decode per row). On Colab, Drive is mounted via FUSE with
 # high per-file latency, so thousands of random per-file reads dominate runtime.
-# A single bulk copytree of the images/ + masks/ dirs is a sequential read that
-# is dramatically cheaper, after which all reads hit local /content disk.
+#
+# Staging strategy (SHAPE A): build a manifest of ONLY the files the run will
+# actually consume (survivors of the suitability + per_class_cap filter), then
+# copy them with a bounded ThreadPoolExecutor BEFORE the heavy read loop. This
+# (1) parallelizes the latency-bound copies and (2) never over-copies files the
+# CSV excludes. After staging, every absolute path is remapped to the local copy
+# so all crop/mask reads in the main loop hit local /content disk.
+
+# Default copy concurrency. Workload is latency-bound (FUSE round-trips), NOT
+# CPU-bound, so we deliberately do NOT key off os.cpu_count() (Colab = 2 vCPU).
+_DEFAULT_STAGE_WORKERS = 16
+_STAGE_WORKERS_MIN = 1
+_STAGE_WORKERS_MAX = 64
+_COPY_RETRIES = 3            # total attempts per file
+_COPY_BACKOFF = (0.5, 1.0, 2.0)  # sleep before retry attempts 2,3,...
+
+
+def _stage_workers() -> int:
+    """Resolve copy concurrency from AROMA_STAGE_WORKERS, clamped to a sane range."""
+    raw = os.environ.get("AROMA_STAGE_WORKERS")
+    if not raw:
+        return _DEFAULT_STAGE_WORKERS
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("AROMA_STAGE_WORKERS=%r not an int — using default %d",
+                       raw, _DEFAULT_STAGE_WORKERS)
+        return _DEFAULT_STAGE_WORKERS
+    clamped = max(_STAGE_WORKERS_MIN, min(_STAGE_WORKERS_MAX, n))
+    if clamped != n:
+        logger.warning("AROMA_STAGE_WORKERS=%d clamped to %d (range %d..%d)",
+                       n, clamped, _STAGE_WORKERS_MIN, _STAGE_WORKERS_MAX)
+    return clamped
+
 
 def _adapter_staging_dir(metadata_csv: str) -> Path:
     """Return a local staging path. Uses /content on Colab, sibling dir otherwise."""
@@ -203,25 +237,6 @@ def _adapter_staging_dir(metadata_csv: str) -> Path:
     return Path(metadata_csv).parent / f"_staging_tmp_{slug}"
 
 
-def _stage_roi_dirs(drive_root: Path, staging_dir: Path) -> Path:
-    """Bulk-copy drive_root/{images,masks} → staging_dir/{images,masks} once.
-
-    Returns staging_dir (the new local_root). dirs_exist_ok=True so Colab --resume
-    re-runs in the same session don't crash on FileExistsError. A single copytree
-    is the sequential bulk read that beats thousands of random per-file Drive reads.
-    """
-    for sub in ("images", "masks"):
-        src = drive_root / sub
-        dst = staging_dir / sub
-        try:
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-            n = sum(1 for _ in dst.iterdir()) if dst.exists() else 0
-            logger.info("Staged %s → %s (%d entries)", src, dst, n)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to stage %s → %s: %s", src, dst, e)
-    return staging_dir
-
-
 def _remap(p: str, drive_root: Path, local_root: Path) -> str:
     """Remap an absolute Drive path under drive_root to local_root, else unchanged."""
     if not p:
@@ -230,6 +245,139 @@ def _remap(p: str, drive_root: Path, local_root: Path) -> str:
         return str(local_root / Path(p).relative_to(drive_root))
     except ValueError:
         return p
+
+
+def _copy_one(
+    src: str,
+    dst: str,
+    created_dirs: set,
+) -> str:
+    """Copy one file src → dst with retry/backoff. Returns 'staged'|'skipped'|'failed'.
+
+    - mkdir of the dst parent is done once per unique dir (cached in created_dirs).
+    - Skip (cheap stat) if dst already exists with the same size — lets Colab
+      --resume re-runs avoid re-copying everything.
+    - On transient FUSE errors, retry up to _COPY_RETRIES with exponential backoff.
+    - Terminal failure: log a WARNING and return 'failed' (do NOT raise) so the
+      per-row exists()/Drive-fallback degrades gracefully.
+    """
+    dst_path = Path(dst)
+    parent = dst_path.parent
+    if parent not in created_dirs:
+        parent.mkdir(parents=True, exist_ok=True)
+        created_dirs.add(parent)
+
+    # dirs_exist_ok-style skip: same size already present locally.
+    try:
+        if dst_path.exists():
+            src_sz = os.path.getsize(src)
+            if dst_path.stat().st_size == src_sz:
+                return "skipped"
+    except OSError:
+        pass  # fall through to (re)copy
+
+    last_err: Optional[Exception] = None
+    for attempt in range(_COPY_RETRIES):
+        try:
+            shutil.copy2(src, dst)
+            return "staged"
+        except Exception as e:  # noqa: BLE001 — transient FUSE EIO/5xx
+            last_err = e
+            if attempt < _COPY_RETRIES - 1:
+                sleep_s = _COPY_BACKOFF[min(attempt, len(_COPY_BACKOFF) - 1)]
+                time.sleep(sleep_s)
+    logger.warning("Failed to stage %s → %s after %d attempts: %s — left unstaged",
+                   src, dst, _COPY_RETRIES, last_err)
+    return "failed"
+
+
+def _stage_manifest(
+    manifest: List[Tuple[str, str]],
+    drive_root: Path,
+    local_root: Path,
+    workers: int,
+) -> None:
+    """Parallel-copy the (src, dst) manifest from Drive to local_root.
+
+    manifest holds absolute Drive source paths; each is remapped to local_root to
+    derive its destination. Copies run on a bounded ThreadPoolExecutor (the FUSE
+    round-trips, not CPU, are the bottleneck). Logs staged/skipped/failed counts
+    so a degraded partial-staging run is visible, not silent.
+    """
+    created_dirs: set = set()
+    counts = {"staged": 0, "skipped": 0, "failed": 0}
+
+    def _task(src: str) -> str:
+        return _copy_one(src, _remap(src, drive_root, local_root), created_dirs)
+
+    srcs = [s for s, _ in manifest]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in as_completed(ex.submit(_task, s) for s in srcs):
+            counts[fut.result()] += 1
+
+    logger.info(
+        "local_staging copy: %d staged, %d skipped (already local), %d failed "
+        "(left on Drive) of %d files using %d workers",
+        counts["staged"], counts["skipped"], counts["failed"], len(srcs), workers,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Survivor filter (suitability + per_class_cap) — ONE shared definition
+# ---------------------------------------------------------------------------
+#
+# The suitability threshold + stateful per_class_cap counting is applied in
+# EXACTLY ONE place (_iter_survivors) and materialized into a single list. Both
+# the staging manifest pre-pass and the main emit loop iterate that same list,
+# so there is no possibility of the two passes drifting (the per_class_cap is
+# order-dependent, so a duplicated predicate would be a latent bug source).
+#
+# Side effect: increments the caller-owned counters dict (n_filtered_suitability,
+# n_filtered_cap) so the existing summary log lines stay byte-for-byte identical.
+
+
+def _iter_survivors(
+    rows: List[Dict[str, Any]],
+    min_suitability: float,
+    per_class_cap: Optional[int],
+    counters: Dict[str, int],
+) -> Iterator[Tuple[Dict[str, Any], int, float]]:
+    """Yield (row, class_id, suitability) for rows surviving suitability + cap.
+
+    Applies the SAME numeric behavior the legacy main loop inlined:
+      - suitability parse (KeyError/ValueError) → n_filtered_suitability, skip
+      - suitability < min_suitability           → n_filtered_suitability, skip
+      - class_id parse (KeyError/ValueError)    → WARN, skip (no counter, legacy)
+      - per_class_cap reached                   → n_filtered_cap, skip
+    Stateful cap counting happens in row order, identical across any consumer.
+    """
+    class_counts: Dict[int, int] = {}
+    for row in rows:
+        # Suitability filter
+        try:
+            suitability = float(row["suitability_score"])
+        except (KeyError, ValueError):
+            counters["n_filtered_suitability"] += 1
+            continue
+        if suitability < min_suitability:
+            counters["n_filtered_suitability"] += 1
+            continue
+
+        # Per-class cap
+        try:
+            class_id = int(row["class_id"])
+        except (KeyError, ValueError):
+            logger.warning("Invalid class_id in row: %s", row.get("image_id", "?"))
+            continue
+
+        if per_class_cap is not None:
+            count = class_counts.get(class_id, 0)
+            if count >= per_class_cap:
+                counters["n_filtered_cap"] += 1
+                continue
+            class_counts[class_id] = count + 1
+
+        yield row, class_id, suitability
 
 
 # ---------------------------------------------------------------------------
@@ -270,88 +418,89 @@ def adapt(
         raise FileNotFoundError(f"roi_metadata.csv not found: {metadata_csv}")
 
     rois: List[Dict[str, Any]] = []
-    class_counts: Dict[int, int] = {}
-    n_total = 0
-    n_filtered_suitability = 0
-    n_filtered_cap = 0
     n_missing_image = 0
     n_missing_mask = 0       # mask path empty / not on disk
     n_empty_mask = 0         # mask exists but all-zero
     n_size_mismatch = 0      # crop vs mask dimension mismatch
     n_with_mask = 0          # ROIs emitting defect_mask_path + defect_bbox
     n_csv_fallback = 0       # bbox derived via CSV subtract-origin path
+    # Filter counters live in a dict so _iter_survivors (the SOLE owner of the
+    # suitability + per_class_cap logic) can increment them; read back below for
+    # the summary log so the existing log lines stay byte-for-byte identical.
+    counters: Dict[str, int] = {"n_filtered_suitability": 0, "n_filtered_cap": 0}
 
     # Read all metadata rows up front (text-only, small) so we can derive the
     # Drive ROI root from the first usable row before optionally bulk-staging.
     with open(csv_path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
+    # n_total counts every row read (legacy: incremented once per row at loop top).
+    n_total = len(rows)
+
     # ----------------------------------------------------------------------
-    # Optional local staging (A): bulk-copy the ROI images/ + masks/ dirs from
-    # Drive to local disk ONCE, then remap every absolute path to the local
-    # copy. Graceful degrade: any failure falls back to identity (read Drive).
+    # SHAPE A: materialize the surviving rows ONCE (suitability + per_class_cap
+    # applied here only), then build the staging manifest from those survivors.
+    # The main emit loop iterates this SAME list — the stateful per_class_cap can
+    # never drift between the manifest pre-pass and the loop.
+    # ----------------------------------------------------------------------
+    survivors: List[Tuple[Dict[str, Any], int, float]] = list(
+        _iter_survivors(rows, min_suitability, per_class_cap, counters)
+    )
+
+    # ----------------------------------------------------------------------
+    # Optional local staging (A+B): copy ONLY the files the surviving rows
+    # consume (image + mask) from Drive to local disk via a parallel pool, then
+    # remap every absolute path to the local copy. Graceful degrade: any failure
+    # falls back to identity (read Drive); per-file failures leave that file
+    # unstaged so the per-row exists()/Drive fallback still works.
     # ----------------------------------------------------------------------
     remap = lambda p: p  # identity by default  # noqa: E731
     if local_staging:
+        # Manifest = unique (roi_image_path, roi_mask_path) pairs over survivors.
+        # Masks ARE included (Step-4 reopens defect_mask_path at synth time).
+        seen: set = set()
+        manifest: List[Tuple[str, str]] = []
         drive_root: Optional[Path] = None
-        for r in rows:
-            img = r.get("roi_image_path", "").strip()
-            msk = r.get("roi_mask_path", "").strip()
-            if img and msk:
+        for srow, _cid, _suit in survivors:
+            img = srow.get("roi_image_path", "").strip()
+            msk = srow.get("roi_mask_path", "").strip()
+            if drive_root is None and img and msk:
                 try:
                     drive_root = Path(
                         os.path.commonpath([str(Path(img).parent), str(Path(msk).parent)])
                     )
                 except ValueError:
                     drive_root = None
-                break
-        if drive_root is None:
+            for p in (img, msk):
+                if p and p not in seen:
+                    seen.add(p)
+                    manifest.append((p, p))  # (src, _) — dst derived via remap
+
+        if drive_root is None or not manifest:
             logger.warning(
-                "local_staging requested but no usable row with both "
+                "local_staging requested but no usable surviving row with both "
                 "roi_image_path and roi_mask_path — reading from Drive."
             )
         else:
             local_root = Path(staging_dir) if staging_dir else _adapter_staging_dir(metadata_csv)
             try:
-                local_root = _stage_roi_dirs(drive_root, local_root)
+                workers = _stage_workers()
+                _stage_manifest(manifest, drive_root, local_root, workers)
                 remap = lambda p, _dr=drive_root, _lr=local_root: _remap(p, _dr, _lr)  # noqa: E731
                 logger.info(
-                    "local_staging active: Drive root %s → local %s", drive_root, local_root
+                    "local_staging active: Drive root %s → local %s (%d unique files)",
+                    drive_root, local_root, len(manifest),
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("Staging failed (%s) — reading from Drive.", e)
 
-    # NOTE: loop body kept one indent level deep (under this guard) to minimize
-    # the diff vs. the former `with open(...)` block. The guard is always true;
-    # rows were fully read above so the file handle is already closed.
+    # ----------------------------------------------------------------------
+    # Main emit loop: iterate the SAME surviving list (suitability + cap already
+    # applied above). class_id / suitability are reused from the survivor tuple
+    # so no per-row re-parse and no drift.
+    # ----------------------------------------------------------------------
     if True:  # noqa: SIM103 — preserves block indentation, intentional
-        for row in rows:
-            n_total += 1
-
-            # Suitability filter
-            try:
-                suitability = float(row["suitability_score"])
-            except (KeyError, ValueError):
-                n_filtered_suitability += 1
-                continue
-            if suitability < min_suitability:
-                n_filtered_suitability += 1
-                continue
-
-            # Per-class cap
-            try:
-                class_id = int(row["class_id"])
-            except (KeyError, ValueError):
-                logger.warning("Invalid class_id in row: %s", row.get("image_id", "?"))
-                continue
-
-            if per_class_cap is not None:
-                count = class_counts.get(class_id, 0)
-                if count >= per_class_cap:
-                    n_filtered_cap += 1
-                    continue
-                class_counts[class_id] = count + 1
-
+        for row, class_id, suitability in survivors:
             # Validate roi_image_path (remap to local staging copy if active).
             roi_image_path = remap(row.get("roi_image_path", "").strip())
             if not roi_image_path:
@@ -468,7 +617,8 @@ def adapt(
     logger.info(
         "casda_roi_adapter: %d total → %d suitability-filtered, %d cap-filtered, "
         "%d missing-image → %d valid ROIs",
-        n_total, n_filtered_suitability, n_filtered_cap, n_missing_image, len(rois),
+        n_total, counters["n_filtered_suitability"], counters["n_filtered_cap"],
+        n_missing_image, len(rois),
     )
     logger.info(
         "casda_roi_adapter mask resolution: %d with real mask (%d via CSV-fallback), "
