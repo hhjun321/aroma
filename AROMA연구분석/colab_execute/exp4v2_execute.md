@@ -583,6 +583,7 @@ print("CASDA_SYNTH_DIR :", os.environ['CASDA_SYNTH_DIR'])
 
 > `casda_roi_adapter`가 `min_suitability=0.5`, `per_class_cap` 미지정(=None) 기본으로 동작(결정 A).
 > 로그에서 `n_missing_image ≈ 0`과 class별 ROI 수(c3/c4 포함)를 확인할 것.
+> `--local_staging`: `$ROI_DIR/{images,masks}`를 `/content`로 1회 bulk-copy 후 로컬에서 읽음(Drive FUSE 지연 회피 — adapter Step1 + 합성 Step2 모두 적용).
 
 ```python
 !python $AROMA_SCRIPTS/generate_casda.py \
@@ -590,7 +591,8 @@ print("CASDA_SYNTH_DIR :", os.environ['CASDA_SYNTH_DIR'])
     --normal_dir   $NORMAL_DIR \
     --output_dir   $CASDA_SYNTH_DIR/severstal \
     --n_per_roi    $N_PER_ROI \
-    --seed 42
+    --seed 42 \
+    --local_staging
 # → $CASDA_SYNTH_DIR/severstal/annotations.json + images/
 ```
 

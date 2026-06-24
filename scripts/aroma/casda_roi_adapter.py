@@ -29,6 +29,7 @@ import csv
 import json
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -124,20 +125,13 @@ def _parse_xyxy(s: str) -> Optional[List[int]]:
         return None
 
 
-def _mask_derived_bbox(mask_path: str) -> Optional[List[int]]:
-    """Compute crop-relative [x, y, w, h] from the nonzero region of the mask.
+def _bbox_from_mask_array(m: "np.ndarray") -> Optional[List[int]]:
+    """Compute crop-relative [x, y, w, h] from the nonzero region of a decoded mask.
 
-    Returns None if PIL/numpy unavailable, the mask cannot be read, or the mask
-    is empty (all-zero). An empty mask must NOT yield a zero-size bbox (it would
-    be rejected by generate_defects and silently ellipse-fall-back).
+    Takes a PRE-DECODED grayscale mask array (caller decodes exactly once). Returns
+    None if the mask is empty (all-zero). An empty mask must NOT yield a zero-size
+    bbox (it would be rejected by generate_defects and silently ellipse-fall-back).
     """
-    if not HAS_PIL:
-        return None
-    try:
-        m = np.asarray(Image.open(mask_path).convert("L"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Failed to read mask %s: %s", mask_path, e)
-        return None
     ys, xs = np.nonzero(m >= 128)
     if xs.size == 0 or ys.size == 0:
         return None  # empty mask -> caller falls back to ellipse
@@ -191,6 +185,54 @@ def _csv_fallback_bbox(
 
 
 # ---------------------------------------------------------------------------
+# Local staging helpers (Colab Drive FUSE latency mitigation)
+# ---------------------------------------------------------------------------
+#
+# The adapter touches every ROI crop + mask exactly once (a .size header read +
+# a single full mask decode per row). On Colab, Drive is mounted via FUSE with
+# high per-file latency, so thousands of random per-file reads dominate runtime.
+# A single bulk copytree of the images/ + masks/ dirs is a sequential read that
+# is dramatically cheaper, after which all reads hit local /content disk.
+
+def _adapter_staging_dir(metadata_csv: str) -> Path:
+    """Return a local staging path. Uses /content on Colab, sibling dir otherwise."""
+    slug = Path(metadata_csv).parent.name
+    colab_tmp = Path("/content/tmp")
+    if colab_tmp.parent.exists():
+        return colab_tmp / f"aroma_casda_roi_{slug}"
+    return Path(metadata_csv).parent / f"_staging_tmp_{slug}"
+
+
+def _stage_roi_dirs(drive_root: Path, staging_dir: Path) -> Path:
+    """Bulk-copy drive_root/{images,masks} → staging_dir/{images,masks} once.
+
+    Returns staging_dir (the new local_root). dirs_exist_ok=True so Colab --resume
+    re-runs in the same session don't crash on FileExistsError. A single copytree
+    is the sequential bulk read that beats thousands of random per-file Drive reads.
+    """
+    for sub in ("images", "masks"):
+        src = drive_root / sub
+        dst = staging_dir / sub
+        try:
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+            n = sum(1 for _ in dst.iterdir()) if dst.exists() else 0
+            logger.info("Staged %s → %s (%d entries)", src, dst, n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to stage %s → %s: %s", src, dst, e)
+    return staging_dir
+
+
+def _remap(p: str, drive_root: Path, local_root: Path) -> str:
+    """Remap an absolute Drive path under drive_root to local_root, else unchanged."""
+    if not p:
+        return p
+    try:
+        return str(local_root / Path(p).relative_to(drive_root))
+    except ValueError:
+        return p
+
+
+# ---------------------------------------------------------------------------
 # Core adapter
 # ---------------------------------------------------------------------------
 
@@ -199,6 +241,8 @@ def adapt(
     output_dir: str,
     min_suitability: float = MIN_SUITABILITY,
     per_class_cap: Optional[int] = None,
+    local_staging: bool = False,
+    staging_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Convert CASDA roi_metadata.csv to AROMA roi_selected.json.
 
@@ -207,6 +251,12 @@ def adapt(
         output_dir:       Directory to write roi_selected.json.
         min_suitability:  Minimum suitability_score threshold (CASDA default 0.5).
         per_class_cap:    Maximum ROIs per class_id (None = no cap).
+        local_staging:    Bulk-copy the referenced ROI images/ + masks/ dirs from
+                          Drive to local /content disk ONCE, then read crops/masks
+                          locally (Colab Drive FUSE latency mitigation). Default
+                          False = byte-identical legacy behavior reading from Drive.
+        staging_dir:      Override the local staging directory (default: derived
+                          from metadata_csv parent name under /content/tmp).
 
     Returns:
         List of ROI dicts written to roi_selected.json.
@@ -231,9 +281,51 @@ def adapt(
     n_with_mask = 0          # ROIs emitting defect_mask_path + defect_bbox
     n_csv_fallback = 0       # bbox derived via CSV subtract-origin path
 
+    # Read all metadata rows up front (text-only, small) so we can derive the
+    # Drive ROI root from the first usable row before optionally bulk-staging.
     with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
+        rows = list(csv.DictReader(f))
+
+    # ----------------------------------------------------------------------
+    # Optional local staging (A): bulk-copy the ROI images/ + masks/ dirs from
+    # Drive to local disk ONCE, then remap every absolute path to the local
+    # copy. Graceful degrade: any failure falls back to identity (read Drive).
+    # ----------------------------------------------------------------------
+    remap = lambda p: p  # identity by default  # noqa: E731
+    if local_staging:
+        drive_root: Optional[Path] = None
+        for r in rows:
+            img = r.get("roi_image_path", "").strip()
+            msk = r.get("roi_mask_path", "").strip()
+            if img and msk:
+                try:
+                    drive_root = Path(
+                        os.path.commonpath([str(Path(img).parent), str(Path(msk).parent)])
+                    )
+                except ValueError:
+                    drive_root = None
+                break
+        if drive_root is None:
+            logger.warning(
+                "local_staging requested but no usable row with both "
+                "roi_image_path and roi_mask_path — reading from Drive."
+            )
+        else:
+            local_root = Path(staging_dir) if staging_dir else _adapter_staging_dir(metadata_csv)
+            try:
+                local_root = _stage_roi_dirs(drive_root, local_root)
+                remap = lambda p, _dr=drive_root, _lr=local_root: _remap(p, _dr, _lr)  # noqa: E731
+                logger.info(
+                    "local_staging active: Drive root %s → local %s", drive_root, local_root
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Staging failed (%s) — reading from Drive.", e)
+
+    # NOTE: loop body kept one indent level deep (under this guard) to minimize
+    # the diff vs. the former `with open(...)` block. The guard is always true;
+    # rows were fully read above so the file handle is already closed.
+    if True:  # noqa: SIM103 — preserves block indentation, intentional
+        for row in rows:
             n_total += 1
 
             # Suitability filter
@@ -260,8 +352,8 @@ def adapt(
                     continue
                 class_counts[class_id] = count + 1
 
-            # Validate roi_image_path
-            roi_image_path = row.get("roi_image_path", "").strip()
+            # Validate roi_image_path (remap to local staging copy if active).
+            roi_image_path = remap(row.get("roi_image_path", "").strip())
             if not roi_image_path:
                 logger.warning("Empty roi_image_path for %s", row.get("image_id", "?"))
                 n_missing_image += 1
@@ -289,7 +381,7 @@ def adapt(
             defect_mask_path: Optional[str] = None
             defect_bbox: Optional[List[int]] = None
 
-            mask_path = row.get("roi_mask_path", "").strip()
+            mask_path = remap(row.get("roi_mask_path", "").strip())
             if not mask_path:
                 logger.warning("Empty roi_mask_path for %s — ellipse fallback",
                                row.get("image_id", "?"))
@@ -302,12 +394,20 @@ def adapt(
                 # Enforce equal dimensions: generate_defects crops image and mask
                 # with the SAME box and never resizes the mask. A mismatch would
                 # silently misalign the mask crop, so drop the mask on mismatch.
+                #
+                # I/O collapse: decode the mask EXACTLY ONCE (single np.asarray)
+                # and derive BOTH the size-check and the bbox from that one array.
+                # The crop is touched only via a lazy .size header read. Net heavy
+                # Drive ops per row drop from ~5 to ~2 (crop .size + one mask decode).
                 crop_size: Optional[tuple] = None
                 size_ok = True
+                m = None  # decoded mask array (set below when HAS_PIL)
                 if HAS_PIL:
                     try:
-                        img_size = Image.open(roi_image_path).size
-                        msk_size = Image.open(mask_path).size
+                        img_size = Image.open(roi_image_path).size           # crop dims (lazy header)
+                        m = np.asarray(Image.open(mask_path).convert("L"))   # mask: single full decode
+                        msk_h, msk_w = m.shape[:2]
+                        msk_size = (msk_w, msk_h)
                         crop_size = img_size
                         if img_size != msk_size:
                             logger.warning(
@@ -318,12 +418,12 @@ def adapt(
                             n_size_mismatch += 1
                             size_ok = False
                     except Exception as e:  # noqa: BLE001
-                        logger.warning("Failed to read image/mask size for %s: %s",
+                        logger.warning("Failed to read image/mask for %s: %s",
                                        row.get("image_id", "?"), e)
                         size_ok = False
 
                 if size_ok:
-                    bbox = _mask_derived_bbox(mask_path)
+                    bbox = _bbox_from_mask_array(m) if (HAS_PIL and m is not None) else None
                     if bbox is None and HAS_PIL:
                         # PIL present but mask empty (all-zero) -> ellipse fallback.
                         logger.warning("Empty mask (all-zero) for %s — ellipse fallback",
@@ -413,6 +513,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help=f"Minimum suitability_score (default {MIN_SUITABILITY})")
     p.add_argument("--per_class_cap",   type=int, default=None,
                    help="Max ROIs per class_id (default: no cap)")
+    p.add_argument("--local_staging",   action="store_true",
+                   help="Bulk-copy ROI images/+masks/ dirs to /content once, then "
+                        "read crops/masks locally (faster on Colab with Drive)")
     return p.parse_args(argv)
 
 
@@ -424,6 +527,7 @@ def main(argv=None) -> None:
             output_dir=args.output_dir,
             min_suitability=args.min_suitability,
             per_class_cap=args.per_class_cap,
+            local_staging=args.local_staging,
         )
         print(f"Adapted {len(rois)} CASDA ROIs → {args.output_dir}/roi_selected.json")
     except (FileNotFoundError, RuntimeError) as e:

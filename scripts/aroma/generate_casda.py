@@ -79,7 +79,9 @@ def run(
         seed:                   Random seed for synthesis.
         min_suitability:        CASDA suitability filter threshold.
         per_class_cap:          Max ROIs per defect class (None = no cap).
-        local_staging:          Copy inputs to /content/tmp before synthesis.
+        local_staging:          Bulk-copy ROI crops+masks to /content for the
+                                adapter (Step 1) AND stage normal_dir for synthesis
+                                (Step 2). Drive FUSE latency mitigation on Colab.
 
     Returns:
         generate_defects.run() result dict + n_rois_adapted.
@@ -92,6 +94,7 @@ def run(
             output_dir=roi_dir,
             min_suitability=min_suitability,
             per_class_cap=per_class_cap,
+            local_staging=local_staging,
         )
     except (FileNotFoundError, RuntimeError) as e:
         logger.error("casda_roi_adapter failed: %s", e)
