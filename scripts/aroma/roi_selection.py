@@ -257,6 +257,7 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "image_path":  image_path,
                 "cluster_id":  cluster_id,
                 "cell_key":    cell_key,
+                "class_key":   str(row.get("defect_type") or "_"),
                 "roi_score":   round(roi_score, 6),
                 "morph_prior": round(morph_prior, 6),
                 "ctx_prior":   round(float(ctx_prior), 6),
@@ -276,9 +277,32 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 # Sampling strategies
 # ---------------------------------------------------------------------------
 
+def moderated_score(c: Dict[str, Any], rarity_temp: float = 1.0) -> float:
+    """
+    Ordering key for ROI selection.
+
+    rarity_temp == 1.0 (default) → returns the raw ``roi_score`` verbatim, so
+    every ordering decision is byte-identical to the pre-change behaviour.
+
+    rarity_temp != 1.0 → recompute the score with only the Deficit term raised
+    to ``rarity_temp`` (the morph / ctx prior anchors are kept as-is). This
+    compresses or amplifies the deficit contribution without touching the raw
+    ``roi_score`` stored on the candidate (provenance preserved for JSON).
+    """
+    if rarity_temp == 1.0:
+        return float(c["roi_score"])
+    mp = max(0.0, min(1.0, float(c.get("morph_prior", 0.0))))
+    cp = max(0.0, min(1.0, float(c.get("ctx_prior", 0.0))))
+    d  = max(0.0, min(1.0, float(c.get("deficit", 0.0))))
+    score = _W_MORPH * mp + _W_CONTEXT * cp + _W_DEFICIT * (d ** rarity_temp)
+    return float(np.clip(score, 0.0, 1.0))
+
+
 def _pair_aware_allocation(
     candidates: List[Dict[str, Any]],
     top_k: int,
+    per_pair_cap_frac: float | None = None,
+    rarity_temp: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """
     Two-phase ROI selection: Coverage-first + Quality-second.
@@ -290,14 +314,21 @@ def _pair_aware_allocation(
         3. Distribute remaining quota (top_k - n_pairs) proportional to
            PairDeficit via Hamilton / Largest-Remainder method.
            Pairs with deficit=0 receive no extra quota beyond the base.
-        4. Within each pair, select candidates by roi_score descending.
+        3b. (per_pair_cap_frac only) Cap any single pair's quota at
+           ceil(per_pair_cap_frac * top_k) and round-robin the freed slots
+           to under-saturated pairs by PairDeficit, breaking monoculture.
+           Skipped entirely when per_pair_cap_frac is None.
+        4. Within each pair, select candidates by moderated_score descending.
 
     Phase 2 — Quality backfill:
         If Phase 1 selected fewer than top_k candidates (slack from
         under-populated pairs), fill remaining slots from the unselected
-        pool ranked by global roi_score.
+        pool ranked by global moderated_score.
 
-    Fallback: if top_k <= n_pairs, return roi_score top-k globally.
+    Fallback: if top_k <= n_pairs, return moderated_score top-k globally.
+
+    moderated_score collapses to the raw roi_score when rarity_temp == 1.0
+    (default), so the default path is byte-identical to the prior behaviour.
     """
     if not candidates:
         return []
@@ -311,7 +342,11 @@ def _pair_aware_allocation(
     n_pairs = len(pairs)
 
     if top_k <= n_pairs:
-        return sorted(candidates, key=lambda c: c["roi_score"], reverse=True)[:top_k]
+        return sorted(
+            candidates,
+            key=lambda c: moderated_score(c, rarity_temp),
+            reverse=True,
+        )[:top_k]
 
     pair_deficit = {
         p: float(np.mean([c["deficit"] for c in pair_groups[p]]))
@@ -341,9 +376,46 @@ def _pair_aware_allocation(
     for p, extra in floor_q.items():
         quotas[p] += extra
 
+    # --- Phase 1b: per-pair cap + redistribute (Fix1, opt-in) ---
+    # Caps the slots any single (cluster_id, cell_key) pair can claim at a
+    # budget-scaled ceiling (class-agnostic), preventing one pair from
+    # monopolising the selection (monoculture). Freed slots are handed,
+    # one at a time, to under-saturated pairs ordered by PairDeficit. Any
+    # slots that cannot be re-placed are absorbed by the Phase-2 backfill,
+    # so total selected stays <= top_k. Skipped when per_pair_cap_frac is None.
+    if per_pair_cap_frac is not None:
+        cap = max(1, math.ceil(per_pair_cap_frac * top_k))
+        freed = 0
+        for p in pairs:
+            avail = len(pair_groups[p])
+            over = quotas[p] - cap
+            # only the slots that the pair could actually have filled are freed
+            redeemable = min(quotas[p], avail) - min(cap, avail)
+            if over > 0 and redeemable > 0:
+                quotas[p] = cap
+                freed += redeemable
+        if freed > 0:
+            # round-robin freed slots to under-saturated pairs (PairDeficit desc),
+            # each up to its own cap and candidate availability.
+            order = sorted(pairs, key=lambda p: pair_deficit[p], reverse=True)
+            progressed = True
+            while freed > 0 and progressed:
+                progressed = False
+                for p in order:
+                    if freed <= 0:
+                        break
+                    if quotas[p] < cap and quotas[p] < len(pair_groups[p]):
+                        quotas[p] += 1
+                        freed -= 1
+                        progressed = True
+
     selected: List[Dict[str, Any]] = []
     for p, quota in quotas.items():
-        top_in_pair = sorted(pair_groups[p], key=lambda c: c["roi_score"], reverse=True)
+        top_in_pair = sorted(
+            pair_groups[p],
+            key=lambda c: moderated_score(c, rarity_temp),
+            reverse=True,
+        )
         selected.extend(top_in_pair[:quota])
 
     # --- Phase 2: quality backfill for slack slots ---
@@ -352,7 +424,7 @@ def _pair_aware_allocation(
         selected_ids = {id(c) for c in selected}
         rest = sorted(
             (c for c in candidates if id(c) not in selected_ids),
-            key=lambda c: c["roi_score"],
+            key=lambda c: moderated_score(c, rarity_temp),
             reverse=True,
         )
         backfill = rest[:slack]
@@ -365,11 +437,147 @@ def _pair_aware_allocation(
     return selected
 
 
+def _stratified_pair_aware(
+    candidates: List[Dict[str, Any]],
+    top_k: int,
+    per_pair_cap_frac: float | None = None,
+    rarity_temp: float = 1.0,
+) -> List[Dict[str, Any]]:
+    """
+    Class-stratified wrapper around :func:`_pair_aware_allocation` (Fix2).
+
+    Buckets candidates by ``class_key`` and gives every class a symmetric
+    floor (``top_k // K``) so no class can be starved to zero by another
+    class winning the shared (cluster_id, cell_key) competition. The leftover
+    budget (``top_k - K * floor``) is handed out by per-class deficit-mass via
+    the same Hamilton / Largest-Remainder method used per-pair. Per-class
+    quotas are clamped to each class's candidate count and the resulting
+    surplus is redistributed to classes that can still absorb it. Each bucket
+    is then allocated independently with :func:`_pair_aware_allocation`
+    (preserving intra-class pair coverage + deficit awareness and the optional
+    per-pair cap), the buckets are concatenated, and a global Phase-2 backfill
+    tops the result up to exactly ``top_k``.
+
+    With a single class (K <= 1) — i.e. every single-class dataset — this
+    returns ``_pair_aware_allocation(...)`` verbatim, keeping that path
+    byte-identical to the pre-change behaviour.
+
+    Thesis / ablation caveat (cross-class layer is starvation-first, not
+    deficit-proportional). The cross-class budget is dominated by the symmetric
+    floor ``top_k // K``; only the leftover ``top_k % K`` slots (< K) flow
+    through the per-class deficit-mass largest-remainder block below. When
+    ``top_k`` is a multiple of ``K`` (e.g. top_k=200, K=4 → remainder 0) the
+    deficit-mass branch is inert and every class receives an equal floor — the
+    cross-class split is purely uniform. This is a deliberate anti-starvation
+    design choice (no class can be driven to zero by another winning the shared
+    pair competition), NOT class-level deficit-proportional oversampling.
+    AROMA's deficit-proportional thesis is carried *within* each class by
+    :func:`_pair_aware_allocation` (genuine PairDeficit Hamilton allocation,
+    intact); at the cross-class granularity the shipped config trades
+    deficit-proportionality for starvation-resistance. Any publication claim
+    that the multi-class selection is "deficit-aware across classes" must be
+    qualified accordingly, or explored via an ablation that shrinks the floor so
+    a non-trivial remainder reaches the deficit-mass weighting.
+    """
+    if not candidates:
+        return []
+
+    buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for c in candidates:
+        buckets[str(c.get("class_key") or "_")].append(c)
+
+    keys = list(buckets.keys())
+    K = len(keys)
+    if K <= 1:
+        return _pair_aware_allocation(candidates, top_k, per_pair_cap_frac, rarity_temp)
+
+    # --- per-class quota: symmetric floor + deficit-mass largest-remainder ---
+    floor = top_k // K
+    quotas: Dict[str, int] = {k: floor for k in keys}
+    remaining = top_k - floor * K
+
+    if remaining > 0:
+        class_deficit = {
+            k: float(sum(c["deficit"] for c in buckets[k])) for k in keys
+        }
+        total_deficit = sum(class_deficit.values())
+        if total_deficit == 0:
+            weight: Dict[str, float] = {k: 1.0 for k in keys}
+            total_w = float(K)
+        else:
+            weight = {k: d for k, d in class_deficit.items() if d > 0}
+            total_w = total_deficit
+        ideal = {k: remaining * w / total_w for k, w in weight.items()}
+        floor_q = {k: math.floor(v) for k, v in ideal.items()}
+        shortfall = remaining - sum(floor_q.values())
+        remainders = {k: ideal[k] - floor_q[k] for k in weight}
+        for k in sorted(remainders, key=remainders.__getitem__, reverse=True)[:shortfall]:
+            floor_q[k] += 1
+        for k, extra in floor_q.items():
+            quotas[k] += extra
+
+    # --- clamp to availability, then redistribute surplus to classes with room ---
+    surplus = 0
+    for k in keys:
+        avail = len(buckets[k])
+        if quotas[k] > avail:
+            surplus += quotas[k] - avail
+            quotas[k] = avail
+    if surplus > 0:
+        # hand surplus to under-filled classes (deficit-mass desc), one at a time
+        order = sorted(
+            keys,
+            key=lambda k: float(sum(c["deficit"] for c in buckets[k])),
+            reverse=True,
+        )
+        progressed = True
+        while surplus > 0 and progressed:
+            progressed = False
+            for k in order:
+                if surplus <= 0:
+                    break
+                if quotas[k] < len(buckets[k]):
+                    quotas[k] += 1
+                    surplus -= 1
+                    progressed = True
+
+    # --- per-class allocation, then concat ---
+    selected: List[Dict[str, Any]] = []
+    for k in keys:
+        q = quotas[k]
+        if q <= 0:
+            continue
+        selected.extend(
+            _pair_aware_allocation(buckets[k], q, per_pair_cap_frac, rarity_temp)
+        )
+
+    # --- global Phase-2 backfill to exactly top_k ---
+    slack = top_k - len(selected)
+    if slack > 0:
+        selected_ids = {id(c) for c in selected}
+        rest = sorted(
+            (c for c in candidates if id(c) not in selected_ids),
+            key=lambda c: moderated_score(c, rarity_temp),
+            reverse=True,
+        )
+        backfill = rest[:slack]
+        selected += backfill
+        logger.info(
+            "stratified_pair_aware: %d classes, global backfill %d / %d slack slots",
+            K, len(backfill), slack,
+        )
+
+    return selected
+
+
 def select_rois(
     candidates: List[Dict[str, Any]],
     strategy: str = "deficit_aware",
     top_k: int = 200,
     seed: int = 42,
+    class_floor: bool = False,
+    per_pair_cap_frac: float | None = None,
+    rarity_temp: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """
     Select top_k ROIs from candidates using the given strategy.
@@ -379,6 +587,18 @@ def select_rois(
         top_k           Highest roi_score first
         weighted        Probability-weighted random draw
         random          Uniform random draw (baseline for Exp 2)
+
+    Multi-class options (deficit_aware only; default no-op):
+        class_floor         When True and the candidate pool spans >1 class
+                            (K>1), route through _stratified_pair_aware so each
+                            class gets a symmetric floor. Single-class / K<=1
+                            pools fall through to _pair_aware_allocation
+                            unchanged (byte-identical).
+        per_pair_cap_frac   Per-pair quota cap fraction (None = no cap).
+        rarity_temp         Deficit-term temperature for the ordering key
+                            (1.0 = raw roi_score, byte-identical).
+
+    The random / top_k / weighted branches ignore the multi-class options.
     """
     if not candidates:
         return []
@@ -404,7 +624,13 @@ def select_rois(
         return [candidates[i] for i in sorted(indices.tolist())]
 
     # deficit_aware (default)
-    return _pair_aware_allocation(candidates, top_k)
+    if class_floor:
+        n_classes = len({str(c.get("class_key") or "_") for c in candidates})
+        if n_classes > 1:
+            return _stratified_pair_aware(
+                candidates, top_k, per_pair_cap_frac, rarity_temp
+            )
+    return _pair_aware_allocation(candidates, top_k, per_pair_cap_frac, rarity_temp)
 
 
 # ---------------------------------------------------------------------------
@@ -448,12 +674,18 @@ def run(
     strategy: str = "deficit_aware",
     top_k: int = 200,
     seed: int = 42,
+    class_floor: bool = False,
+    per_pair_cap_frac: float | None = None,
+    rarity_temp: float = 1.0,
 ) -> Dict[str, Any]:
     """
     Full Step 3 pipeline: load → score → select → save.
 
     Returns dict with 'candidates' and 'selected' keys on success,
     or a status-only dict on failure.
+
+    class_floor / per_pair_cap_frac / rarity_temp are multi-class options
+    (default no-op) forwarded to select_rois; see its docstring.
     """
     logger.info("Loading inputs: profiling_dir=%s prompts_dir=%s", profiling_dir, prompts_dir)
     data = load_inputs(profiling_dir, prompts_dir)
@@ -462,7 +694,15 @@ def run(
         return data
 
     candidates = build_candidates(data)
-    selected   = select_rois(candidates, strategy=strategy, top_k=top_k, seed=seed)
+    selected   = select_rois(
+        candidates,
+        strategy=strategy,
+        top_k=top_k,
+        seed=seed,
+        class_floor=class_floor,
+        per_pair_cap_frac=per_pair_cap_frac,
+        rarity_temp=rarity_temp,
+    )
 
     logger.info(
         "Strategy=%s  top_k=%d  candidates=%d  selected=%d",
@@ -511,6 +751,23 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Number of ROIs to select (default: 200)")
     p.add_argument("--seed",  type=int, default=42,
                    help="Random seed for weighted sampling (default: 42)")
+    p.add_argument("--class_mode", default="single",
+                   choices=["single", "multi"],
+                   help="Class mode (default: single). 'multi' is informational; "
+                        "the actual stratification is gated by --class_floor.")
+    p.add_argument("--nc", type=int, default=None,
+                   help="Number of classes (optional, informational). If >1 it "
+                        "implies a multi-class run; --class_floor still gates "
+                        "the stratified allocation.")
+    p.add_argument("--class_floor", action="store_true",
+                   help="Enable per-class symmetric floor allocation (Fix2). "
+                        "No-op on single-class (K<=1) pools. Default: off.")
+    p.add_argument("--per_pair_cap_frac", type=float, default=None,
+                   help="Per-pair quota cap as a fraction of top_k (Fix1). "
+                        "None (default) disables the cap.")
+    p.add_argument("--rarity_temp", type=float, default=1.0,
+                   help="Deficit-term temperature for the ordering key (Fix3). "
+                        "1.0 (default) = raw roi_score, byte-identical.")
     return p.parse_args(argv)
 
 
@@ -523,6 +780,9 @@ def main(argv=None) -> None:
         strategy=args.sampling_strategy,
         top_k=args.top_k,
         seed=args.seed,
+        class_floor=args.class_floor,
+        per_pair_cap_frac=args.per_pair_cap_frac,
+        rarity_temp=args.rarity_temp,
     )
     if result.get("status") != "ok":
         sys.exit(1)

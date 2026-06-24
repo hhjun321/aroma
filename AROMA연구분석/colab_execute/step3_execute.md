@@ -23,13 +23,32 @@ os.environ['ROI_DIR']        = f"{os.environ['AROMA_OUT']}/roi/{DATASET_KEY}"
 ## 실행
 
 ```python
+# 멀티클래스 게이트(제너릭): dataset_config.json의 class_mode == 'multi'인
+# 데이터셋만 stratified-allocation 플래그를 받는다. single-class 데이터셋은
+# 아무것도 전달하지 않아 roi_selected.json이 기존과 byte-identical.
+import os, json
+
+DATASET_CONFIG = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
+with open(DATASET_CONFIG) as f:
+    _cfg = json.load(f)
+
+if _cfg.get(DATASET_KEY, {}).get('class_mode') == 'multi':
+    os.environ['MULTI_FLAGS'] = '--class_mode multi --class_floor --per_pair_cap_frac 0.05'
+else:
+    os.environ['MULTI_FLAGS'] = ''
+print('MULTI_FLAGS:', repr(os.environ['MULTI_FLAGS']))
+```
+
+```python
 # deficit_aware: 희귀 조합(Deficit ≥ p75) 우선 선택 후 나머지로 채움
+# $MULTI_FLAGS 는 multi 데이터셋에서만 채워지고, 그 외에는 빈 문자열이라 무영향.
 !python $AROMA_SCRIPTS/roi_selection.py \
     --profiling_dir     $PROFILING_DIR \
     --prompts_dir       $PROMPTS_DIR \
     --sampling_strategy deficit_aware \
     --top_k             200 \
-    --output_dir        $ROI_DIR
+    --output_dir        $ROI_DIR \
+    $MULTI_FLAGS
 ```
 
 ### 전략 옵션
@@ -131,6 +150,11 @@ def run_one(ds):
            '--sampling_strategy', 'deficit_aware',
            '--top_k',             '200',
            '--output_dir',        f"{AROMA_OUT}/roi/{ds}"]
+    # Multi-class gate (generic): only datasets that declare class_mode=='multi'
+    # in dataset_config.json get the stratified-allocation flags. Single-class
+    # datasets pass nothing → roi_selected.json byte-identical to before.
+    if cfg.get(ds, {}).get('class_mode') == 'multi':
+        cmd += ['--class_mode', 'multi', '--class_floor', '--per_pair_cap_frac', '0.05']
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         tail = '\n'.join(r.stderr.strip().splitlines()[-3:]) if r.stderr else ''

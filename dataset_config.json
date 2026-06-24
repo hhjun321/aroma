@@ -238,6 +238,7 @@
   },
   "severstal": {
     "domain": "severstal",
+    "class_mode": "multi",
     "image_dir": "/content/drive/MyDrive/data/Aroma/severstal/train/good",
     "seed_dirs": [
       "/content/drive/MyDrive/data/Aroma/severstal/test/class1",
