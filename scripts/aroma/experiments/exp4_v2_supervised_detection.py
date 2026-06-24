@@ -2691,9 +2691,10 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument(
         "--condition",
+        nargs="+",
         choices=["baseline", "random", "casda", "aroma", "all"],
-        default="all",
-        help="평가 조건 (default: all)",
+        default=["all"],
+        help="평가 조건 (1개 이상, default: all). 예: --condition baseline random aroma",
     )
     p.add_argument(
         "--dataset_keys",
@@ -2819,7 +2820,13 @@ def main(argv=None) -> None:
     args = _parse_args(argv)
 
     model_keys = ALL_MODEL_KEYS if args.model == "all" else [args.model]
-    condition_keys = ALL_CONDITION_KEYS if args.condition == "all" else [args.condition]
+    # --condition은 다중 선택(nargs="+"). 'all'이 포함되면 전체.
+    # 그 외에는 ALL_CONDITION_KEYS의 canonical 순서로 정렬 + 중복 제거.
+    if "all" in args.condition:
+        condition_keys = ALL_CONDITION_KEYS
+    else:
+        _selected = set(args.condition)
+        condition_keys = [c for c in ALL_CONDITION_KEYS if c in _selected]
 
     # --seeds 우선; 미지정 시 단일 [--seed] (기존 동작과 동일)
     seed_list = args.seeds if args.seeds else [args.seed]
