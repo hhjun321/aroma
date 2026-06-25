@@ -28,14 +28,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import math
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -298,12 +299,69 @@ def moderated_score(c: Dict[str, Any], rarity_temp: float = 1.0) -> float:
     return float(np.clip(score, 0.0, 1.0))
 
 
+# ---------------------------------------------------------------------------
+# Source-image diversity helpers (Fix4)
+#
+# The candidate pool emits ONE candidate per (cluster, cell_key) bin for every
+# source image, all carrying the SAME (image_path, defect_bbox). Because the
+# ROI score is image-blind, every candidate sharing a (cluster, cell) pair ties
+# on score, and Python's stable sort surfaces the SAME head image in every pair,
+# collapsing thousands of distinct source defects down to a few dozen repeated
+# crops. These helpers (1) break score ties with a deterministic per-source
+# jitter so different pairs surface different images, and (2) expose a stable
+# per-source key so the allocator can cap how many times any one (image, bbox)
+# is selected. The cap is ON by default (img_diversity_cap=1); pass a large int
+# (or None) to restore the legacy uncapped, no-jitter path for an ablation.
+# ---------------------------------------------------------------------------
+
+def _source_key(c: Dict[str, Any]) -> Tuple[str, str]:
+    """Stable identity of the underlying defect crop: (image_path, bbox).
+
+    Two candidates with the same (image_path, defect_bbox) draw from the SAME
+    pixels — selecting both adds zero defect-appearance diversity. Keyed on the
+    raw path + bbox (not image_id) so it is robust regardless of id provenance.
+    """
+    bbox = c.get("defect_bbox")
+    bbox_repr = ",".join(str(int(v)) for v in bbox) if isinstance(bbox, (list, tuple)) else str(bbox)
+    return (str(c.get("image_path", "")), bbox_repr)
+
+
+def _img_jitter(c: Dict[str, Any]) -> float:
+    """Deterministic, sub-score tie-break keyed on (image_path, bbox, cell_key).
+
+    Returns a value in [0, ~1e-6) derived from a fixed hashlib digest so that
+    (a) ties between candidates resolve to DIFFERENT source images across
+    different pairs (the head rotates instead of always being the same CSV-order
+    image), and (b) results stay reproducible across runs and across the
+    random/aroma arms (no Python salted hash). Magnitude << score granularity
+    (roi_score is rounded to 1e-6) so it never reorders genuinely distinct
+    scores — it only resolves exact ties.
+    """
+    # Build a stable string from (image_path, bbox, cell_key) and hash it.
+    img_path, bbox_repr = _source_key(c)
+    h = hashlib.blake2b(
+        ("%s\x1f%s\x1f%s" % (img_path, bbox_repr, str(c.get("cell_key", "")))).encode("utf-8"),
+        digest_size=8,
+    )
+    # Map the 64-bit digest into [0, 1) then scale below score granularity.
+    frac = int.from_bytes(h.digest(), "big") / float(1 << 64)
+    return frac * 1e-7
+
+
+def _order_key(c: Dict[str, Any], rarity_temp: float, jitter: bool) -> float:
+    """Combined ordering key: moderated_score (+ optional sub-score jitter)."""
+    s = moderated_score(c, rarity_temp)
+    return s + _img_jitter(c) if jitter else s
+
+
 def _pair_aware_allocation(
     candidates: List[Dict[str, Any]],
     top_k: int,
     per_pair_cap_frac: float | None = None,
     rarity_temp: float = 1.0,
     pair_cap: int | None = None,
+    img_diversity_cap: int | None = None,
+    _src_counter: "Counter | None" = None,
 ) -> List[Dict[str, Any]]:
     """
     Two-phase ROI selection: Coverage-first + Quality-second.
@@ -340,6 +398,16 @@ def _pair_aware_allocation(
 
     moderated_score collapses to the raw roi_score when rarity_temp == 1.0
     (default), so the default path is byte-identical to the prior behaviour.
+
+    ``img_diversity_cap`` (Fix4) caps how many times any single source defect
+    crop — keyed on (image_path, defect_bbox) — may be selected, ACROSS all
+    pairs and phases. The cap is enabled by default (the caller passes 1);
+    None ⇒ no cap, legacy byte-identical path. When set, a
+    deterministic per-source jitter also breaks the score ties that otherwise
+    collapse every pair's head onto the same CSV-order image, so the selection
+    spreads across distinct sources instead of repeating a few dozen.
+    ``_src_counter`` lets the stratified caller share ONE global source counter
+    across class buckets so the cap is enforced globally, not per-bucket.
     """
     if not candidates:
         return []
@@ -354,6 +422,24 @@ def _pair_aware_allocation(
     else:
         eff_cap = None
 
+    # --- Source-image diversity cap (Fix4) ---
+    # img_cap None ⇒ disabled (no-op, byte-identical). jitter is enabled iff
+    # the cap is active. src_counter is SHARED when provided (stratified caller
+    # threads one global Counter), else local to this call.
+    img_cap = max(1, int(img_diversity_cap)) if img_diversity_cap is not None else None
+    jitter = img_cap is not None
+    src_counter: Counter = _src_counter if _src_counter is not None else Counter()
+
+    def _src_ok(c: Dict[str, Any]) -> bool:
+        """True if selecting c would not exceed the per-source img_cap."""
+        if img_cap is None:
+            return True
+        return src_counter[_source_key(c)] < img_cap
+
+    def _src_take(c: Dict[str, Any]) -> None:
+        if img_cap is not None:
+            src_counter[_source_key(c)] += 1
+
     # --- Phase 1: pair-aware coverage + deficit allocation ---
     pair_groups: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
     for c in candidates:
@@ -365,22 +451,26 @@ def _pair_aware_allocation(
     if top_k <= n_pairs:
         ranked = sorted(
             candidates,
-            key=lambda c: moderated_score(c, rarity_temp),
+            key=lambda c: _order_key(c, rarity_temp, jitter),
             reverse=True,
         )
-        if eff_cap is None:
+        if eff_cap is None and img_cap is None:
             return ranked[:top_k]
-        # cap-aware top-k: skip a candidate once its pair hits eff_cap
+        # cap-aware top-k: skip a candidate once its pair hits eff_cap or its
+        # source (image, bbox) hits img_cap.
         picked: List[Dict[str, Any]] = []
         pair_count: Dict[Any, int] = defaultdict(int)
         for c in ranked:
             if len(picked) >= top_k:
                 break
             key = (c["cluster_id"], c["cell_key"])
-            if pair_count[key] >= eff_cap:
+            if eff_cap is not None and pair_count[key] >= eff_cap:
+                continue
+            if not _src_ok(c):
                 continue
             picked.append(c)
             pair_count[key] += 1
+            _src_take(c)
         return picked
 
     pair_deficit = {
@@ -449,10 +539,26 @@ def _pair_aware_allocation(
     for p, quota in quotas.items():
         top_in_pair = sorted(
             pair_groups[p],
-            key=lambda c: moderated_score(c, rarity_temp),
+            key=lambda c: _order_key(c, rarity_temp, jitter),
             reverse=True,
         )
-        selected.extend(top_in_pair[:quota])
+        if img_cap is None:
+            selected.extend(top_in_pair[:quota])
+        else:
+            # img_cap-aware: take up to `quota` candidates from this pair whose
+            # source (image, bbox) has not yet hit img_cap. Over-cap sources are
+            # skipped; the slots they would have filled fall through to Phase-2
+            # backfill (which spreads them onto other distinct sources), so the
+            # selection never repeats one crop beyond img_cap.
+            taken = 0
+            for c in top_in_pair:
+                if taken >= quota:
+                    break
+                if not _src_ok(c):
+                    continue
+                selected.append(c)
+                _src_take(c)
+                taken += 1
 
     # --- Phase 2: quality backfill for slack slots ---
     slack = top_k - len(selected)
@@ -460,16 +566,17 @@ def _pair_aware_allocation(
         selected_ids = {id(c) for c in selected}
         rest = sorted(
             (c for c in candidates if id(c) not in selected_ids),
-            key=lambda c: moderated_score(c, rarity_temp),
+            key=lambda c: _order_key(c, rarity_temp, jitter),
             reverse=True,
         )
-        if eff_cap is None:
+        if eff_cap is None and img_cap is None:
             backfill = rest[:slack]
         else:
             # cap-aware backfill: track the running per-pair count of what is
             # already selected, then skip any candidate whose pair is at
-            # eff_cap. This stops an evicted (capped) pair's high-score
-            # candidates from re-flooding the freed slots (the original bug).
+            # eff_cap OR whose source is at img_cap. This stops an evicted
+            # (capped) pair's high-score candidates from re-flooding the freed
+            # slots (the original bug) and stops one crop being repeated.
             pair_count: Dict[Any, int] = defaultdict(int)
             for c in selected:
                 pair_count[(c["cluster_id"], c["cell_key"])] += 1
@@ -478,15 +585,66 @@ def _pair_aware_allocation(
                 if len(backfill) >= slack:
                     break
                 key = (c["cluster_id"], c["cell_key"])
-                if pair_count[key] >= eff_cap:
+                if eff_cap is not None and pair_count[key] >= eff_cap:
+                    continue
+                if not _src_ok(c):
                     continue
                 backfill.append(c)
                 pair_count[key] += 1
+                _src_take(c)
         selected += backfill
         logger.info(
             "pair_aware_allocation: phase2 backfill %d / %d slack slots",
             len(backfill), slack,
         )
+
+    # --- Bounded-repetition fallback (img_cap only) ---
+    # If img_cap=1 (or low) and top_k exceeds the distinct sources available in
+    # this pool, the distinct-only passes above cannot reach top_k. Rather than
+    # silently return fewer than requested, relax the per-source cap one unit at
+    # a time (still pair_cap-aware) until top_k is met, and LOG that bounded
+    # repetition was necessary — i.e. this pool genuinely lacks enough distinct
+    # sources. Only runs when an img_cap is active AND we are still short.
+    if img_cap is not None and len(selected) < top_k:
+        n_distinct = len({_source_key(c) for c in candidates})
+        logger.info(
+            "pair_aware_allocation: only %d distinct sources for top_k=%d under "
+            "img_cap=%d — permitting bounded repetition to fill remaining %d slots",
+            n_distinct, top_k, img_cap, top_k - len(selected),
+        )
+        ranked = sorted(
+            candidates,
+            key=lambda c: _order_key(c, rarity_temp, jitter),
+            reverse=True,
+        )
+        pair_count = defaultdict(int)
+        for c in selected:
+            pair_count[(c["cluster_id"], c["cell_key"])] += 1
+        relaxed_cap = img_cap
+        while len(selected) < top_k:
+            relaxed_cap += 1
+            progressed = False
+            for c in ranked:
+                if len(selected) >= top_k:
+                    break
+                key = (c["cluster_id"], c["cell_key"])
+                if eff_cap is not None and pair_count[key] >= eff_cap:
+                    continue
+                if src_counter[_source_key(c)] >= relaxed_cap:
+                    continue
+                selected.append(c)
+                src_counter[_source_key(c)] += 1
+                pair_count[key] += 1
+                progressed = True
+            if not progressed:
+                # pair_cap also exhausted — cannot fill further without
+                # violating monoculture control; stop (top_k may be unmet).
+                logger.info(
+                    "pair_aware_allocation: pair_cap exhausted at relaxed "
+                    "img_cap=%d; selected=%d (top_k=%d not fully met)",
+                    relaxed_cap, len(selected), top_k,
+                )
+                break
 
     return selected
 
@@ -496,6 +654,7 @@ def _stratified_pair_aware(
     top_k: int,
     per_pair_cap_frac: float | None = None,
     rarity_temp: float = 1.0,
+    img_diversity_cap: int | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Class-stratified wrapper around :func:`_pair_aware_allocation` (Fix2).
@@ -543,7 +702,23 @@ def _stratified_pair_aware(
     keys = list(buckets.keys())
     K = len(keys)
     if K <= 1:
-        return _pair_aware_allocation(candidates, top_k, per_pair_cap_frac, rarity_temp)
+        return _pair_aware_allocation(
+            candidates, top_k, per_pair_cap_frac, rarity_temp,
+            img_diversity_cap=img_diversity_cap,
+        )
+
+    # GLOBAL source-image cap (Fix4): one Counter shared across all buckets so
+    # the per-(image, bbox) cap is enforced GLOBALLY, not per-class. jitter is
+    # enabled implicitly inside each bucket's _pair_aware_allocation when the
+    # cap is set. None ⇒ disabled (no-op, byte-identical multi-class path).
+    img_cap = max(1, int(img_diversity_cap)) if img_diversity_cap is not None else None
+    jitter = img_cap is not None
+    src_counter: Counter = Counter()
+
+    def _src_ok(c: Dict[str, Any]) -> bool:
+        if img_cap is None:
+            return True
+        return src_counter[_source_key(c)] < img_cap
 
     # GLOBAL per-pair cap, derived ONCE from the REAL (top-level) top_k — NOT
     # from a per-bucket quota. Threaded into each bucket as an absolute int so
@@ -628,7 +803,10 @@ def _stratified_pair_aware(
         q = quotas[k]
         if q <= 0:
             continue
-        picked = _pair_aware_allocation(buckets[k], q, None, rarity_temp)
+        picked = _pair_aware_allocation(
+            buckets[k], q, None, rarity_temp,
+            img_diversity_cap=img_cap, _src_counter=src_counter,
+        )
         for c in picked:
             sel_class[id(c)] = k
         selected.extend(picked)
@@ -657,16 +835,24 @@ def _stratified_pair_aware(
         for key, members in by_pair.items():
             if len(members) <= pair_cap:
                 continue
-            # lowest moderated_score evicted first; stable tie-break by id()
+            # lowest order_key evicted first; stable tie-break by id()
             members_sorted = sorted(
                 members,
-                key=lambda c: (moderated_score(c, rarity_temp), -id(c)),
+                key=lambda c: (_order_key(c, rarity_temp, jitter), -id(c)),
             )
             for c in members_sorted[: len(members) - pair_cap]:
                 evicted_ids.add(id(c))
 
         if evicted_ids:
             selected = [c for c in selected if id(c) not in evicted_ids]
+            if img_cap is not None:
+                # free the evicted candidates' source slots so the global cap
+                # accounting reflects what is actually still selected.
+                for c in candidates:
+                    if id(c) in evicted_ids:
+                        sk = _source_key(c)
+                        if src_counter[sk] > 0:
+                            src_counter[sk] -= 1
 
         # --- class-aware refill: restore each class to its floor first ---
         # For every class depleted below class_floor_target by eviction, refill
@@ -691,7 +877,7 @@ def _stratified_pair_aware(
                 continue
             pool = sorted(
                 (c for c in buckets[k] if id(c) not in selected_ids),
-                key=lambda c: moderated_score(c, rarity_temp),
+                key=lambda c: _order_key(c, rarity_temp, jitter),
                 reverse=True,
             )
             added = 0
@@ -701,11 +887,15 @@ def _stratified_pair_aware(
                 pkey = (c["cluster_id"], c["cell_key"])
                 if pair_count[pkey] >= pair_cap:
                     continue
+                if not _src_ok(c):
+                    continue
                 selected.append(c)
                 sel_class[id(c)] = k
                 selected_ids.add(id(c))
                 pair_count[pkey] += 1
                 class_count[k] += 1
+                if img_cap is not None:
+                    src_counter[_source_key(c)] += 1
                 added += 1
             if class_count[k] < class_floor_target[k]:
                 logger.info(
@@ -721,13 +911,14 @@ def _stratified_pair_aware(
         selected_ids = {id(c) for c in selected}
         rest = sorted(
             (c for c in candidates if id(c) not in selected_ids),
-            key=lambda c: moderated_score(c, rarity_temp),
+            key=lambda c: _order_key(c, rarity_temp, jitter),
             reverse=True,
         )
-        if pair_cap is None:
+        if pair_cap is None and img_cap is None:
             backfill = rest[:slack]
         else:
-            # cap-aware: never let backfill re-flood a pair back over pair_cap.
+            # cap-aware: never let backfill re-flood a pair back over pair_cap,
+            # nor repeat a source (image, bbox) past img_cap.
             pair_count = defaultdict(int)
             for c in selected:
                 pair_count[(c["cluster_id"], c["cell_key"])] += 1
@@ -736,15 +927,63 @@ def _stratified_pair_aware(
                 if len(backfill) >= slack:
                     break
                 key = (c["cluster_id"], c["cell_key"])
-                if pair_count[key] >= pair_cap:
+                if pair_cap is not None and pair_count[key] >= pair_cap:
+                    continue
+                if not _src_ok(c):
                     continue
                 backfill.append(c)
                 pair_count[key] += 1
+                if img_cap is not None:
+                    src_counter[_source_key(c)] += 1
         selected += backfill
         logger.info(
             "stratified_pair_aware: %d classes, global backfill %d / %d slack slots",
             K, len(backfill), slack,
         )
+
+    # --- Bounded-repetition fallback (img_cap, multi-class) ---
+    # The distinct-only passes above cannot reach top_k when the WHOLE pool has
+    # fewer distinct sources than top_k. Relax the per-source cap one unit at a
+    # time (still pair_cap-aware) until top_k is met, and LOG it. Only runs when
+    # img_cap is active AND still short.
+    if img_cap is not None and len(selected) < top_k:
+        n_distinct = len({_source_key(c) for c in candidates})
+        logger.info(
+            "stratified_pair_aware: only %d distinct sources for top_k=%d under "
+            "img_cap=%d — permitting bounded repetition to fill remaining %d slots",
+            n_distinct, top_k, img_cap, top_k - len(selected),
+        )
+        ranked = sorted(
+            candidates,
+            key=lambda c: _order_key(c, rarity_temp, jitter),
+            reverse=True,
+        )
+        pair_count = defaultdict(int)
+        for c in selected:
+            pair_count[(c["cluster_id"], c["cell_key"])] += 1
+        relaxed_cap = img_cap
+        while len(selected) < top_k:
+            relaxed_cap += 1
+            progressed = False
+            for c in ranked:
+                if len(selected) >= top_k:
+                    break
+                key = (c["cluster_id"], c["cell_key"])
+                if pair_cap is not None and pair_count[key] >= pair_cap:
+                    continue
+                if src_counter[_source_key(c)] >= relaxed_cap:
+                    continue
+                selected.append(c)
+                src_counter[_source_key(c)] += 1
+                pair_count[key] += 1
+                progressed = True
+            if not progressed:
+                logger.info(
+                    "stratified_pair_aware: pair_cap exhausted at relaxed "
+                    "img_cap=%d; selected=%d (top_k=%d not fully met)",
+                    relaxed_cap, len(selected), top_k,
+                )
+                break
 
     return selected
 
@@ -757,6 +996,7 @@ def select_rois(
     class_floor: bool = False,
     per_pair_cap_frac: float | None = None,
     rarity_temp: float = 1.0,
+    img_diversity_cap: int | None = 1,
 ) -> List[Dict[str, Any]]:
     """
     Select top_k ROIs from candidates using the given strategy.
@@ -776,8 +1016,20 @@ def select_rois(
         per_pair_cap_frac   Per-pair quota cap fraction (None = no cap).
         rarity_temp         Deficit-term temperature for the ordering key
                             (1.0 = raw roi_score, byte-identical).
+        img_diversity_cap   (Fix4) Max times any single source defect crop
+                            (image_path, defect_bbox) may be selected. Default
+                            is 1 (each distinct source defect drawn at most
+                            once), which forces the selection to draw DISTINCT
+                            source defects and eliminates the diversity-collapse
+                            confound where a few crops were repeated dozens of
+                            times. Applies to deficit_aware ONLY (both single-
+                            and multi-class). Pass a large int (e.g. 999) to
+                            restore the legacy uncapped behaviour for an
+                            ablation; None is also accepted as "no cap".
 
-    The random / top_k / weighted branches ignore the multi-class options.
+    The random / top_k / weighted branches ignore the multi-class options
+    (random already samples WITHOUT replacement over distinct candidate rows,
+    so it does not exhibit the deficit_aware tie-collapse).
     """
     if not candidates:
         return []
@@ -807,26 +1059,54 @@ def select_rois(
         n_classes = len({str(c.get("class_key") or "_") for c in candidates})
         if n_classes > 1:
             return _stratified_pair_aware(
-                candidates, top_k, per_pair_cap_frac, rarity_temp
+                candidates, top_k, per_pair_cap_frac, rarity_temp,
+                img_diversity_cap=img_diversity_cap,
             )
-    return _pair_aware_allocation(candidates, top_k, per_pair_cap_frac, rarity_temp)
+    return _pair_aware_allocation(
+        candidates, top_k, per_pair_cap_frac, rarity_temp,
+        img_diversity_cap=img_diversity_cap,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Summary markdown
 # ---------------------------------------------------------------------------
 
+def _diversity_stats(selected: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Distinct-source-defect diversity of a selection (auditability covariate).
+
+    Reports the count of distinct source crops actually drawn, so the
+    diversity confound (a few crops repeated many times) is visible per arm
+    and comparable across random / casda / aroma.
+    """
+    src_keys = [_source_key(c) for c in selected]
+    counts = Counter(src_keys)
+    return {
+        "selected": len(selected),
+        "distinct_source": len(counts),
+        "distinct_image": len({c.get("image_path", "") for c in selected}),
+        "max_per_source": max(counts.values()) if counts else 0,
+    }
+
+
 def _build_summary(
     candidates: List[Dict[str, Any]],
     selected: List[Dict[str, Any]],
     strategy: str,
 ) -> str:
+    div = _diversity_stats(selected)
     lines = [
         "# AROMA Step 3 — ROI Selection Summary",
         "",
         f"**Strategy**: `{strategy}`",
         f"**Total candidates**: {len(candidates)}",
         f"**Selected**: {len(selected)}",
+        "",
+        "## Source-defect diversity",
+        "",
+        f"- Distinct source (image_path, defect_bbox): **{div['distinct_source']}** / {div['selected']} selected",
+        f"- Distinct source images: **{div['distinct_image']}**",
+        f"- Max repetition of any single source: **{div['max_per_source']}**",
         "",
         "## Selected ROIs (top 50)",
         "",
@@ -856,6 +1136,7 @@ def run(
     class_floor: bool = False,
     per_pair_cap_frac: float | None = None,
     rarity_temp: float = 1.0,
+    img_diversity_cap: int | None = 1,
 ) -> Dict[str, Any]:
     """
     Full Step 3 pipeline: load → score → select → save.
@@ -863,8 +1144,10 @@ def run(
     Returns dict with 'candidates' and 'selected' keys on success,
     or a status-only dict on failure.
 
-    class_floor / per_pair_cap_frac / rarity_temp are multi-class options
-    (default no-op) forwarded to select_rois; see its docstring.
+    class_floor / per_pair_cap_frac / rarity_temp / img_diversity_cap are
+    deficit_aware options forwarded to select_rois; see its docstring.
+    img_diversity_cap defaults to 1 (distinct source defects); the others
+    default to no-op.
     """
     logger.info("Loading inputs: profiling_dir=%s prompts_dir=%s", profiling_dir, prompts_dir)
     data = load_inputs(profiling_dir, prompts_dir)
@@ -881,11 +1164,19 @@ def run(
         class_floor=class_floor,
         per_pair_cap_frac=per_pair_cap_frac,
         rarity_temp=rarity_temp,
+        img_diversity_cap=img_diversity_cap,
     )
 
     logger.info(
         "Strategy=%s  top_k=%d  candidates=%d  selected=%d",
         strategy, top_k, len(candidates), len(selected),
+    )
+    div = _diversity_stats(selected)
+    logger.info(
+        "Source-defect diversity: distinct (image,bbox)=%d, distinct images=%d, "
+        "max repetition per source=%d (img_diversity_cap=%s)",
+        div["distinct_source"], div["distinct_image"], div["max_per_source"],
+        img_diversity_cap,
     )
 
     out = Path(output_dir)
@@ -947,6 +1238,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--rarity_temp", type=float, default=1.0,
                    help="Deficit-term temperature for the ordering key (Fix3). "
                         "1.0 (default) = raw roi_score, byte-identical.")
+    p.add_argument("--img_diversity_cap", type=int, default=1,
+                   help="Max times any single source defect crop "
+                        "(image_path, defect_bbox) may be selected (Fix4). "
+                        "Default 1 = each distinct source defect drawn at most "
+                        "once, removing the diversity-collapse confound "
+                        "(deficit_aware only). Pass a large int (e.g. 999) to "
+                        "restore the legacy uncapped behaviour for an ablation.")
     return p.parse_args(argv)
 
 
@@ -962,6 +1260,7 @@ def main(argv=None) -> None:
         class_floor=args.class_floor,
         per_pair_cap_frac=args.per_pair_cap_frac,
         rarity_temp=args.rarity_temp,
+        img_diversity_cap=args.img_diversity_cap,
     )
     if result.get("status") != "ok":
         sys.exit(1)

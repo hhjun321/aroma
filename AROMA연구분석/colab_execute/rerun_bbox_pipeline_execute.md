@@ -183,6 +183,7 @@ def run_one(ds):
            '--prompts_dir',       f"{AROMA_OUT}/prompts/{ds}",
            '--sampling_strategy', 'deficit_aware',
            '--top_k',             '200',
+           '--img_diversity_cap', '1',
            '--output_dir',        f"{AROMA_OUT}/roi/{ds}"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

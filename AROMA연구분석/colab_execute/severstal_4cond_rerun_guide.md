@@ -14,13 +14,20 @@
 
 ## ⚠️ Pre-flight 체크 (실행 전 반드시)
 
-### P1. 배경 풀(NORMAL_DIR) 정렬 — 공정성 load-bearing
-현재 두 문서가 **서로 다른 배경 풀**을 쓴다:
-- R(AROMA/random): `$DRIVE/severstal/context_select/context`
-- E(CASDA): `$AROMA_DATA/severstal/train/good`
+### P1. 배경 풀(NORMAL_DIR) = train/good 로 통일 — 공정성 + 오염 제거 (확정, load-bearing)
 
-조건마다 배경 분포가 다르면 "ROI 선택 전략"만 격리되지 않는다(배경이 교란). **3 생성기 모두 동일 NORMAL_DIR을 쓰도록 맞춘다.** 하나를 골라 R·E 양쪽 env 셀의 `NORMAL_DIR`을 통일할 것.
-- 권장: 학습 때 실제 평가 도메인과 같은 풀. (`context_select/context`는 큐레이션 subset, `train/good`은 전량 5902.) 어느 쪽이든 **3조건 동일**이 핵심.
+직전 run에서 두 문서가 **서로 다른 배경 풀**을 썼고, 한쪽은 **결함을 포함**했다:
+- R(AROMA/random): `context_select/context` — **결함 포함** ❌
+- E(CASDA): `$AROMA_DATA/severstal/train/good` — 결함 미포함 ✅
+
+**왜 치명적**: copy-paste는 깨끗한 배경에 결함을 붙이고 그 결함에만 라벨을 단다(`generate_defects` L826은 배경을 **context-blind 랜덤** 선택, L853은 붙인 결함 1개만 annotation). 배경에 **이미 실결함**이 있으면 그건 **무라벨** → YOLO가 "실결함 = negative"로 학습 → recall·precision 하락. 이 타격은 **오염 풀을 쓴 AROMA/random에만** 발생(baseline=real만, CASDA=train/good는 면역). → 직전 **baseline>aroma>random 역전의 유력한 원인**(단 pool-size·n=3 분산과 교란, 단독 원인 아님).
+
+**조치 (확정)**: **3 생성기 전부 `--normal_dir = $AROMA_DATA/severstal/train/good`** (clean, CASDA의 full 5902와 매칭). 코드 변경 없음 — 인자만 바꾼다.
+- R env 셀 `NORMAL_DIR`을 `$AROMA_DATA/severstal/train/good`으로 수정 후 Phase 1 재생성.
+- `context_select`(분포매칭 subset 선택기)는 합성에 **불필요** — 직접 train/good 사용이 가장 단순·공정. (context_select는 결함 필터가 아니라 CLIP→KMeans 분포매칭 selector. defect 포함 dir을 줘서 오염된 것 = 입력 배선 실수.)
+- ⚠️ 논문에 "context-matched 배경 합성" 주장 있으면 **수정**: 배경은 랜덤이다. AROMA의 context 강점은 **ROI/prompt 선택**(cluster_id/cell_key)에 있지 배경 매칭이 아님.
+
+> (선택) 직전 오염 크기 측정: 옛 `context_prototypes.json` 파일명들의 Severstal 라벨을 조회해 결함 비율 p 확인 → 직전 피해 정량화.
 
 ### P2. 코드 pull
 새 `.py`(병렬 staging/push, `--condition` 다중선택, CASDA manifest staging)가 Colab에 있어야 재생성 push가 빠르다. **로컬 미커밋 상태면 먼저 commit+push 후:**
@@ -42,8 +49,11 @@ import os; os.environ['AROMA_STAGE_WORKERS'] = '24'   # 기본 16, 1~64
 ## Phase 1 — AROMA + random 재생성 (문서 R)
 
 1. **R 상단 환경 셀** 실행. `class_mode: multi` 출력 확인 (아니면 git pull 누락).
-   - ⚠️ P1대로 `NORMAL_DIR` 통일 여부 확인.
-2. **R §2 — roi_selection (AROMA)**: `--top_k 1690 --class_mode multi --class_floor --per_pair_cap_frac 0.05`
+   - ⚠️ **`NORMAL_DIR`을 `$AROMA_DATA/severstal/train/good`으로 설정**(P1). context_select/context(결함 포함) 쓰지 말 것.
+     ```python
+     import os; os.environ['NORMAL_DIR'] = f"{os.environ['AROMA_DATA']}/severstal/train/good"
+     ```
+2. **R §2 — roi_selection (AROMA)**: `--top_k 1690 --class_mode multi --class_floor --per_pair_cap_frac 0.05 --img_diversity_cap 1`
 3. **R §2 — random arm**: `--sampling_strategy random --top_k 1690` (이전 top_k=200 캐시 덮어씀)
 4. **R §2.1 게이트** (학습 전 필수). 합격 기준:
    - class 1~4 전부 count > 0 (starvation 해소)
@@ -60,7 +70,7 @@ import os; os.environ['AROMA_STAGE_WORKERS'] = '24'   # 기본 16, 1~64
 ## Phase 2 — CASDA 재생성 (문서 E)
 
 1. **E CASDA 환경 셀(≈L535~)** 실행 (`ROI_DIR`→CASDA roi_patches, `CASDA_SYNTH_DIR`, `N_PER_ROI=3`).
-   - ⚠️ P1대로 `NORMAL_DIR`을 Phase 1과 동일하게.
+   - `NORMAL_DIR`은 이미 `train/good` (E 기본값, Phase 1과 동일) — 확인만. CASDA는 오염 없었으므로 배경 측면 재합성 불필요하나, 새 4-arm run 위해 동일 스케일로 재생성.
 2. `roi_metadata.csv` 없으면 **E Cell A**(extract_rois) 먼저 실행.
 3. **E Cell B — generate_casda**: `--per_class_cap 525 --min_suitability 0.5 --n_per_roi $N_PER_ROI --local_staging`
 4. 로그 확인:

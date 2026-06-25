@@ -42,11 +42,19 @@ print('MULTI_FLAGS:', repr(os.environ['MULTI_FLAGS']))
 ```python
 # deficit_aware: 희귀 조합(Deficit ≥ p75) 우선 선택 후 나머지로 채움
 # $MULTI_FLAGS 는 multi 데이터셋에서만 채워지고, 그 외에는 빈 문자열이라 무영향.
+#
+# --img_diversity_cap 1 (Fix4): 동일한 소스 결함 crop((image_path, defect_bbox))을
+#   최대 1번만 선택 → AROMA 선택이 소수의 crop을 수십 번 반복하는 다양성 붕괴
+#   (distinct (image,bbox) 88 vs CASDA 1692)를 제거한다. distinct source 수가
+#   top_k 보다 적은 클래스에 한해서만 bounded repetition 을 허용하고 로그를 남긴다.
+#   default=1 (생략해도 cap=1 적용). legacy 무제한 복원은 999 같은 큰 값 전달.
+#   deficit_aware allocation 에만 적용(random/weighted/top_k 는 무영향).
 !python $AROMA_SCRIPTS/roi_selection.py \
     --profiling_dir     $PROFILING_DIR \
     --prompts_dir       $PROMPTS_DIR \
     --sampling_strategy deficit_aware \
     --top_k             200 \
+    --img_diversity_cap 1 \
     --output_dir        $ROI_DIR \
     $MULTI_FLAGS
 ```
@@ -149,6 +157,10 @@ def run_one(ds):
            '--prompts_dir',       f"{AROMA_OUT}/prompts/{ds}",
            '--sampling_strategy', 'deficit_aware',
            '--top_k',             '200',
+           # Fix4: cap each source defect crop at 1 selection so AROMA draws
+           # DISTINCT defects (removes the distinct-(image,bbox) diversity
+           # collapse confound). deficit_aware-only; None ⇒ byte-identical.
+           '--img_diversity_cap', '1',
            '--output_dir',        f"{AROMA_OUT}/roi/{ds}"]
     # Multi-class gate (generic): only datasets that declare class_mode=='multi'
     # in dataset_config.json get the stratified-allocation flags. Single-class

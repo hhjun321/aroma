@@ -314,6 +314,7 @@ print(f"총 프롬프트 수: {len(prompts)}")
     --prompts_dir       $PROMPTS_DIR \
     --sampling_strategy deficit_aware \
     --top_k             200 \
+    --img_diversity_cap 1 \
     --seed              42 \
     --output_dir        $ROI_DIR
 ```

@@ -88,6 +88,7 @@ os.environ['AROMA_ROI_DIR'] = f"{os.environ['AROMA_OUT_SEVERSTAL']}/roi/seversta
     --prompts_dir      $PROMPTS_DIR \
     --sampling_strategy deficit_aware \
     --top_k            200 \
+    --img_diversity_cap 1 \
     --seed             42 \
     --output_dir       $AROMA_ROI_DIR
 ```

@@ -82,7 +82,15 @@ print("EXP4V2_OUT      :", os.environ['EXP4V2_OUT'])
 
 ## 2. Step 3 — ROI 재선택 (AROMA, multi-class 할당)
 
-AROMA arm만 multi 플래그로 재실행. `--class_floor`(per-class 균등 floor) + `--per_pair_cap_frac 0.05`(monoculture cap).
+AROMA arm만 multi 플래그로 재실행. `--class_floor`(per-class 균등 floor) + `--per_pair_cap_frac 0.05`(monoculture cap) + `--img_diversity_cap 1`(Fix4: source-defect 다양성 cap).
+
+> ### ★ Fix4 — `--img_diversity_cap 1` (소스 결함 다양성 붕괴 제거)
+>
+> 이전 run의 치명적 confound: `roi_selected.json` entries=1690 인데 **distinct (image_path, defect_bbox)=88** (소수 crop을 최대 87회, 평균 ~19회 반복). 후보 pool은 3620 distinct source 였으나 3532개가 미사용. 원인은 image-blind roi_score 동점 + stable-sort head 슬라이싱(pool ceiling 아님). 그 결과 AROMA가 CASDA(distinct 1692) 대비 결함 외형 다양성에서 ~19배 불리 → AROMA 저성능의 1차 교란요인.
+>
+> `--img_diversity_cap 1` 은 동일 (image,bbox) crop 을 **최대 1회만** 선택하게 강제하고, 동점 해소용 deterministic per-source jitter(hashlib 기반, 재현 가능)를 켜서 서로 다른 pair 가 서로 다른 이미지를 surface 하도록 한다. 결과: distinct (image,bbox) ≈ min(top_k, distinct_sources). class_floor 와 per_pair_cap 은 그대로 유지된다. distinct source 가 그 class 의 floor 보다 적은 class 에 한해서만 bounded repetition 을 허용하고 로그를 남긴다(아래 c2 참고). 생략(=None) 시 기존 동작과 byte-identical(single-class headline 경로 불변).
+>
+> **c2(병목, distinct=117) 상호작용**: floor=422 > distinct 117 이므로 c2는 distinct 117 전량 선택 후 부족분(~305 슬롯)을 **bounded repetition** 으로 채운다(로그: `class 'c2' below floor` 또는 `bounded repetition`). 이는 데이터 부족의 정직한 노출이며(c2 diversity ceiling=117 고정), AROMA 실패가 아니다. c1/c3/c4는 distinct 가 floor 보다 많으므로 전부 distinct(반복 0)로 채워진다.
 
 > ### ★ top_k 상향 (synth pool 확대) — 공정성 + per-class 가용성(c2-full) 노트
 >
@@ -102,8 +110,11 @@ AROMA arm만 multi 플래그로 재실행. `--class_floor`(per-class 균등 floo
     --output_dir        $ROI_DIR \
     --class_mode        multi \
     --class_floor \
-    --per_pair_cap_frac 0.05
+    --per_pair_cap_frac 0.05 \
+    --img_diversity_cap 1
 ```
+
+> 실행 후 stdout 로그에서 `Source-defect diversity: distinct (image,bbox)=...` 줄을 확인한다. Fix 전(88)과 달리 **1500~1690 근처**(c2 117 반복분만큼만 1690 미만)여야 한다. `roi_summary.md` 의 "Source-defect diversity" 섹션에도 동일 수치가 기록된다.
 
 > random arm(`roi/severstal_random`)은 fix 무관(전략 'random'은 새 플래그 미사용). **단 pool parity를 위해 top_k는 AROMA와 동일하게 1690** 으로 맞춰 재생성한다(이전 200 캐시가 있으면 삭제/덮어쓰기 필요 — pool이 600→5070으로 달라짐):
 > ```python
@@ -284,5 +295,5 @@ for frac in [0.03, 0.05, 0.10]:
         --profiling_dir $PROFILING_DIR --prompts_dir $PROMPTS_DIR \
         --sampling_strategy deficit_aware --top_k 1690 --seed 42 \
         --output_dir "$ROI_DIR"_cap{frac} \
-        --class_mode multi --class_floor --per_pair_cap_frac {frac}
+        --class_mode multi --class_floor --per_pair_cap_frac {frac} --img_diversity_cap 1
 ```
