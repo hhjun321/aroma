@@ -1,6 +1,6 @@
 # Exp4v2 Severstal 4조건 공정비교 — 다양성·공정성 파이프라인 개선
 
-> 한 세션에서 발견·수정한 6개 변경의 통합 노트. 직전 3조건 결과(baseline > aroma > random)가 **증강이 baseline에 패배**한 원인을 추적하다 복수의 공정성·다양성 결함을 발견, 모두 수정.
+> 한 세션에서 발견·수정한 7개 변경의 통합 노트. 직전 3조건 결과(baseline > aroma > random)가 **증강이 baseline에 패배**한 원인을 추적하다 복수의 공정성·다양성 결함을 발견, 모두 수정.
 > 효과는 재생성 + multi-seed 재실행으로 확정(현재 미확정).
 
 ---
@@ -12,12 +12,13 @@
 직전 exp4v2 3조건(baseline/random/aroma, casda 누락) YOLOv8n multi-class 결과:
 `baseline 0.3821 > aroma 0.3595 > random 0.3379` (map50 mean, 3-seed). 증강이 baseline을 못 이김.
 
-원인 조사에서 **3개의 독립 confound + 2개 인프라 결함**을 발견:
+원인 조사에서 **3개의 독립 confound + 3개 인프라 결함**을 발견:
 1. (핵심·치명) AROMA ROI 선택이 3620 distinct 소스를 **88 distinct crop**으로 붕괴 → CASDA 1692 대비 ~19배 다양성 기아.
 2. AROMA/random이 **결함 포함 배경**(context_select)으로 합성 → 무라벨 결함 label-noise.
 3. synth pool이 600(real의 0.24:1)로 copy-paste 유효 band(1:1~3:1) 미달 + CASDA(46140)와 pool-size 비대칭.
 4. Drive FUSE 순차 I/O로 생성이 비현실적으로 느림.
 5. `--condition`이 단일값만 받아 일부 조건 실행 불가.
+6. exp4v2 LocalCache(Drive→/tmp)가 워커 수를 Colab 2-vCPU에 묶어(4 워커) seed당 ~22분 throttle.
 
 모두 수정. **핵심은 #1(변경 5)** — 이전 모든 AROMA 결과(MVTec multi-seed 중심주장 포함)가 이 다양성 기아로 오염됐을 수 있음.
 
@@ -79,6 +80,19 @@
 - random/weighted/top_k는 cap 경로 미사용 → default 변경 무영향(검증됨). random arm 셀은 불변.
 - 사용자 결정: 옛 버그 캐시 보존 안 함, **전체 재실행**.
 
+### 7. LocalCache 워커 throttle 수정 (성능)
+`scripts/aroma/experiments/exp4_v2_supervised_detection.py`(`_local_cache_for_yolo`)
+- 발견: exp4v2 LocalCache(Drive→/tmp 복사)가 19628 이미지에 ~1303s(~22분) 소요. 조사 결과 코드는 **이미 ThreadPool 병렬**이었고(내 초기 진단 "순차"는 오진, workflow 조사가 정정), 진짜 원인은 워커 수 `num_workers=min(32,(os.cpu_count() or 4)*2)` → Colab 2-vCPU에서 **4 워커로 throttle**. 19k+ FUSE 읽기를 4-wide로 직렬화 = ~22분.
+- fix:
+  1. 워커를 `_stage_workers()`로 교체 — env `AROMA_STAGE_WORKERS` 재사용(기본 16, clamp 1~64, **os.cpu_count 미사용**으로 Colab 2-vCPU 대응). `generate_defects._push_workers`를 ~15줄 복제(casda_roi_adapter가 generate_defects를 import하므로 여기서 역import = 순환 위험 → 의도적 복제, 새 공유 모듈 안 만듦). 4→16 = ~22분→2-3분.
+  2. `_copy_if_missing`(존재만 확인) → `_stage_one`(same-size skip + 3회 backoff retry 0.5/1/2s). multi-seed·`--resume` 재복사 0건 + 중단된 seed의 잘린/부분 파일 치유(존재-only 체크는 부분 파일을 영영 못 고침).
+  3. 실패 정책 **RAISE**(push의 WARN+continue와 의도적 차이). 누락 캐시 파일은 downstream에서 조용히 제외(`_image_size`→(0,0)→`n_bad_size`++, 마스크 누락→`n_no_bbox`, synth 경로는 없는 /tmp 파일 가리킴)되어 **에러 없이 파일셋이 바뀜 = 무결성 위반** → fail-loud. retry 소진 시 raise → seed 루프가 catch하여 **해당 seed만 중단**.
+  4. dst dir 메인스레드 1회 사전 생성(워커 mkdir 없음), `counts`도 메인스레드만 mutate → shared-state race 없음.
+  5. breakdown 로그 추가(train_normal/defect/masks/random/casda/aroma별 건수 + elapsed).
+  6. 미사용 `as_completed` import 제거.
+- 캐시 파일셋·경로 byte-identical(speed only, 의미 변화 0). py_compile OK.
+- 효과: 현재 단일 seed run엔 무효(이미 캐시됨). 3-seed 본실행에서 seed당 ~22분→2-3분 + seed2/3 same-size skip = **~60분 절약**.
+
 ---
 
 ## 수정 대상 파일
@@ -87,7 +101,7 @@
 - `scripts/aroma/casda_roi_adapter.py` (manifest 병렬 staging)
 - `scripts/aroma/generate_defects.py` (_push_outputs 병렬, _is_already_local 가드)
 - `scripts/aroma/generate_casda.py` (local_staging 전달)
-- `scripts/aroma/experiments/exp4_v2_supervised_detection.py` (--condition nargs)
+- `scripts/aroma/experiments/exp4_v2_supervised_detection.py` (--condition nargs; LocalCache 워커 throttle 수정 `_local_cache_for_yolo`)
 - `AROMA연구분석/colab_execute/` : `exp4v2_execute.md`, `severstal_exp4v2_multiclass_fix_rerun.md`, `severstal_4cond_rerun_guide.md`(신규 가이드), `step3_execute.md`, `exp1_execute.md`, `severstal_pipeline_execute.md`, `rerun_bbox_pipeline_execute.md`
 
 ---
@@ -107,6 +121,7 @@
 
 - **모든 AROMA 결과 재생성 필요.** 특히 MVTec multi-seed(중심주장 AROMA>Random)는 source-concentration 버그로 오염됐을 수 있어 재검증 필수.
 - Severstal 4조건 재실행 절차 = `severstal_4cond_rerun_guide.md` (Phase 0 pull → 1 AROMA/random 재생성 → 2 CASDA → 3 purge → 4 학습 → 5 검증).
+- 변경 7(LocalCache 워커 fix)로 3-seed 본실행에서 **~60분 절약**(seed당 ~22분→2-3분 + seed2/3 same-size skip). 단일 seed run·이미 캐시된 run엔 무효.
 
 ---
 

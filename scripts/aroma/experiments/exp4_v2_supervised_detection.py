@@ -941,6 +941,82 @@ def _stage_background_images(
 # Local cache (Drive -> /tmp staging for I/O acceleration; Linux/Colab only)
 # ---------------------------------------------------------------------------
 
+# Stage-IN copy concurrency. Same workload shape as generate_defects' push-out
+# (latency-bound FUSE round-trips, NOT CPU-bound), so we reuse the SAME
+# AROMA_STAGE_WORKERS knob users already set for staging/push, and deliberately
+# do NOT key off os.cpu_count() (Colab = 2 vCPU would cap concurrency at ~4 and
+# leave 19k+ FUSE reads serialized 4-wide ≈ 22 min). These constants/resolver
+# are duplicated (not imported) from generate_defects._push_workers ON PURPOSE:
+# generate_defects is imported by casda_roi_adapter, and importing it here would
+# risk a circular import. The ~15 duplicated lines are preferred over a new
+# shared module (same rationale as generate_defects' own duplication).
+_DEFAULT_STAGE_WORKERS = 16
+_STAGE_WORKERS_MIN = 1
+_STAGE_WORKERS_MAX = 64
+_COPY_RETRIES = 3                 # total attempts per file
+_COPY_BACKOFF = (0.5, 1.0, 2.0)   # sleep before retry attempts 2,3,...
+
+
+def _stage_workers() -> int:
+    """Resolve stage-in concurrency from AROMA_STAGE_WORKERS, clamped to a sane range."""
+    raw = os.environ.get("AROMA_STAGE_WORKERS")
+    if not raw:
+        return _DEFAULT_STAGE_WORKERS
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("AROMA_STAGE_WORKERS=%r not an int — using default %d",
+                       raw, _DEFAULT_STAGE_WORKERS)
+        return _DEFAULT_STAGE_WORKERS
+    clamped = max(_STAGE_WORKERS_MIN, min(_STAGE_WORKERS_MAX, n))
+    if clamped != n:
+        logger.warning("AROMA_STAGE_WORKERS=%d clamped to %d (range %d..%d)",
+                       n, clamped, _STAGE_WORKERS_MIN, _STAGE_WORKERS_MAX)
+    return clamped
+
+
+def _stage_one(src: str, dst_str: str) -> str:
+    """Copy one file src → dst with retry/backoff. Returns 'copied'|'skipped'.
+
+    - The dst parent dir is pre-created in the main thread before any worker
+      runs, so this performs NO mkdir (no shared-state race on dir creation).
+    - Same-size skip (cheap stat): if dst already exists with the same byte size
+      as src, treat as cached and skip. This makes multi-seed re-runs and
+      --resume idempotent AND heals a truncated/partial file from an interrupted
+      seed (the old existence-only check could never re-copy a partial file).
+    - On transient FUSE errors, retry up to _COPY_RETRIES with exponential backoff.
+    - TERMINAL FAILURE = RAISE (diverges from generate_defects._push_one, which
+      WARNs+continues). Here a dropped cache file is SILENTLY excluded from the
+      trained/eval dataset downstream (_image_size -> (0,0) -> n_bad_size; missing
+      mask -> _mask_to_bboxes -> ([],0,0) -> n_no_bbox; a rewritten synth
+      image_path points at a nonexistent /tmp file). That would change WHICH
+      files are trained on without any error. So after exhausting retries we
+      raise so the seed aborts loudly rather than silently shrink the dataset.
+    """
+    dst = Path(dst_str)
+
+    # Same-size skip: identical file already staged locally.
+    try:
+        if dst.exists() and dst.stat().st_size == os.path.getsize(src):
+            return "skipped"
+    except OSError:
+        pass  # fall through to (re)copy
+
+    last_err: Optional[Exception] = None
+    for attempt in range(_COPY_RETRIES):
+        try:
+            shutil.copy2(src, dst_str)
+            return "copied"
+        except Exception as e:  # noqa: BLE001 — transient FUSE EIO/5xx
+            last_err = e
+            if attempt < _COPY_RETRIES - 1:
+                sleep_s = _COPY_BACKOFF[min(attempt, len(_COPY_BACKOFF) - 1)]
+                time.sleep(sleep_s)
+    logger.error("[LocalCache] failed to stage %s → %s after %d attempts: %s",
+                 src, dst_str, _COPY_RETRIES, last_err)
+    raise last_err  # type: ignore[misc]
+
+
 def _local_cache_for_yolo(
     ds: str,
     lists: Dict[str, Any],
@@ -959,7 +1035,7 @@ def _local_cache_for_yolo(
     rewritten in lockstep too (values/per-class PNGs stay on Drive).
     """
     if num_workers is None:
-        num_workers = min(32, (os.cpu_count() or 4) * 2)
+        num_workers = _stage_workers()
 
     cache_ds = Path(cache_base) / ds
     real_dir = cache_ds / "real"
@@ -968,11 +1044,10 @@ def _local_cache_for_yolo(
     for d in (real_imgs, real_masks):
         d.mkdir(parents=True, exist_ok=True)
 
-    def _copy_if_missing(src: str, dst: Path) -> str:
-        if not dst.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, str(dst))
-        return str(dst)
+    # counts mutated ONLY in the main thread (no shared-state race). _stage_one
+    # returns a status string; the rewritten path is derived from the dst the
+    # main thread already holds, never from the worker return.
+    counts = {"copied": 0, "skipped": 0, "failed": 0}
 
     n_real = len(lists["train_normal"]) + len(lists["test_defect"])
     n_synth = sum(len(synth_by_cond.get(c, [])) for c in ("random", "casda", "aroma"))
@@ -980,30 +1055,38 @@ def _local_cache_for_yolo(
     t0 = time.time()
 
     with ThreadPoolExecutor(max_workers=num_workers) as ex:
-        # real train_normal
-        tn_futs = [
-            ex.submit(_copy_if_missing, p, real_imgs / f"tn_{i:05d}{Path(p).suffix}")
-            for i, p in enumerate(lists["train_normal"])
-        ]
+        # real train_normal — keep dst Path alongside the future so the local
+        # list is built from the KNOWN dst (deterministic per index), not the
+        # helper return (which is now a status string).
+        tn_dsts = [real_imgs / f"tn_{i:05d}{Path(p).suffix}"
+                   for i, p in enumerate(lists["train_normal"])]
+        tn_futs = [ex.submit(_stage_one, p, str(d))
+                   for p, d in zip(lists["train_normal"], tn_dsts)]
         # real test_defect
-        td_futs = [
-            ex.submit(_copy_if_missing, p, real_imgs / f"td_{i:05d}{Path(p).suffix}")
-            for i, p in enumerate(lists["test_defect"])
-        ]
-        local_tn = [f.result() for f in tn_futs]
-        local_td = [f.result() for f in td_futs]
+        td_dsts = [real_imgs / f"td_{i:05d}{Path(p).suffix}"
+                   for i, p in enumerate(lists["test_defect"])]
+        td_futs = [ex.submit(_stage_one, p, str(d))
+                   for p, d in zip(lists["test_defect"], td_dsts)]
+        for f in tn_futs:
+            counts[f.result()] += 1
+        for f in td_futs:
+            counts[f.result()] += 1
+        local_tn = [str(d) for d in tn_dsts]
+        local_td = [str(d) for d in td_dsts]
 
         # mask_map: rewrite keys lockstep with test_defect
         local_mask_map: Dict[str, str] = {}
-        mask_futs = {}
+        mask_futs = {}  # local_p -> (future, mask_dst)
         for i, (orig_p, local_p) in enumerate(zip(lists["test_defect"], local_td)):
             if orig_p in lists["mask_map"]:
                 mdst = real_masks / f"mask_{i:05d}.png"
-                mask_futs[local_p] = ex.submit(
-                    _copy_if_missing, lists["mask_map"][orig_p], mdst
+                mask_futs[local_p] = (
+                    ex.submit(_stage_one, lists["mask_map"][orig_p], str(mdst)),
+                    mdst,
                 )
-        for local_p, fut in mask_futs.items():
-            local_mask_map[local_p] = fut.result()
+        for local_p, (fut, mdst) in mask_futs.items():
+            counts[fut.result()] += 1
+            local_mask_map[local_p] = str(mdst)
 
         # class_mask_map (severstal multi mode): rewrite keys lockstep with
         # test_defect so per-class lookups by /tmp image path resolve. Without
@@ -1031,38 +1114,47 @@ def _local_cache_for_yolo(
         # its dir was provided; absent → casda annotations carried through below.
         for cond in [c for c in ("random", "casda", "aroma") if c in synth_roots]:
             cond_imgs = cache_ds / cond / "images"
+            cond_imgs.mkdir(parents=True, exist_ok=True)  # pre-create in main thread
             anns = synth_by_cond.get(cond, [])
+            # Keep each dst Path alongside its future; rewritten ann paths are
+            # built from the KNOWN dst (deterministic per index), never from the
+            # helper return (now a status string).
             futs_list = []
             for j, ann in enumerate(anns):
                 img_dst = cond_imgs / f"syn_{j:05d}{Path(ann['image_path']).suffix}"
-                f_img = ex.submit(_copy_if_missing, ann["image_path"], img_dst)
+                f_img = ex.submit(_stage_one, ann["image_path"], str(img_dst))
                 f_norm = None
+                norm_dst = None
                 if ann.get("normal_image"):
                     norm_dst = cond_imgs / f"nrm_{j:05d}{Path(ann['normal_image']).suffix}"
-                    f_norm = ex.submit(_copy_if_missing, ann["normal_image"], norm_dst)
+                    f_norm = ex.submit(_stage_one, ann["normal_image"], str(norm_dst))
                 # GT mask (exact-bbox path) — stage to local cache too, else the
                 # rewritten image_path points at /tmp while mask stays on Drive
                 # (loses /tmp acceleration and breaks if Drive unmounts mid-run).
                 f_mask = None
+                mask_dst = None
                 mask_src = ann.get("mask_path")
                 if mask_src and Path(mask_src).exists():
                     mask_dst = cond_imgs / f"msk_{j:05d}{Path(mask_src).suffix}"
-                    f_mask = ex.submit(_copy_if_missing, mask_src, mask_dst)
-                futs_list.append((ann, f_img, f_norm, f_mask))
+                    f_mask = ex.submit(_stage_one, mask_src, str(mask_dst))
+                futs_list.append((ann, f_img, img_dst, f_norm, norm_dst, f_mask, mask_dst))
             new_anns = []
-            for ann, f_img, f_norm, f_mask in futs_list:
+            for ann, f_img, img_dst, f_norm, norm_dst, f_mask, mask_dst in futs_list:
                 new_ann = dict(ann)
-                new_ann["image_path"] = f_img.result()
+                counts[f_img.result()] += 1
+                new_ann["image_path"] = str(img_dst)
                 if f_norm is not None:
-                    new_ann["normal_image"] = f_norm.result()
+                    counts[f_norm.result()] += 1
+                    new_ann["normal_image"] = str(norm_dst)
                 if f_mask is not None:
-                    new_ann["mask_path"] = f_mask.result()
+                    counts[f_mask.result()] += 1
+                    new_ann["mask_path"] = str(mask_dst)
                 new_anns.append(new_ann)
             new_synth_by_cond[cond] = new_anns
             # copy annotations.json for fidelity
             src_json = Path(synth_roots[cond]) / ds / "annotations.json"
             if src_json.exists():
-                _copy_if_missing(str(src_json), cache_ds / cond / "annotations.json")
+                counts[_stage_one(str(src_json), str(cache_ds / cond / "annotations.json"))] += 1
 
     # Carry through any non-baseline condition that wasn't staged above (e.g.
     # casda when --casda_synthetic_dir was omitted): keep its (possibly empty)
@@ -1072,6 +1164,11 @@ def _local_cache_for_yolo(
             new_synth_by_cond[cond] = list(anns)
 
     elapsed = time.time() - t0
+    logger.info(
+        "[LocalCache] %s staged: %d copied, %d skipped (cached), %d failed of %d using %d workers",
+        ds, counts["copied"], counts["skipped"], counts["failed"],
+        counts["copied"] + counts["skipped"] + counts["failed"], num_workers,
+    )
     logger.info(
         "[LocalCache] %s ready: %.1fs (train_normal=%d defect=%d masks=%d random=%d casda=%d aroma=%d)",
         ds, elapsed, len(local_tn), len(local_td), len(local_mask_map),
