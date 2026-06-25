@@ -33,6 +33,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -75,6 +76,76 @@ except Exception:
         Path(p).parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Quality gate — subtype-matching proxy (opt-in pre-filter)
+#
+# Wires the EXISTING SuitabilityEvaluator.matching_score + DefectCharacterizer
+# subtype classifier into ROI selection as a pre-filter that drops defect ROIs
+# whose morphology is structurally unsuitable for the dataset background (e.g.
+# compact_blob / irregular on a directional steel strip). This is ORTHOGONAL to
+# the source-diversity (Fix4) / stratification (Fix2) / per-pair-cap (Fix1)
+# machinery, which balance *which* ROIs are picked but never exclude an
+# intrinsically low-suitability ROI.
+#
+# The full hybrid suitability score is intentionally NOT used: continuity /
+# stability / gram and a semantic background_type are absent from AROMA-native
+# profiling output, so only the subtype↔background MATCHING term is meaningful.
+# background_type is supplied per-dataset (severstal steel strips → directional).
+# Deps are optional: if the imports fail the gate is a no-op (score 1.0).
+# ---------------------------------------------------------------------------
+
+try:
+    from utils.suitability import SuitabilityEvaluator  # type: ignore[import]
+    from utils.defect_characterization import DefectCharacterizer  # type: ignore[import]
+    _SUIT_EVAL: Any = SuitabilityEvaluator()
+    _DEFECT_CHAR: Any = DefectCharacterizer()
+    _HAS_QUALITY = True
+except (ImportError, ModuleNotFoundError) as _qexc:  # pragma: no cover - env dependent
+    _SUIT_EVAL = None
+    _DEFECT_CHAR = None
+    _HAS_QUALITY = False
+    logger.warning(
+        "Quality gate dependencies unavailable (%s) — quality filter disabled "
+        "(all candidates pass)", _qexc,
+    )
+
+
+def _opt_float(value: Any):
+    """Parse to float, or None when missing/empty/unparseable/NaN.
+
+    Distinguishing None from 0.0 matters: a missing morphology metric must NOT
+    be coerced to 0.0 (which would misclassify the defect as 'irregular' and
+    silently drop it); it is treated as quality-unknown instead.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) else f
+
+
+def quality_proxy(linearity, solidity, aspect_ratio, background_type: str) -> tuple:
+    """Return ``(defect_subtype, quality_score)`` via the subtype-matching proxy.
+
+    ``quality_score = SuitabilityEvaluator.matching_score(subtype, background_type)``
+    where ``subtype = DefectCharacterizer.classify_defect_subtype(metrics)``.
+    Returns ``('general', 1.0)`` when deps are unavailable OR any morphology
+    metric is missing (quality-unknown → pass the gate, never misclassify).
+    """
+    if not _HAS_QUALITY:
+        return "general", 1.0
+    lin = _opt_float(linearity)
+    sol = _opt_float(solidity)
+    ar  = _opt_float(aspect_ratio)
+    if lin is None or sol is None or ar is None:
+        return "general", 1.0
+    metrics = {"linearity": lin, "solidity": sol, "aspect_ratio": ar}
+    subtype = _DEFECT_CHAR.classify_defect_subtype(metrics)
+    return subtype, float(_SUIT_EVAL.matching_score(subtype, background_type))
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +252,10 @@ def _parse_bbox(bbox_str: str) -> Any:
         return None
 
 
-def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def build_candidates(
+    data: Dict[str, Any],
+    background_type: str = "directional",
+) -> List[Dict[str, Any]]:
     """
     Score all (morph_row × context_bin) candidates.
 
@@ -231,6 +305,15 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         defect_bbox = _parse_bbox(row.get("defect_bbox", ""))
         defect_mask_path = str(row.get("defect_mask_path", ""))
 
+        # Quality proxy — per-image (depends only on morphology), computed once
+        # per row and shared across that image's context-bin candidates.
+        defect_subtype, quality_score = quality_proxy(
+            row.get("linearity"),
+            row.get("solidity"),
+            row.get("aspect_ratio"),
+            background_type,
+        )
+
         cluster_id = assignments.get(image_id)
         if cluster_id is None:
             continue
@@ -259,6 +342,8 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "cluster_id":  cluster_id,
                 "cell_key":    cell_key,
                 "class_key":   str(row.get("defect_type") or "_"),
+                "defect_subtype": defect_subtype,
+                "quality_score":  round(quality_score, 6),
                 "roi_score":   round(roi_score, 6),
                 "morph_prior": round(morph_prior, 6),
                 "ctx_prior":   round(float(ctx_prior), 6),
@@ -272,6 +357,62 @@ def build_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     logger.info("Scored %d ROI candidates from %d morph rows", len(candidates), len(morph_rows))
     return candidates
+
+
+def apply_quality_gate(
+    candidates: List[Dict[str, Any]],
+    min_quality: float,
+) -> List[Dict[str, Any]]:
+    """Drop candidates whose subtype-matching ``quality_score`` is below
+    ``min_quality``. Returns the surviving subset.
+
+    ``min_quality <= 0`` (default) disables the gate — returns ``candidates``
+    unchanged (byte-identical to legacy). The gate is purely a pre-filter; the
+    downstream allocator (stratification / per-pair cap / source-diversity cap)
+    is untouched and operates on the surviving pool.
+
+    A class whose candidates ALL fail the gate is logged as a warning (never
+    silently dropped).
+    """
+    if min_quality <= 0.0:
+        logger.info(
+            "Quality gate disabled (min_quality=%.3f) — all %d candidates pass "
+            "(legacy behavior)", min_quality, len(candidates),
+        )
+        return candidates
+    if not _HAS_QUALITY:
+        logger.warning(
+            "min_quality=%.3f requested but quality deps unavailable — gate "
+            "skipped (all candidates pass)", min_quality,
+        )
+        return candidates
+
+    def _q(c) -> float:
+        qs = float(c.get("quality_score", 1.0))
+        return 0.0 if math.isnan(qs) else qs  # NaN → worst-case, never silently pass
+
+    passing = [c for c in candidates if _q(c) >= min_quality]
+
+    all_by: Dict[str, int] = defaultdict(int)
+    pass_by: Dict[str, int] = defaultdict(int)
+    for c in candidates:
+        all_by[str(c.get("class_key", "_"))] += 1
+    for c in passing:
+        pass_by[str(c.get("class_key", "_"))] += 1
+
+    logger.info(
+        "Quality gate: min_quality=%.3f → %d/%d candidates pass",
+        min_quality, len(passing), len(candidates),
+    )
+    for ck in sorted(all_by):
+        logger.info("  class=%-8s passing=%-6d / %-6d", ck, pass_by.get(ck, 0), all_by[ck])
+        if pass_by.get(ck, 0) == 0:
+            logger.warning(
+                "  class=%s has ZERO quality-passing ROIs (min_quality=%.3f) — "
+                "no synthetic data will be generated for this class",
+                ck, min_quality,
+            )
+    return passing
 
 
 # ---------------------------------------------------------------------------
@@ -1137,9 +1278,11 @@ def run(
     per_pair_cap_frac: float | None = None,
     rarity_temp: float = 1.0,
     img_diversity_cap: int | None = 1,
+    min_quality: float = 0.0,
+    background_type: str = "directional",
 ) -> Dict[str, Any]:
     """
-    Full Step 3 pipeline: load → score → select → save.
+    Full Step 3 pipeline: load → score → quality-gate → select → save.
 
     Returns dict with 'candidates' and 'selected' keys on success,
     or a status-only dict on failure.
@@ -1148,6 +1291,12 @@ def run(
     deficit_aware options forwarded to select_rois; see its docstring.
     img_diversity_cap defaults to 1 (distinct source defects); the others
     default to no-op.
+
+    min_quality (default 0.0 = OFF) opts into the subtype-matching quality gate:
+    candidates with quality_score < min_quality are dropped BEFORE selection.
+    roi_candidates.json keeps the full scored set (incl. quality_score) so the
+    threshold can be tuned from the observed distribution. background_type is the
+    dataset background used by the matching proxy (only used when min_quality>0).
     """
     logger.info("Loading inputs: profiling_dir=%s prompts_dir=%s", profiling_dir, prompts_dir)
     data = load_inputs(profiling_dir, prompts_dir)
@@ -1155,9 +1304,16 @@ def run(
         logger.error("Input loading failed: %s", data)
         return data
 
-    candidates = build_candidates(data)
+    candidates = build_candidates(data, background_type=background_type)
+    passing    = apply_quality_gate(candidates, min_quality)
+    if not passing:
+        logger.error(
+            "Quality gate removed ALL %d candidates (min_quality=%.3f). "
+            "roi_selected.json will be empty — lower --min_quality.",
+            len(candidates), min_quality,
+        )
     selected   = select_rois(
-        candidates,
+        passing,
         strategy=strategy,
         top_k=top_k,
         seed=seed,
@@ -1245,6 +1401,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
                         "once, removing the diversity-collapse confound "
                         "(deficit_aware only). Pass a large int (e.g. 999) to "
                         "restore the legacy uncapped behaviour for an ablation.")
+    p.add_argument("--min_quality", type=float, default=0.0,
+                   help="Minimum subtype-matching quality score to keep a ROI "
+                        "candidate (default: 0.0 = gate DISABLED, legacy). Set "
+                        ">0 (e.g. 0.5) to drop morphologically unsuitable ROIs "
+                        "before selection. Tune from the quality_score "
+                        "distribution in roi_candidates.json.")
+    p.add_argument("--background_type", default="directional",
+                   choices=["smooth", "directional", "periodic", "organic", "complex"],
+                   help="Dataset background type for the subtype-matching "
+                        "quality proxy (default: directional, suited to "
+                        "severstal steel strips). Only used when --min_quality>0.")
     return p.parse_args(argv)
 
 
@@ -1261,6 +1428,8 @@ def main(argv=None) -> None:
         per_pair_cap_frac=args.per_pair_cap_frac,
         rarity_temp=args.rarity_temp,
         img_diversity_cap=args.img_diversity_cap,
+        min_quality=args.min_quality,
+        background_type=args.background_type,
     )
     if result.get("status") != "ok":
         sys.exit(1)
