@@ -66,6 +66,9 @@ def run(
     min_suitability: float = casda_roi_adapter.MIN_SUITABILITY,
     per_class_cap: int | None = None,
     local_staging: bool = False,
+    reject_clean_bg: bool = False,
+    min_bg_quality: float = 0.7,
+    bg_blur_threshold: float = 100.0,
 ) -> Dict[str, Any]:
     """Run CASDA ROI adaptation then copy-paste synthesis.
 
@@ -82,6 +85,10 @@ def run(
         local_staging:          Bulk-copy ROI crops+masks to /content for the
                                 adapter (Step 1) AND stage normal_dir for synthesis
                                 (Step 2). Drive FUSE latency mitigation on Colab.
+        reject_clean_bg:        Forward black/flat-background gate to
+                                generate_defects.run() (default OFF).
+        min_bg_quality:         Min background quality for the gate (default 0.7).
+        bg_blur_threshold:      Laplacian blur threshold for the gate (default 100.0).
 
     Returns:
         generate_defects.run() result dict + n_rois_adapted.
@@ -111,6 +118,9 @@ def run(
         n_per_roi=n_per_roi,
         seed=seed,
         local_staging=local_staging,
+        reject_clean_bg=reject_clean_bg,
+        min_bg_quality=min_bg_quality,
+        bg_blur_threshold=bg_blur_threshold,
     )
     result["n_rois_adapted"] = len(rois)
     return result
@@ -143,6 +153,18 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Max ROIs per defect class")
     p.add_argument("--local_staging",   action="store_true",
                    help="Copy inputs to /content/tmp (faster on Colab with Drive)")
+    p.add_argument("--reject-clean-bg", dest="reject_clean_bg",
+                   action="store_true",
+                   help="Reject black/flat (void) backgrounds at generation time "
+                        "(default OFF)")
+    p.add_argument("--min-bg-quality",  dest="min_bg_quality",
+                   type=float, default=0.7,
+                   help="Min background quality 0..1 for the clean-bg gate "
+                        "(default 0.7)")
+    p.add_argument("--bg-blur-threshold", dest="bg_blur_threshold",
+                   type=float, default=100.0,
+                   help="Laplacian-variance blur threshold for the clean-bg gate "
+                        "(default 100.0)")
     return p.parse_args(argv)
 
 
@@ -158,6 +180,9 @@ def main(argv=None) -> None:
         min_suitability=args.min_suitability,
         per_class_cap=args.per_class_cap,
         local_staging=args.local_staging,
+        reject_clean_bg=args.reject_clean_bg,
+        min_bg_quality=args.min_bg_quality,
+        bg_blur_threshold=args.bg_blur_threshold,
     )
     status = result.get("status", "unknown")
     n_gen = result.get("n_generated", 0)

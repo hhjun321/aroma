@@ -236,6 +236,90 @@ def _foreground_mask(normal_img: np.ndarray) -> Optional[np.ndarray]:
         return None
 
 
+def _background_quality_score(gray: np.ndarray, blur_threshold: float = 100.0) -> float:
+    """
+    Compute a background-quality score (0..1) for a grayscale patch.
+
+    Ported verbatim from CASDA ``extract_clean_backgrounds.compute_quality_score``
+    so the same Severstal-validated weighting is reused here:
+
+        quality = 0.30*blur + 0.30*contrast + 0.20*brightness + 0.20*noise
+
+    - blur:       Laplacian variance >= blur_threshold → 1.0 else 0.3
+                  (flat/black patch → low Laplacian → 0.3).
+    - contrast:   min(std(gray)/128, 1.0) (black patch std≈0 → ≈0).
+    - brightness: 1.0 if mean in [0.3, 0.7] of full range else 0.7.
+    - noise:      1.0 - min(mean(local_var)/100, 1.0) (5x5 mean-filter based).
+
+    Deterministic (no RNG). Caller guarantees ``HAS_CV2`` is True.
+    """
+    gray = gray.astype(np.float32) if gray.dtype != np.float32 else gray
+
+    # 1. Blur check (30%)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    blur_score = 1.0 if laplacian_var >= blur_threshold else 0.3
+
+    # 2. Contrast check (30%)
+    contrast_score = min(float(np.std(gray)) / 128.0, 1.0)
+
+    # 3. Brightness check (20%)
+    mean_brightness = float(np.mean(gray)) / 255.0
+    brightness_score = 1.0 if 0.3 <= mean_brightness <= 0.7 else 0.7
+
+    # 4. Noise check (20%) — local variance via 5x5 mean filter
+    kernel = np.ones((5, 5), np.float32) / 25.0
+    local_mean = cv2.filter2D(gray, -1, kernel)
+    local_var = cv2.filter2D((gray - local_mean) ** 2, -1, kernel)
+    noise_level = float(np.mean(local_var)) / 100.0
+    noise_score = 1.0 - min(noise_level, 1.0)
+
+    quality = (
+        0.30 * blur_score
+        + 0.30 * contrast_score
+        + 0.20 * brightness_score
+        + 0.20 * noise_score
+    )
+    return float(quality)
+
+
+def _is_clean_background(
+    img_or_gray: np.ndarray,
+    min_quality: float = 0.7,
+    blur_threshold: float = 100.0,
+) -> bool:
+    """
+    Return True if the patch is a usable (non black/flat) background.
+
+    A clean background is one that is NOT a void/flat region — the weighted
+    quality score must reach ``min_quality``. This matches CASDA's reference
+    (``extract_clean_backgrounds``: accept iff ``quality >= min_quality``);
+    ``blur_threshold`` flows only into the soft 30%-weighted blur term inside
+    ``_background_quality_score`` (no separate hard Laplacian gate — that would
+    double-penalize blur and diverge from the validated CASDA criterion).
+
+    Accepts either a grayscale (H, W) or color (H, W, 3) ndarray. When cv2 is
+    unavailable (``HAS_CV2`` False) the gate is disabled and True is returned —
+    legacy behavior, same convention as ``_foreground_mask``.
+    """
+    if not HAS_CV2:
+        return True
+
+    try:
+        arr = np.asarray(img_or_gray)
+        if arr.ndim == 3:
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = arr
+        if gray.size == 0:
+            return True
+
+        gray_f = gray.astype(np.float32)
+        return _background_quality_score(gray_f, blur_threshold) >= min_quality
+    except Exception:
+        # Evaluation failure must not drop an otherwise-usable background.
+        return True
+
+
 def _foreground_paste_position(
     fg_mask: np.ndarray,
     bg_size: Tuple[int, int],
@@ -297,6 +381,10 @@ def copy_paste_synthesis(
     feather_px: int = 4,
     rng: Optional[random.Random] = None,
     mask_output_path: Optional[str] = None,
+    reject_clean_bg: bool = False,
+    min_bg_quality: float = 0.7,
+    blur_threshold: float = 100.0,
+    max_bg_tries: int = 20,
 ) -> Optional[Dict[str, Any]]:
     """
     Paste the defect region from roi_entry onto the normal image.
@@ -313,6 +401,15 @@ def copy_paste_synthesis(
                             saved so downstream supervised pipelines can recover
                             an exact bbox instead of re-deriving one by image
                             differencing. None → no mask written (legacy).
+        reject_clean_bg:    When True, the random-placement fallback rejects
+                            candidate positions that land on a black/flat (void)
+                            background patch and retries (same rng). The
+                            foreground-constrained path is never gated. Default
+                            False (legacy behavior).
+        min_bg_quality:     Minimum background quality (0..1) for a candidate
+                            position to be accepted when reject_clean_bg=True.
+        max_bg_tries:       Max position resamples before giving up and pasting
+                            on the last candidate (synthesis is preserved).
 
     Returns:
         On success, a dict ``{"bbox": [x, y, w, h], "mask_path": <str|None>}``
@@ -413,14 +510,29 @@ def copy_paste_synthesis(
         # mvtec_cable, detection failure, or cv2 unavailable) — preserving the
         # legacy behavior exactly. Both the foreground sampling and the fallback
         # draw from `rng`, so a fixed seed yields a deterministic result.
-        fg_mask = _foreground_mask(np.asarray(normal_img.convert("RGB")))
+        normal_rgb = np.asarray(normal_img.convert("RGB"))
+        fg_mask = _foreground_mask(normal_rgb)
         position = None
         if fg_mask is not None:
             position = _foreground_paste_position(
                 fg_mask, normal_img.size, defect_crop.size, mask, rng
             )
         if position is None:
+            # Random-placement fallback. When reject_clean_bg is on, resample the
+            # position (same rng → deterministic) whenever the crop-sized local
+            # background patch is black/flat (void). All-fail → keep the last
+            # candidate so synthesis is still produced (never a silent drop).
             position = _random_paste_position(normal_img.size, defect_crop.size, rng)
+            if reject_clean_bg:
+                for _ in range(max(1, max_bg_tries)):
+                    px, py = position
+                    patch = normal_rgb[py:py + crop_h, px:px + crop_w]
+                    if _is_clean_background(patch, min_quality=min_bg_quality,
+                                            blur_threshold=blur_threshold):
+                        break
+                    position = _random_paste_position(
+                        normal_img.size, defect_crop.size, rng
+                    )
         result = _alpha_composite(normal_img, defect_crop, mask, position, feather_px)
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -699,15 +811,75 @@ def _push_outputs(local_img_dir: Path, drive_img_dir: Path) -> int:
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 
 
-def load_normal_images(normal_dir: str) -> List[str]:
-    """Collect all image paths under normal_dir (recursive)."""
+def load_normal_images(
+    normal_dir: str,
+    *,
+    reject_clean_bg: bool = False,
+    min_bg_quality: float = 0.7,
+    blur_threshold: float = 100.0,
+) -> List[str]:
+    """Collect all image paths under normal_dir (recursive, sorted).
+
+    Args:
+        normal_dir:       Directory of normal/good background images.
+        reject_clean_bg:  When True, evaluate each image once with
+                          ``_is_clean_background`` and keep only non black/flat
+                          (void) backgrounds. cv2 missing → gate disabled.
+        min_bg_quality:   Minimum quality (0..1) to keep an image.
+        blur_threshold:   Laplacian-variance blur gate threshold.
+
+    The rglob result is sorted for deterministic pool ordering (so a fixed seed
+    yields the same `rng.choice` selection). When the gate rejects EVERY image
+    (e.g. an all-black normal dir) it is ignored and the original pool is
+    returned — a non-empty pool is always preferred over a silent 0-output.
+    """
     d = Path(normal_dir)
     if not d.exists():
         logger.warning("Normal image directory not found: %s", normal_dir)
         return []
-    paths = [str(p) for p in d.rglob("*") if p.suffix.lower() in _IMAGE_EXTS]
+    paths = sorted(str(p) for p in d.rglob("*") if p.suffix.lower() in _IMAGE_EXTS)
     logger.info("Found %d normal images in %s", len(paths), normal_dir)
-    return paths
+
+    if not reject_clean_bg or not paths:
+        return paths
+
+    if not HAS_CV2:
+        logger.info("reject_clean_bg requested but cv2 unavailable — gate disabled.")
+        return paths
+    if not HAS_PIL:
+        logger.info("reject_clean_bg requested but Pillow unavailable — gate disabled.")
+        return paths
+
+    from PIL import Image as PILImage
+
+    kept: List[str] = []
+    for p in paths:
+        try:
+            arr = np.asarray(PILImage.open(p).convert("RGB"))
+        except Exception as exc:
+            # Unreadable here is surfaced later by copy_paste_synthesis; keep it
+            # in the pool rather than dropping on an evaluation error.
+            logger.warning("Background quality eval failed for %s: %s", p, exc)
+            kept.append(p)
+            continue
+        if _is_clean_background(arr, min_quality=min_bg_quality,
+                                blur_threshold=blur_threshold):
+            kept.append(p)
+
+    n_reject = len(paths) - len(kept)
+    logger.info(
+        "clean-bg pool gate: kept %d / %d normal images (%d rejected, "
+        "min_quality=%.2f, blur_threshold=%.1f)",
+        len(kept), len(paths), n_reject, min_bg_quality, blur_threshold,
+    )
+    if not kept:
+        logger.warning(
+            "clean-bg pool gate rejected ALL %d normal images — ignoring gate "
+            "and using original pool (avoids empty pool / 0 output).",
+            len(paths),
+        )
+        return paths
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +896,9 @@ def run(
     feather_px: int = 4,
     seed: int = 42,
     local_staging: bool = False,
+    reject_clean_bg: bool = False,
+    min_bg_quality: float = 0.7,
+    bg_blur_threshold: float = 100.0,
 ) -> Dict[str, Any]:
     """
     Full Step 4 pipeline: load ROIs → synthesize → save annotations.
@@ -740,6 +915,14 @@ def run(
         local_staging:  Copy inputs to /content/tmp before synthesis to avoid
                         per-image Drive I/O. Outputs are pushed back to Drive
                         output_dir at the end.
+        reject_clean_bg:  Enable the black/flat (void) background gate. Applied
+                          at BOTH injection points: the normal pool (per-image,
+                          once at load) and the random-placement fallback
+                          position. Default False (legacy). cv2 missing →
+                          gate auto-disabled.
+        min_bg_quality:   Minimum background quality (0..1). CASDA default 0.7.
+        bg_blur_threshold: Laplacian-variance blur gate threshold. CASDA
+                           default 100.0.
 
     Returns:
         dict with status, n_generated, annotations list
@@ -754,7 +937,12 @@ def run(
         logger.warning("roi_selected.json is empty")
         return {"status": "empty_roi", "n_generated": 0, "annotations": []}
 
-    normal_images = load_normal_images(normal_dir)
+    normal_images = load_normal_images(
+        normal_dir,
+        reject_clean_bg=reject_clean_bg,
+        min_bg_quality=min_bg_quality,
+        blur_threshold=bg_blur_threshold,
+    )
     if not normal_images:
         logger.warning("No normal images found — dry run only")
 
@@ -832,6 +1020,9 @@ def run(
                 feather_px=feather_px,
                 rng=rng,
                 mask_output_path=local_mask_path,
+                reject_clean_bg=reject_clean_bg,
+                min_bg_quality=min_bg_quality,
+                blur_threshold=bg_blur_threshold,
             )
             if meta:
                 n_ok += 1
@@ -907,6 +1098,18 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--local_staging", action="store_true",
                    help="Stage inputs to /content/tmp before synthesis to avoid "
                         "per-image Drive I/O (recommended on Colab)")
+    p.add_argument("--reject-clean-bg", dest="reject_clean_bg",
+                   action="store_true",
+                   help="Reject black/flat (void) backgrounds at generation time "
+                        "(normal pool + random-placement fallback). Default OFF.")
+    p.add_argument("--min-bg-quality", dest="min_bg_quality",
+                   type=float, default=0.7,
+                   help="Min background quality 0..1 for the clean-bg gate "
+                        "(default 0.7, CASDA value)")
+    p.add_argument("--bg-blur-threshold", dest="bg_blur_threshold",
+                   type=float, default=100.0,
+                   help="Laplacian-variance blur threshold for the clean-bg gate "
+                        "(default 100.0, CASDA value)")
     return p.parse_args(argv)
 
 
@@ -922,6 +1125,9 @@ def main(argv=None) -> None:
         feather_px=args.feather_px,
         seed=args.seed,
         local_staging=args.local_staging,
+        reject_clean_bg=args.reject_clean_bg,
+        min_bg_quality=args.min_bg_quality,
+        bg_blur_threshold=args.bg_blur_threshold,
     )
     if result.get("status") != "ok":
         sys.exit(1)
