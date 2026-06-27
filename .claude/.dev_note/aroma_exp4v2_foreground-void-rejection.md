@@ -116,6 +116,18 @@ severstal 합성 시 `--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold
 
 > 부하/속도 측정은 load-test 정책상 자동 실행하지 않는다. "void 전경이 줄었는가" 기능 검증만 수행.
 
+## 검증 결과 (Colab 실측, 2026-06-28)
+
+수정본 + `--reject-clean-bg` 로 severstal 재합성 후:
+
+- **Cell 4B Part A** (normal에 `_foreground_mask` probe): None 7.8%→**18.7%**, '어두운 전경' 26.8%→**17.0%**, 전경밝기 median 118→123. 가드가 void 전경 65개 거부 확인(결정론 유지 — 재실행 byte-identical).
+- **Cell 4B Part B** (GATE 디렉토리, 실제 합성물): 검은배경 via_fg **33→9**(aroma)/**33→9**(random) — Mode A(전경경로 void 타게팅) 붕괴. via_fallback **~2→14/19** — 빠진 절반이 폴백으로 새서 다시 void 착지.
+- **Cell 4** (검은배경 비율 OFF vs ON): aroma **9.1%→6.0%(−34%)**, random **8.8%→7.0%(−20%)**.
+
+**판정**: fix는 **검증된 부분 성공** — Mode A 제거 + 검은배경 실측 감소. 잔여 6~7%는 **Mode B(폴백이 거대-void normal에 재착지, 잔여의 ⅔)** + 약한 void(std 5~12, via_fg 9개)가 지배.
+
+**전략적 함의**: fix는 3조건 대칭(Part B aroma via_fg==random==9)이라 "증강 vs baseline"(절대)에 기여할 뿐 "aroma vs casda"(상대)는 거의 안 바꿈. Mode B로 더 줄여도 대칭이라 상대순위 불변 → **Mode B는 exp4v2가 black-bg를 binding constraint로 지목할 때만 착수**(2순위 유지, speculative 추진 금지). 다음 작업 = production 재합성(random top_k 1690) → exp4v2 재평가.
+
 ## 미확정 사항 (TODO / 구현 시 결정)
 
 - `TODO`: `FG_VOID_STD=5.0 / FG_VOID_MEAN=25.0 / FG_VOID_QUALITY=0.5`는 grounding 추론값 — Cell 4B Part A 실측 분포(전경 std/mean/quality)로 calibration 필요. visa_pcb 어두운 PCB가 우연히 세 임계를 모두 만족하면 폴백으로 샘(파괴 아님, object-centric 배치만 상실) → 1순위 확인.
