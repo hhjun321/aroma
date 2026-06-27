@@ -164,6 +164,19 @@ def _random_paste_position(
     return x, y
 
 
+# Foreground void-rejection thresholds (Mode A fix — see
+# .claude/.dev_note/aroma_exp4v2_foreground-void-rejection.md). When the
+# corner-vote selects a flat+dark void region as "foreground" (severstal
+# full-frame strips with large void margins), a defect would otherwise be pasted
+# onto the void. The guard fires only on an AND condition (flat std AND dark
+# mean) and is confirmed by a 2-D bbox-crop quality score. Colab-tunable.
+_FG_VOID_STD = 5.0       # selected-fg pixel std below this → flat candidate
+_FG_VOID_MEAN = 25.0     # selected-fg pixel mean below this → dark candidate
+_FG_VOID_QUALITY = 0.5   # bbox-crop _background_quality_score below this → void
+                         # (black void ~0.43; below the 0.7 background gate so
+                         #  textured objects are never misjudged)
+
+
 def _foreground_mask(normal_img: np.ndarray) -> Optional[np.ndarray]:
     """
     Estimate the object foreground region of a normal (good) image.
@@ -177,6 +190,12 @@ def _foreground_mask(normal_img: np.ndarray) -> Optional[np.ndarray]:
         4. Reject degenerate splits: if foreground area is <2% or >90% of the
            frame, object/background separation is meaningless → return None so
            the caller falls back to random placement.
+        5. Reject VOID foreground: if the selected foreground is flat AND dark
+           (a void mis-selected as object, e.g. severstal margins), return None
+           so the caller falls back — WITHOUT inverting the corner-vote polarity,
+           so genuine dark-object datasets are unaffected. Effectiveness is
+           maximized when the caller also passes --reject-clean-bg (default OFF),
+           which keeps the random fallback from re-landing on the void.
 
     The result is deterministic given a fixed input (Otsu has no RNG), satisfying
     the reproducibility contract. Returns a uint8 mask (255 = foreground, 0 =
@@ -227,9 +246,36 @@ def _foreground_mask(normal_img: np.ndarray) -> Optional[np.ndarray]:
         largest = int(np.argmax(areas)) + 1
         fg_mask = (labels == largest).astype(np.uint8) * 255
 
+        # Step 4 — reject degenerate area splits first (cheap; also discards the
+        # degenerate CCs before the void check below so it never wastes a quality
+        # score on them). Matches the docstring step order.
         ratio = float(np.count_nonzero(fg_mask)) / float(h * w)
         if ratio < 0.02 or ratio > 0.90:
             return None
+
+        # Step 5 — foreground void-rejection guard (Mode A). The corner-vote above
+        # only decides POLARITY; it never verifies the chosen class is a real
+        # object. On severstal strips a bright void margin wins the corner vote,
+        # the dark class is selected, and its largest CC IS the void — the defect
+        # would be pasted onto black. Validate here: flat AND dark (cheap 1-D
+        # stats) → confirm via a 2-D bbox-crop quality score → degrade to None
+        # (random fallback) instead of inverting polarity. A genuine
+        # dark-but-textured object clears the std threshold, so dark-object
+        # datasets are unaffected.
+        sel = fg_mask >= 128
+        if np.count_nonzero(sel) > 0:
+            fg_pixels = gray[sel].astype(np.float32)
+            if (float(np.std(fg_pixels)) < _FG_VOID_STD
+                    and float(np.mean(fg_pixels)) < _FG_VOID_MEAN):
+                cc_left = int(stats[largest, cv2.CC_STAT_LEFT])
+                cc_top = int(stats[largest, cv2.CC_STAT_TOP])
+                cc_w = int(stats[largest, cv2.CC_STAT_WIDTH])
+                cc_h = int(stats[largest, cv2.CC_STAT_HEIGHT])
+                crop = gray[cc_top:cc_top + cc_h, cc_left:cc_left + cc_w]
+                if (crop.size > 0
+                        and _background_quality_score(crop.astype(np.float32))
+                        < _FG_VOID_QUALITY):
+                    return None  # void confirmed → fall back to random placement
 
         return fg_mask
     except Exception:

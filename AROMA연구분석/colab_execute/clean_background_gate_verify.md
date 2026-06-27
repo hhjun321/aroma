@@ -248,7 +248,7 @@ def n_synth(synth_root, ds):
     if not ann.exists():
         return None
     raw = json.loads(ann.read_text())
-    items = raw.get("annotations") or raw.get("items") or (raw if isinstance(raw, list) else [])
+    items = (raw.get("annotations") or raw.get("items") or []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
     return sum(1 for e in items if isinstance(e, dict) and e.get("dry_run") is not True)
 
 print(f"{'dataset':12s} {'cond':8s} | {'OFF n':>7} {'ON n':>7} {'ratio':>7}")
@@ -293,7 +293,7 @@ def load_anns(synth_root, ds):
     ann = base / "annotations.json"
     if not ann.exists(): return base, []
     raw = json.loads(ann.read_text())
-    items = raw.get("annotations") or raw.get("items") or (raw if isinstance(raw, list) else [])
+    items = (raw.get("annotations") or raw.get("items") or []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
     return base, [e for e in items if isinstance(e, dict) and e.get("dry_run") is not True]
 
 def bbox_of(e):
@@ -372,6 +372,125 @@ plt.tight_layout(); plt.show()
 
 ---
 
+## Cell 4B — foreground-mask probe (게이트가 severstal에서 무효인 이유 직접 규명)
+
+**배경**: Cell 4 에서 severstal OFF==ON 이 **byte-identical**(검은배경 비율·개수 완전 동일)로 나오면, clean-bg 게이트가 severstal 합성을 전혀 바꾸지 못한 것이다. 코드 추적상 그 원인은 — pool 게이트는 검은 normal 이 없어 R=0(no-op), **position 게이트는 폴백(`_random_paste_position`) 경로 한정**인데 severstal 이 `_foreground_mask` 로 전경을 찾아 **foreground 배치 경로로 들어가면 position 게이트를 우회**하기 때문이다. 이 셀은 그 가설을 **실제 `_foreground_mask` 함수를 import 해** 데이터로 확정한다(재구현 아님).
+
+> 전제: Cell 1(`!pip install opencv-python-headless`) 실행 완료, `cv2` 가용. `HAS_CV2 False` 면 `_foreground_mask` 가 항상 None → 결과 해석 무의미(먼저 cv2 설치).
+
+### Part A — `_foreground_mask` None 비율 + 전경 밝기
+
+```python
+import os, sys, numpy as np
+from pathlib import Path
+import matplotlib.pyplot as plt
+from PIL import Image as PILImage
+
+# 실제 코드의 함수 그대로 import — 진짜 동작을 검증(재구현 금지)
+sys.path.insert(0, os.environ['AROMA_SCRIPTS'])     # /content/AROMA/scripts/aroma
+from generate_defects import _foreground_mask, _is_clean_background, HAS_CV2
+print("HAS_CV2:", HAS_CV2, "(False면 _foreground_mask 항상 None → 해석 주의)")
+
+NORMAL_DIR = f"{os.environ['AROMA_DATA']}/severstal/train/good"   # 합성에 쓴 바로 그 풀
+IMG_EXTS = {".png",".jpg",".jpeg",".bmp",".tif",".tiff"}
+paths = sorted(str(p) for p in Path(NORMAL_DIR).rglob("*") if p.suffix.lower() in IMG_EXTS)
+N = min(600, len(paths))
+print(f"normal images: {len(paths)}, probing {N}")
+
+n_none = 0
+fg_ratios, fg_means, bg_means = [], [], []
+n_dark_fg = 0
+for p in paths[:N]:
+    rgb  = np.asarray(PILImage.open(p).convert("RGB"))   # 합성과 동일 입력 형식
+    gray = rgb.mean(axis=2)
+    fg = _foreground_mask(rgb)                            # ← 실제 함수 호출
+    if fg is None:
+        n_none += 1
+        continue
+    m = fg >= 128
+    fg_mean = float(gray[m].mean())   if m.any()    else float('nan')
+    bg_mean = float(gray[~m].mean())  if (~m).any() else float('nan')
+    fg_ratios.append(float(m.mean())); fg_means.append(fg_mean); bg_means.append(bg_mean)
+    # '어두운 전경' = void 를 전경으로 오검출했을 신호: 전경이 배경보다 어둡거나 절대적으로 어둡다
+    if (not np.isnan(fg_mean)) and (fg_mean < bg_mean - 10 or fg_mean < 40):
+        n_dark_fg += 1
+
+n_fg = N - n_none
+print(f"\n_foreground_mask (N={N}):")
+print(f"  None  → 폴백 경로(position 게이트 작동) : {n_none:4d} ({100*n_none/N:.1f}%)")
+print(f"  non-None → foreground 배치(게이트 우회) : {n_fg:4d} ({100*n_fg/N:.1f}%)")
+if n_fg:
+    print(f"     └ '어두운 전경'(void 오검출 의심)   : {n_dark_fg:4d} ({100*n_dark_fg/n_fg:.1f}%)")
+    print(f"     └ 전경 밝기 median={np.median(fg_means):.0f} / 배경 밝기 median={np.median(bg_means):.0f} / 전경비율 median={np.median(fg_ratios):.2f}")
+
+# 전경 vs 배경 밝기 분포
+if n_fg:
+    fig, ax = plt.subplots(figsize=(7,4))
+    ax.hist(fg_means, bins=40, alpha=0.5, label=f"foreground (med={np.median(fg_means):.0f})")
+    ax.hist(bg_means, bins=40, alpha=0.5, label=f"background (med={np.median(bg_means):.0f})")
+    ax.set_title("severstal — _foreground_mask 가 잡은 전경 vs 배경 밝기"); ax.set_xlabel("mean(0..255)"); ax.legend()
+    plt.tight_layout(); plt.show()
+```
+
+### Part B — Cell 4 가 잡은 '실제 검은배경 샘플'이 foreground 경로로 배치됐는지 교차 확인
+
+```python
+# Cell 4 의 load_anns/resolve_path/bbox_of 가 메모리에 있어야 한다(Cell 4 먼저 실행).
+DS = "severstal"
+def _norm_path(nrm):
+    if not nrm: return None
+    c = Path(nrm)
+    if c.exists(): return str(c)
+    b = Path(NORMAL_DIR) / Path(nrm).name      # staging 절대경로 → basename 으로 복원
+    return str(b) if b.exists() else None
+
+def crosscheck(synth_root, ds, max_n=400):
+    base, items = load_anns(synth_root, ds)
+    n_dark = n_dark_via_fg = n_dark_via_fallback = n_dark_nonorm = 0
+    for e in items[:max_n]:
+        img_p = resolve_path(base, e.get("image_path"));  bb = bbox_of(e)
+        if not img_p or bb is None: continue
+        import cv2
+        comp = cv2.imread(img_p, cv2.IMREAD_GRAYSCALE)
+        if comp is None: continue
+        H, W = comp.shape[:2]; x,y,w,h = bb
+        pad = max(8, int(0.3*max(w,h)))
+        x0,y0,x1,y1 = max(0,x-pad),max(0,y-pad),min(W,x+w+pad),min(H,y+h+pad)
+        reg = comp[y0:y1, x0:x1].astype(np.float32)
+        ring = reg.copy(); iy0,ix0 = y-y0,x-x0
+        ring[max(0,iy0):iy0+h, max(0,ix0):ix0+w] = np.nan
+        vals = ring[~np.isnan(ring)]
+        if vals.size == 0: continue
+        if not (float(vals.mean()) < 30 and float(vals.std()) < 12):  # Cell 4 와 동일 '검은' 정의
+            continue
+        n_dark += 1
+        # 이 검은 샘플의 normal 에 _foreground_mask 적용 → bbox 중심이 전경 안인가?
+        np_path = _norm_path(e.get("normal_image"))
+        if np_path is None: n_dark_nonorm += 1; continue
+        fg = _foreground_mask(np.asarray(PILImage.open(np_path).convert("RGB")))
+        cx, cy = int(x + w/2), int(y + h/2)
+        if fg is not None and 0 <= cy < fg.shape[0] and 0 <= cx < fg.shape[1] and fg[cy, cx] >= 128:
+            n_dark_via_fg += 1          # 전경 픽셀 위 = foreground 배치 경로 = 게이트 우회
+        else:
+            n_dark_via_fallback += 1    # 전경 밖/None = 폴백 경로였어야(게이트가 잡았어야)
+    return n_dark, n_dark_via_fg, n_dark_via_fallback, n_dark_nonorm
+
+for cond, root in (("aroma", os.environ['AROMA_SYNTH_DIR']),
+                   ("random", os.environ['RANDOM_SYNTH_DIR'])):
+    nd, via_fg, via_fb, nonorm = crosscheck(root, DS)
+    print(f"[{cond}] 검은배경 샘플 {nd}장 중 — foreground경로(우회)={via_fg}, 폴백경로={via_fb}, normal결측={nonorm}")
+```
+
+> **판정**:
+> - **Part A 에서 non-None 비율이 높다** → severstal 은 foreground 배치 경로를 탄다 → position 게이트(폴백 한정) **구조적 우회 확정** → Cell 4 byte-identical 설명됨.
+> - **non-None 중 '어두운 전경' 비율이 높다** → `_foreground_mask` 가 void 를 전경으로 오검출 → 결함을 어두운 곳에 놓음 → **검은배경 결함의 직접 원인**.
+> - **Part B 에서 검은 샘플 대부분이 `via_fg`(전경경로)** → 그 검은배경 결함들은 게이트가 손댈 수 없는 경로로 배치됐음이 데이터로 확정.
+> - 반대로 **Part A None 비율이 높거나 Part B `via_fallback` 이 많다면** → 폴백에서 position 게이트가 돌았어야 하는데 byte-identical 이므로 모순 → 게이트 quality 공식이 그 패치를 통과(0.7↑)시킨 것 → 게이트 임계/공식 재검토 대상.
+>
+> **결론 방향**: severstal 의 검은배경을 실제로 줄이려면 void 체크를 **폴백이 아니라 `_foreground_paste_position`(전경 배치 경로)** 에 넣어야 한다. 현 게이트 설계로는 전경배치 데이터셋에서 무효.
+
+---
+
 ## Cell 5 — 검은배경 결함 샘플 육안 비교 (OFF만, 게이트 효과 시각 확인)
 
 OFF 합성에서 배경이 검은 상위 샘플을 띄워, ON 에서 이런 샘플이 사라졌는지 눈으로 확인한다.
@@ -441,7 +560,7 @@ from pathlib import Path
 def normal_seq(root, ds):
     base = Path(root) / ds
     raw = json.loads((base / "annotations.json").read_text())
-    items = raw.get("annotations") or raw.get("items") or (raw if isinstance(raw, list) else [])
+    items = (raw.get("annotations") or raw.get("items") or []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
     items = [e for e in items if isinstance(e, dict) and e.get("dry_run") is not True]
     # 결정론은 합성 순서에 대한 것 — annotations 기록 순서 그대로 normal_image 추출
     # (staging 절대경로 차이를 무시하려 basename 으로 비교)
