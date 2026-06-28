@@ -128,6 +128,15 @@ severstal 합성 시 `--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold
 
 **전략적 함의**: fix는 3조건 대칭(Part B aroma via_fg==random==9)이라 "증강 vs baseline"(절대)에 기여할 뿐 "aroma vs casda"(상대)는 거의 안 바꿈. Mode B로 더 줄여도 대칭이라 상대순위 불변 → **Mode B는 exp4v2가 black-bg를 binding constraint로 지목할 때만 착수**(2순위 유지, speculative 추진 금지). 다음 작업 = production 재합성(random top_k 1690) → exp4v2 재평가.
 
+### Downstream 검증 (exp4v2, severstal, n=2 seed, ratio 0.4)
+
+production 재합성(3조건 top_k 1690/cap 525, parity 확인 — 셋 다 cap 1013 trim) 후 map50 avg:
+- baseline 0.3965 ≈ **casda 0.3903 ≈ aroma 0.3872** ≫ random 0.3397.
+- old 대비 aroma **+0.066**(두 seed 모두 ↑), casda +0.021, random −0.022, baseline 불변(sanity ✓).
+- ★ **연구 crux 충족**: aroma ≈ casda (Δ−0.003, per-seed 주고받음) — 범용이 특화와 동률. **c2 붕괴 해소**: aroma c2 0.082→0.194(≈baseline). aroma > random(ROI 선택 가치 입증).
+- ⚠️ 미충족: 증강이 baseline 추월 못함(aroma·casda 둘 다 ≈ baseline; ratio 0.4 synth=real의 28%라 효과 작음). → **ratio 1.0 + n=3**가 다음 확인(재합성 불필요, 학습만, fresh output_dir).
+- 📝 위 "전략적 함의"의 *"fix 대칭 → 상대순위 불변"* 예측은 **틀림**: fix가 aroma를 상대적으로도 끌어올림(aroma>random, 특히 c2). 검은배경이 aroma ROI에 더 해로웠던 듯(deficit-aware 결함이 void에 묻혀 무력화 → 유효 배치로 회복).
+
 ## 미확정 사항 (TODO / 구현 시 결정)
 
 - `TODO`: `FG_VOID_STD=5.0 / FG_VOID_MEAN=25.0 / FG_VOID_QUALITY=0.5`는 grounding 추론값 — Cell 4B Part A 실측 분포(전경 std/mean/quality)로 calibration 필요. visa_pcb 어두운 PCB가 우연히 세 임계를 모두 만족하면 폴백으로 샘(파괴 아님, object-centric 배치만 상실) → 1순위 확인.
