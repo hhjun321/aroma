@@ -590,28 +590,66 @@ def _pair_aware_allocation(
     n_pairs = len(pairs)
 
     if top_k <= n_pairs:
-        ranked = sorted(
-            candidates,
-            key=lambda c: _order_key(c, rarity_temp, jitter),
+        # Budget < #distinct (cluster_id, cell_key) pairs. The legacy path
+        # (ranked[:top_k]) spent slots on the highest-scoring candidates
+        # regardless of pair, so several slots could land on the same pair and
+        # the selection covered FEWER distinct pairs than uniform random
+        # selection (observed: severstal context_coverage 0.71 < random 0.79 at
+        # n=200, because no coverage floor applies in this branch).
+        #
+        # Coverage-first, deficit-ordered (B1): take at most ONE candidate per
+        # pair, visiting pairs by descending PairDeficit, so the budget buys the
+        # maximum number of DISTINCT pairs and prioritises rare (high-deficit)
+        # ones — maximising morphology/context/rare-pair coverage at this budget.
+        # img_cap / eff_cap are still honoured; any shortfall (pairs whose only
+        # sources are img_cap-blocked) is backfilled below. Affects the
+        # deficit_aware (AROMA) path only — the random strategy samples
+        # uniformly and never enters this function.
+        pair_deficit_local = {
+            p: float(np.mean([c["deficit"] for c in pair_groups[p]]))
+            for p in pairs
+        }
+        pair_order = sorted(
+            pairs,
+            key=lambda p: (pair_deficit_local[p], len(pair_groups[p])),
             reverse=True,
         )
-        if eff_cap is None and img_cap is None:
-            return ranked[:top_k]
-        # cap-aware top-k: skip a candidate once its pair hits eff_cap or its
-        # source (image, bbox) hits img_cap.
         picked: List[Dict[str, Any]] = []
-        pair_count: Dict[Any, int] = defaultdict(int)
-        for c in ranked:
+        for p in pair_order:
             if len(picked) >= top_k:
                 break
-            key = (c["cluster_id"], c["cell_key"])
-            if eff_cap is not None and pair_count[key] >= eff_cap:
-                continue
-            if not _src_ok(c):
-                continue
-            picked.append(c)
-            pair_count[key] += 1
-            _src_take(c)
+            best = sorted(
+                pair_groups[p],
+                key=lambda c: _order_key(c, rarity_temp, jitter),
+                reverse=True,
+            )
+            for c in best:
+                if _src_ok(c):
+                    picked.append(c)
+                    _src_take(c)
+                    break
+        # Backfill if img_cap blocked some pairs and we are still short of top_k.
+        if len(picked) < top_k:
+            picked_ids = {id(c) for c in picked}
+            pair_count: Dict[Any, int] = defaultdict(int)
+            for c in picked:
+                pair_count[(c["cluster_id"], c["cell_key"])] += 1
+            rest = sorted(
+                (c for c in candidates if id(c) not in picked_ids),
+                key=lambda c: _order_key(c, rarity_temp, jitter),
+                reverse=True,
+            )
+            for c in rest:
+                if len(picked) >= top_k:
+                    break
+                key = (c["cluster_id"], c["cell_key"])
+                if eff_cap is not None and pair_count[key] >= eff_cap:
+                    continue
+                if not _src_ok(c):
+                    continue
+                picked.append(c)
+                pair_count[key] += 1
+                _src_take(c)
         return picked
 
     pair_deficit = {
