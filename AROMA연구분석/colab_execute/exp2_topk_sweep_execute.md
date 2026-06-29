@@ -1,8 +1,8 @@
 # AROMA Exp 2 — top_k Sweep (coverage-vs-budget) 실행 가이드
 
 **목적**: exp2 ROI 품질을 **여러 top_k 예산**에서 측정해 AROMA vs Random의 *예산 효율* 비교.
-**배경**: top_k=200 단일 측정은 (a) object-centric 셋서 커버리지 1.0 포화, (b) 후보<200 셋(metal_nut 93)서 전량선택→AROMA≡Random 퇴화. 작은 top_k가 두 문제 동시 해소 + B1(coverage-first deficit) 효과 노출.
-**런타임**: CPU. **전제**: step3 profiling/prompts가 6셋에 존재 (exp2_execute STEP1과 동일 입력). **B1 반영된 최신 roi_selection.py** 클론 필수.
+**배경**: top_k=200 단일 측정은 rare-pair 수가 적은 셋서 커버리지 1.0 포화 → 변별 소실. rare-pair > top_k 인 셋(severstal 358, carpet 1161)만 변별. 작은 top_k가 포화 해소 + B1(coverage-first deficit) 효과 노출. deficit-rich 5셋(carpet/leather/macaroni/fryum/severstal) 기준.
+**런타임**: CPU. **전제**: step3 profiling/prompts가 5셋에 존재 (exp2_execute STEP1과 동일 입력). **B1 반영된 최신 roi_selection.py** 클론 필수.
 
 > ⚠️ 본 sweep은 AROMA(`deficit_aware`)와 Random 선택을 **각 top_k에서 새로 생성**한다. step3 본 산출(`$AROMA_OUT/roi/`)을 덮어쓰지 않도록 별도 `roi_sweep/` 디렉터리에 저장한다.
 
@@ -32,7 +32,7 @@ print("EXP2_SWEEP :", os.environ['EXP2_SWEEP'])
 
 ```python
 TOP_K_SWEEP = [20, 30, 50, 100, 200]
-DATASETS    = ["mvtec_cable", "mvtec_pill", "mvtec_wood", "mvtec_metal_nut", "visa_cashew", "severstal"]
+DATASETS    = ["mvtec_carpet", "mvtec_leather", "visa_macaroni", "visa_fryum", "severstal"]
 SEED        = 42
 
 # dataset_config에서 class_mode 조회 → multi면 stratified 플래그 추가
@@ -207,7 +207,7 @@ print("saved:", out_png)
 | 큰 top_k서 양쪽 1.0 수렴 | 예산 충분 → 포화 (변별 사라짐). 작은 예산 영역이 결정적 |
 | context_coverage: 작은 top_k서 AROMA가 Random과 동등↑ | B1 효과 (coverage-first) — breadth도 안 짐 |
 | severstal: B1 후 ctx_cov AROMA ≥ Random | 이전 0.710<0.785 역전 확인 |
-| metal_nut: top_k<93서 변별 생김 | 퇴화(top_k≥93=전량선택) 해소 |
+| rare<top_k 셋(fryum 45, macaroni 76, leather 134): top_k≥rare서 1.0 포화 | 작은 top_k 구간만 변별 |
 
 **핵심 서사 (논문 §4.1)**: endpoint(top_k=200) 단일값 대신 **coverage-vs-budget 곡선**으로 "AROMA가 더 적은 예산으로 rare-pair/context 커버" 효율을 입증. entropy/gini는 균등성 보상(random 강점)이라 보조 지표로만.
 
@@ -226,6 +226,6 @@ print("saved:", out_png)
 ## 주의
 
 - **B1 반영 확인**: `roi_selection.py:592` 분기가 coverage-first(pair당 1개, deficit 순)인 최신 코드여야 함. 구버전이면 severstal ctx_cov 역전 안 보임.
-- **metal_nut 후보 93개**: top_k∈{20,30,50}만 유효 변별. 100/200은 전량선택(퇴화) — 곡선서 평탄 구간으로 확인됨.
+- **rare-pair 수별 변별 구간**: severstal(358)/carpet(1161)은 전 top_k 변별, fryum(45)/macaroni(76)/leather(134)는 top_k < rare 구간(작은 K)서만 변별 — 곡선서 포화 평탄 구간으로 확인.
 - **severstal 멀티클래스**: AROMA에 `--class_mode multi --class_floor` 자동 적용(STEP1 `aroma_class_flags`). cross-class deficit은 여전히 floor-uniform(점검 #4) — 본 sweep은 그 한계와 독립.
 - **공정성**: 각 top_k에서 AROMA/Random 동일 K로 재선택 → n_selected 동일 → equalize no-op. Random은 uniform `rng.choice`(seed 42).

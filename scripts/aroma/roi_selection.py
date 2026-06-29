@@ -54,6 +54,22 @@ logger = logging.getLogger("aroma.roi")
 # ---------------------------------------------------------------------------
 
 def _bootstrap_aroma_ref() -> str:
+    # Always add the repo root derived from this file's location so the
+    # `utils.*` package (utils/io.py, utils/suitability.py,
+    # utils/defect_characterization.py — sibling of scripts/) resolves
+    # regardless of the AROMA_REF env or the runtime cwd. This file lives at
+    # <repo>/scripts/aroma/roi_selection.py, so parents[2] is <repo>.
+    # Without this, Colab clones (where AROMA_REF points elsewhere or is unset
+    # and the default Windows path does not exist) raised 'No module named
+    # utils', silently disabling the quality gate.
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        if repo_root.is_dir() and str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+    except (IndexError, OSError):
+        pass
+
+    # Preserve the existing AROMA_REF behavior (explicit override / default).
     ref = os.environ.get("AROMA_REF") or r"D:\project\aroma"
     ref_path = Path(ref)
     if ref_path.is_dir():
@@ -1182,6 +1198,10 @@ def select_rois(
 
     Strategies:
         deficit_aware   Top-K Deficit Quantile oversampling (default)
+        compatibility   Rank by compat_score = 0.6*ctx_prior + 0.4*morph_prior
+                        (no deficit term); the quality gate is applied as an
+                        upstream pre-filter in run(). ctx_prior IS the
+                        compatibility value (compatibility_matrix).
         top_k           Highest roi_score first
         weighted        Probability-weighted random draw
         random          Uniform random draw (baseline for Exp 2)
@@ -1232,6 +1252,26 @@ def select_rois(
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(candidates), size=top_k, replace=False, p=probs)
         return [candidates[i] for i in sorted(indices.tolist())]
+
+    if strategy == "compatibility":
+        # Compatibility-first selection (no deficit term). ctx_prior IS the
+        # compatibility value (compatibility_matrix[cluster][cell]); rank by
+        # compat_score = 0.6*ctx_prior + 0.4*morph_prior. The quality gate is
+        # applied UPSTREAM in run() via apply_quality_gate (a pre-filter on
+        # quality_score >= min_quality); here we only order by compatibility.
+        # min_quality is enforced as a filter when the quality deps are
+        # available — see run(); this branch operates on the surviving pool.
+        def _compat_score(c: Dict[str, Any]) -> float:
+            cp = max(0.0, min(1.0, float(c.get("ctx_prior", 0.0))))
+            mp = max(0.0, min(1.0, float(c.get("morph_prior", 0.0))))
+            return 0.6 * cp + 0.4 * mp
+        # Deterministic ordering: compat_score desc, then the same per-source
+        # jitter used elsewhere to spread ties across distinct source crops.
+        return sorted(
+            candidates,
+            key=lambda c: _compat_score(c) + _img_jitter(c),
+            reverse=True,
+        )[:top_k]
 
     # deficit_aware (default)
     if class_floor:
@@ -1409,8 +1449,10 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--output_dir",    required=True,
                    help="Directory to write roi_candidates.json and roi_selected.json")
     p.add_argument("--sampling_strategy", default="deficit_aware",
-                   choices=["deficit_aware", "top_k", "weighted", "random"],
-                   help="ROI sampling strategy (default: deficit_aware)")
+                   choices=["deficit_aware", "compatibility", "top_k", "weighted", "random"],
+                   help="ROI sampling strategy (default: deficit_aware). "
+                        "'compatibility' ranks by 0.6*ctx_prior + 0.4*morph_prior "
+                        "(no deficit term) and relies on --min_quality as the gate.")
     p.add_argument("--top_k", type=int, default=200,
                    help="Number of ROIs to select (default: 200)")
     p.add_argument("--seed",  type=int, default=42,

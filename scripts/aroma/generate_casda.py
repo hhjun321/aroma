@@ -69,6 +69,7 @@ def run(
     reject_clean_bg: bool = False,
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
+    blend_mode: str = "alpha",
 ) -> Dict[str, Any]:
     """Run CASDA ROI adaptation then copy-paste synthesis.
 
@@ -89,6 +90,10 @@ def run(
                                 generate_defects.run() (default OFF).
         min_bg_quality:         Min background quality for the gate (default 0.7).
         bg_blur_threshold:      Laplacian blur threshold for the gate (default 100.0).
+        blend_mode:             Blending mode forwarded to generate_defects.run()
+                                ('alpha' or 'seamless'). Default 'alpha'. Lets the
+                                casda arm use the same blender as aroma for a fair
+                                comparison.
 
     Returns:
         generate_defects.run() result dict + n_rois_adapted.
@@ -121,6 +126,7 @@ def run(
         reject_clean_bg=reject_clean_bg,
         min_bg_quality=min_bg_quality,
         bg_blur_threshold=bg_blur_threshold,
+        blend_mode=blend_mode,
     )
     result["n_rois_adapted"] = len(rois)
     return result
@@ -165,6 +171,10 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    type=float, default=100.0,
                    help="Laplacian-variance blur threshold for the clean-bg gate "
                         "(default 100.0)")
+    p.add_argument("--blend-mode",      dest="blend_mode",
+                   choices=["alpha", "seamless"], default="alpha",
+                   help="Blending mode forwarded to generate_defects "
+                        "(default alpha; 'seamless' = same blender as aroma)")
     return p.parse_args(argv)
 
 
@@ -183,6 +193,7 @@ def main(argv=None) -> None:
         reject_clean_bg=args.reject_clean_bg,
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
+        blend_mode=args.blend_mode,
     )
     status = result.get("status", "unknown")
     n_gen = result.get("n_generated", 0)

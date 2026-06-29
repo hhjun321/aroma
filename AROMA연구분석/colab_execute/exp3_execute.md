@@ -2,7 +2,7 @@
 
 **목적**: Random ROI vs AROMA ROI 2-way 비교 (FID + PaDiM AUROC)  
 **런타임**: FID 모드 = CPU 가능 | AD 모드 = GPU 필수  
-**전제**: Step 3 + Step 4가 6개 데이터셋(mvtec_cable, mvtec_pill, mvtec_wood, mvtec_metal_nut, visa_cashew, severstal)에서 완료 (`synthetic_aroma/` 존재)
+**전제**: Step 3 + Step 4가 5개 데이터셋(mvtec_carpet, mvtec_leather, visa_macaroni, visa_fryum, severstal)에서 완료 (`synthetic_aroma/` 존재)
 
 ---
 
@@ -47,7 +47,7 @@ Random baseline synthetic만 생성한다.
 > - Random: `$RANDOM_SYNTH_DIR/{ds}` (= `synthetic_random/{ds}`)  
 > - AROMA: `$AROMA_SYNTH_DIR/{ds}` (= `synthetic/{ds}`)  
 >
-> 따라서 본 가이드 전제(상단 "Step 4가 6개 데이터셋에서 완료")는 **게이트 ON(`--reject-clean-bg`)으로 재실행된 step4**를 의미한다. AROMA 합성본은 step4 재실행으로, Random 합성본은 아래 0단계로 재생성한다.
+> 따라서 본 가이드 전제(상단 "Step 4가 5개 데이터셋에서 완료")는 **게이트 ON(`--reject-clean-bg`)으로 재실행된 step4**를 의미한다. AROMA 합성본은 step4 재실행으로, Random 합성본은 아래 0단계로 재생성한다.
 >
 > 삭제 예시 (각 데이터셋 `{ds}`에 대해):
 > ```python
@@ -63,7 +63,7 @@ _cfg_path = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json
 with open(_cfg_path) as _f:
     DATASET_CONFIG = json.load(_f)
 
-DATASETS = ["mvtec_cable", "mvtec_pill", "mvtec_wood", "mvtec_metal_nut", "visa_cashew", "severstal"]
+DATASETS = ["mvtec_carpet", "mvtec_leather", "visa_macaroni", "visa_fryum", "severstal"]
 
 # 조회 결과 확인
 for ds in DATASETS:
@@ -121,7 +121,7 @@ for ds in DATASETS:
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         mvtec_cable mvtec_pill mvtec_wood mvtec_metal_nut visa_cashew severstal \
+    --dataset_keys         mvtec_carpet mvtec_leather visa_macaroni visa_fryum severstal \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --device               cpu
@@ -160,7 +160,7 @@ PaDiM 3조건 학습 및 AUROC 측정. **Colab Pro A100 권장.**
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         mvtec_cable mvtec_pill mvtec_wood mvtec_metal_nut visa_cashew severstal \
+    --dataset_keys         mvtec_carpet mvtec_leather visa_macaroni visa_fryum severstal \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --image_size           256

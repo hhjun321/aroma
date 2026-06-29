@@ -151,6 +151,149 @@ def _alpha_composite(
     return out
 
 
+def _reinhard_transfer(
+    src_rgb: np.ndarray,
+    ref_rgb: np.ndarray,
+) -> np.ndarray:
+    """
+    Reinhard color/illumination transfer in Lab space.
+
+    Matches the per-channel mean/std of ``src_rgb`` (the defect crop) to those of
+    ``ref_rgb`` (the local background patch at the paste position) so the pasted
+    defect picks up the local illumination/colour cast → placement becomes
+    measurable in pixels.
+
+    When the reference background patch is effectively grayscale (near-zero a/b
+    chroma std, e.g. severstal steel), only the L (luminance) channel is matched
+    — matching a/b against degenerate statistics would inject false colour.
+
+    Deterministic (pure statistics, no RNG). Requires cv2; callers guard on
+    HAS_CV2 and fall back before reaching here.
+
+    Args:
+        src_rgb: HxWx3 uint8 RGB defect crop.
+        ref_rgb: hxwx3 uint8 RGB local background patch (any size > 0).
+
+    Returns:
+        HxWx3 uint8 RGB crop with transferred colour/illumination statistics.
+    """
+    # Lab via cv2 expects uint8 BGR/RGB; use RGB→LAB and operate in float.
+    src_lab = cv2.cvtColor(src_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    ref_lab = cv2.cvtColor(ref_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+
+    out = src_lab.copy()
+    # Chroma flatness on the reference patch decides grayscale vs full transfer.
+    ref_a_std = float(ref_lab[..., 1].std())
+    ref_b_std = float(ref_lab[..., 2].std())
+    grayscale_ref = (ref_a_std < 1.0) and (ref_b_std < 1.0)
+    channels = (0,) if grayscale_ref else (0, 1, 2)
+
+    for c in channels:
+        s_mean = float(src_lab[..., c].mean())
+        s_std = float(src_lab[..., c].std())
+        r_mean = float(ref_lab[..., c].mean())
+        r_std = float(ref_lab[..., c].std())
+        if s_std < 1e-6:
+            # Degenerate source channel — shift mean only, no scaling.
+            out[..., c] = src_lab[..., c] - s_mean + r_mean
+        else:
+            out[..., c] = (src_lab[..., c] - s_mean) * (r_std / s_std) + r_mean
+
+    out = np.clip(out, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(out, cv2.COLOR_LAB2RGB)
+
+
+def _context_aware_composite(
+    background: "Image",
+    defect_crop: "Image",
+    mask: "Image",
+    position: Tuple[int, int],
+    feather_px: int = 4,
+) -> "Image":
+    """
+    Context-aware ('seamless') blend: Reinhard colour/illumination transfer from
+    the local background patch into the defect crop, then gradient-domain
+    cv2.seamlessClone(NORMAL_CLONE).
+
+    The position decision (foreground / void / clean-bg gate) is made entirely by
+    the caller; this function only changes *how* the already-chosen crop is
+    composited at the already-chosen position. On ANY failure (cv2 missing, mask
+    too small, clone centre at the border, OpenCV exception) it falls back to
+    ``_alpha_composite`` so synthesis is never silently dropped and determinism
+    is preserved.
+
+    Args:
+        background:   RGBA PIL Image (target normal image)
+        defect_crop:  RGBA PIL Image (defect to paste)
+        mask:         L-mode PIL Image (defect region mask, crop-sized)
+        position:     (x, y) top-left paste position in background coords
+        feather_px:   passed through to the alpha fallback only
+
+    Returns:
+        RGBA PIL Image.
+    """
+    from PIL import Image as PILImage
+
+    if not HAS_CV2:
+        return _alpha_composite(background, defect_crop, mask, position, feather_px)
+
+    try:
+        bg = background.convert("RGBA")
+        crop = defect_crop.convert("RGB")
+        msk = mask.convert("L")
+        if crop.size != msk.size:
+            msk = msk.resize(crop.size, PILImage.LANCZOS)
+
+        crop_w, crop_h = crop.size
+        bg_w, bg_h = bg.size
+        x0, y0 = int(position[0]), int(position[1])
+
+        # The crop must lie fully inside the background for seamlessClone; the
+        # caller already guarantees crop fits, but clamp defensively.
+        if (crop_w <= 0 or crop_h <= 0 or crop_w > bg_w or crop_h > bg_h
+                or x0 < 0 or y0 < 0
+                or x0 + crop_w > bg_w or y0 + crop_h > bg_h):
+            return _alpha_composite(background, defect_crop, mask, position, feather_px)
+
+        mask_arr = np.asarray(msk, dtype=np.uint8)
+        # seamlessClone needs a non-trivial mask region; tiny masks (or all-zero)
+        # make the Poisson solver degenerate → fall back.
+        if int((mask_arr > 0).sum()) < 16:
+            return _alpha_composite(background, defect_crop, mask, position, feather_px)
+
+        bg_rgb = np.asarray(bg.convert("RGB"))
+        crop_rgb = np.asarray(crop)
+
+        # Local background patch at the paste position (crop-sized, in bounds).
+        local_bg = bg_rgb[y0:y0 + crop_h, x0:x0 + crop_w]
+        if local_bg.shape[0] == crop_h and local_bg.shape[1] == crop_w and local_bg.size > 0:
+            crop_rgb = _reinhard_transfer(crop_rgb, local_bg)
+
+        # cv2.seamlessClone composites src into dst at a CENTRE point.
+        center = (x0 + crop_w // 2, y0 + crop_h // 2)
+        # Binary mask (0/255) for the clone.
+        clone_mask = np.where(mask_arr > 0, 255, 0).astype(np.uint8)
+
+        # OpenCV works in BGR.
+        src_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+        dst_bgr = cv2.cvtColor(bg_rgb, cv2.COLOR_RGB2BGR)
+        blended_bgr = cv2.seamlessClone(
+            src_bgr, dst_bgr, clone_mask, center, cv2.NORMAL_CLONE
+        )
+        blended_rgb = cv2.cvtColor(blended_bgr, cv2.COLOR_BGR2RGB)
+
+        out = PILImage.fromarray(blended_rgb).convert("RGBA")
+        # Preserve any alpha that was present in the original background.
+        if "A" in bg.getbands():
+            out.putalpha(bg.getchannel("A"))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "seamless blend failed (%s) — falling back to alpha composite.", exc
+        )
+        return _alpha_composite(background, defect_crop, mask, position, feather_px)
+
+
 def _random_paste_position(
     bg_size: Tuple[int, int],
     crop_size: Tuple[int, int],
@@ -439,7 +582,8 @@ def copy_paste_synthesis(
         roi_entry:          A single ROI dict (from roi_selected.json)
         normal_image_path:  Path to normal (good) background image
         output_path:        Destination path for the synthetic image
-        blend_mode:         'alpha' (always) — 'poisson' reserved for future
+        blend_mode:         'alpha' (default) or 'seamless' (context-aware
+                            Reinhard transfer + cv2.seamlessClone; alpha fallback)
         feather_px:         Edge feathering sigma in pixels
         rng:                Optional seeded random.Random for reproducibility
         mask_output_path:   Optional PNG path to persist the GT defect mask.
@@ -579,7 +723,19 @@ def copy_paste_synthesis(
                     position = _random_paste_position(
                         normal_img.size, defect_crop.size, rng
                     )
-        result = _alpha_composite(normal_img, defect_crop, mask, position, feather_px)
+        # Context-aware ('seamless') blending = Reinhard local-background colour/
+        # illumination transfer + cv2.seamlessClone, falling back to the alpha
+        # composite on any failure or when cv2 is unavailable. The position
+        # decision above (foreground / void / clean-bg gate) is unchanged — only
+        # HOW the chosen crop is composited at the chosen position differs.
+        if blend_mode == "seamless":
+            result = _context_aware_composite(
+                normal_img, defect_crop, mask, position, feather_px
+            )
+        else:
+            result = _alpha_composite(
+                normal_img, defect_crop, mask, position, feather_px
+            )
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         result.convert("RGB").save(output_path)
@@ -955,7 +1111,7 @@ def run(
         output_dir:     Destination for synthetic images + annotations.json
         method:         Synthesis method: copy_paste | controlnet | inpainting
         n_per_roi:      Number of synthetic images to generate per ROI
-        blend_mode:     Blending mode for copy_paste ('alpha')
+        blend_mode:     Blending mode for copy_paste ('alpha' | 'seamless')
         feather_px:     Edge feather radius for alpha blend
         seed:           Random seed for reproducibility
         local_staging:  Copy inputs to /content/tmp before synthesis to avoid
@@ -1135,8 +1291,10 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--n_per_roi",   type=int, default=3,
                    help="Synthetic images per ROI (default: 3)")
     p.add_argument("--blend_mode",  default="alpha",
-                   choices=["alpha"],
-                   help="Blending mode for copy_paste (default: alpha)")
+                   choices=["alpha", "seamless"],
+                   help="Blending mode for copy_paste: 'alpha' (default) or "
+                        "'seamless' (Reinhard local-bg transfer + "
+                        "cv2.seamlessClone; falls back to alpha if cv2 absent)")
     p.add_argument("--feather_px",  type=int, default=4,
                    help="Edge feather sigma in pixels (default: 4)")
     p.add_argument("--seed",          type=int, default=42,
