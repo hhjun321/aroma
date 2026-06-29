@@ -1,5 +1,10 @@
 # AROMA Exp 2 — ROI 품질 비교 실행 가이드
 
+> ⛔ **DEPRECATED (2026-06-29)** — 방법론 전환(deficit-aware 폐기 → compatibility 선택)으로 본 coverage/deficit 기반 exp2는 **폐지**됨.
+> - coverage 지표는 소공간 셋서 포화·deficit 종속이라 무변별. rare_pair=0인 셋(carpet/leather 등)서 측정 불가.
+> - 대체: `method_pivot_rerun_execute.md` §2 — 선택 ROI 평균 compatibility/quality (**descriptive/sanity-check 전용, 헤드라인 아님**).
+> - 본 파일은 deficit_aware ablation 참조용으로만 보존. 신규 실행은 method_pivot 가이드 사용.
+
 **런타임**: CPU (GPU 불필요)  
 **전제**: Step 3 및 Step 4가 5개 데이터셋(mvtec_carpet, mvtec_leather, visa_macaroni, visa_fryum, severstal)에서 완료된 상태
 

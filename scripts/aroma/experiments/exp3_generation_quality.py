@@ -142,6 +142,62 @@ def _resolve_visa_masks(defect_paths: List[str], masks_dir: str) -> Dict[str, st
     return mapping
 
 
+_DS_CFG_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_dataset_config() -> Dict[str, Any]:
+    """Load dataset_config.json once (env DATASET_CONFIG / AROMA_REF / clone default)."""
+    global _DS_CFG_CACHE
+    if _DS_CFG_CACHE is not None:
+        return _DS_CFG_CACHE
+    cands = [
+        os.environ.get("DATASET_CONFIG"),
+        os.path.join(os.environ.get("AROMA_REF", ""), "dataset_config.json"),
+        "/content/AROMA/dataset_config.json",
+    ]
+    for c in cands:
+        if c and Path(c).exists():
+            try:
+                with open(c, encoding="utf-8") as f:
+                    _DS_CFG_CACHE = json.load(f)
+                logger.info("dataset_config loaded: %s", c)
+                return _DS_CFG_CACHE
+            except Exception as e:  # pragma: no cover
+                logger.warning("dataset_config load failed %s: %s", c, e)
+    logger.warning("dataset_config.json not found (set DATASET_CONFIG or AROMA_REF)")
+    _DS_CFG_CACHE = {}
+    return _DS_CFG_CACHE
+
+
+def _resolve_masks_generic(defect_paths: List[str], root: Path) -> Dict[str, str]:
+    """Resolve GT masks across mvtec/severstal/visa conventions. First hit wins.
+
+    Tries, per defect image at <root>/test/<type>/<stem>.<ext>:
+      ground_truth/<type>/<stem>_mask.png  (MVTec)
+      ground_truth/<type>/<stem>.png
+      masks/<type>/<stem>.png              (severstal prepare_severstal: type=classN)
+      masks/<type>/<stem>_mask.png
+      ground_truth/<type>/<filename>
+    Missing masks are simply skipped (FID drops that real patch; pixel AUROC degrades).
+    """
+    root = Path(root)
+    mapping: Dict[str, str] = {}
+    for img_p in defect_paths:
+        p = Path(img_p)
+        typ, stem = p.parent.name, p.stem
+        for m in (
+            root / "ground_truth" / typ / f"{stem}_mask.png",
+            root / "ground_truth" / typ / f"{stem}.png",
+            root / "masks" / typ / f"{stem}.png",
+            root / "masks" / typ / f"{stem}_mask.png",
+            root / "ground_truth" / typ / p.name,
+        ):
+            if m.exists():
+                mapping[img_p] = str(m)
+                break
+    return mapping
+
+
 def _get_image_lists(
     dataset_key: str,
     real_data_dir: str,
@@ -150,61 +206,37 @@ def _get_image_lists(
 ) -> Optional[Dict[str, Any]]:
     """
     Returns {train_normal, test_good, test_defect, mask_map} or None if missing.
+    Config-driven: resolves paths from dataset_config.json (image_dir + seed_dirs),
+    which all datasets share with the step1-4 pipeline (MVTec-style layout:
+    <ds>/train/good + <ds>/test/<type> + masks). real_data_dir is unused (paths
+    in dataset_config are absolute); kept for signature compatibility.
     mask_map: {defect_img_path: mask_path}
     """
-    base = Path(real_data_dir)
-
-    if dataset_key == "isp_LSM_1":
-        ds = base / "isp" / "unsupervised" / "LSM_1"
-        if not ds.exists():
-            logger.warning("isp_LSM_1 not found: %s", ds)
-            return None
-        train_normal = _glob_images(str(ds / "train" / "good"))
-        test_good    = _glob_images(str(ds / "test" / "good"))
-        area_defects   = _glob_images(str(ds / "test" / "area"))
-        points_defects = _glob_images(str(ds / "test" / "points"))
-        test_defect    = area_defects + points_defects
-        mask_map       = {
-            **_resolve_isp_masks(area_defects,   str(ds / "ground_truth" / "area")),
-            **_resolve_isp_masks(points_defects, str(ds / "ground_truth" / "points")),
-        }
-
-    elif dataset_key == "mvtec_cable":
-        ds = base / "mvtec" / "cable"
-        if not ds.exists():
-            logger.warning("mvtec_cable not found: %s", ds)
-            return None
-        train_normal = _glob_images(str(ds / "train" / "good"))
-        test_good    = _glob_images(str(ds / "test" / "good"))
-        test_defect: List[str] = []
-        for sub in sorted((ds / "test").iterdir()):
-            if sub.is_dir() and sub.name != "good":
-                test_defect.extend(_glob_images(str(sub)))
-        mask_map = _resolve_mvtec_masks(test_defect, str(ds / "ground_truth"))
-
-    elif dataset_key == "visa_cashew":
-        ds = base / "visa" / "cashew" / "Data"
-        if not ds.exists():
-            logger.warning("visa_cashew not found: %s", ds)
-            return None
-        all_normal   = _glob_images(str(ds / "Images" / "Normal"))
-        train_normal, test_good = _split_normal(all_normal, test_split=test_split, seed=seed)
-        test_defect  = _glob_images(str(ds / "Images" / "Anomaly"))
-        mask_map     = _resolve_visa_masks(test_defect, str(ds / "Masks" / "Anomaly"))
-
-    elif dataset_key == "visa_pcb":
-        ds = base / "visa" / "pcb4" / "Data"
-        if not ds.exists():
-            logger.warning("visa_pcb (pcb4) not found: %s", ds)
-            return None
-        all_normal   = _glob_images(str(ds / "Images" / "Normal"))
-        train_normal, test_good = _split_normal(all_normal, test_split=test_split, seed=seed)
-        test_defect  = _glob_images(str(ds / "Images" / "Anomaly"))
-        mask_map     = _resolve_visa_masks(test_defect, str(ds / "Masks" / "Anomaly"))
-
-    else:
-        logger.warning("Unknown dataset_key: %s", dataset_key)
+    cfg = _load_dataset_config()
+    entry = (cfg or {}).get(dataset_key)
+    if not entry or not entry.get("image_dir"):
+        logger.warning("dataset_key not in dataset_config: %s", dataset_key)
         return None
+    image_dir = Path(entry["image_dir"])          # .../<ds>/train/good
+    if not image_dir.exists():
+        logger.warning("%s image_dir missing: %s", dataset_key, image_dir)
+        return None
+    root = image_dir.parent.parent                # dataset root .../<ds>
+    train_normal = _glob_images(str(image_dir))
+    test_good    = _glob_images(str(root / "test" / "good"))
+    seed_dirs = entry.get("seed_dirs")
+    if seed_dirs:
+        defect_dirs = [Path(d) for d in seed_dirs]
+    else:
+        troot = root / "test"
+        defect_dirs = (
+            [p for p in sorted(troot.iterdir()) if p.is_dir() and p.name != "good"]
+            if troot.exists() else []
+        )
+    test_defect: List[str] = []
+    for d in defect_dirs:
+        test_defect.extend(_glob_images(str(d)))
+    mask_map = _resolve_masks_generic(test_defect, root)
 
     logger.info(
         "%s: train_normal=%d  test_good=%d  test_defect=%d  masks_matched=%d",

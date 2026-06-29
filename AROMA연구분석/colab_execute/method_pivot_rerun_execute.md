@@ -111,6 +111,8 @@ for ds in DATASETS:
 
 ## 2. exp2 — compatibility/quality 선택 지표 (inline, 스크립트 불요)  · 런타임: **CPU**
 
+> ⚠️ **descriptive/sanity-check 전용 — 헤드라인 증거 아님.** compatibility strategy가 ctx_prior로 정렬·선택하므로 "선택 ROI 평균 ctx_prior가 random보다 높다"는 **동어반복**(목적함수=지표). AROMA가 *설계대로* 고-compatibility 위치를 고르는지 확인하는 sanity 용도일 뿐. **"compatibility 선택이 유효하다"의 실제 입증은 exp3(FID)·exp4(detection).** 논문선 1줄 sanity 언급 + 실증은 다운스트림으로.
+
 선택된 ROI(`roi_selected.json`)의 평균 `ctx_prior`(=compatibility)·`quality_score`를 aroma vs random 비교. coverage/deficit 폐기.
 
 ```python
@@ -206,10 +208,10 @@ if r.returncode!=0: print('\n'.join((r.stderr or '').splitlines()[-5:]))
 ```
 
 ```python
-EXP3 = f"{AROMA_SCRIPTS}/experiments/exp3_generation_quality.py"
-DS_KEYS = " ".join(DATASETS)
-os.environ['DS_KEYS'] = DS_KEYS
-# FID (CPU 가능)
+os.environ['EXP3']    = f"{os.environ['AROMA_SCRIPTS']}/experiments/exp3_generation_quality.py"
+os.environ['DS_KEYS'] = " ".join(DATASETS)
+print("EXP3 =", os.environ['EXP3'], "| DS_KEYS =", os.environ['DS_KEYS'])
+# FID (CPU 가능)  — $EXP3 는 env var 여야 !python 에서 치환됨
 !python $EXP3 --mode fid \
     --random_synthetic_dir $SYN_RAND \
     --aroma_synthetic_dir  $SYN_AROMA \
