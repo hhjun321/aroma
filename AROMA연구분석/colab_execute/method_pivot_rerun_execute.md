@@ -15,6 +15,19 @@ dev_note: `.claude/.dev_note/aroma_roi-synthesis_compatibility-context-blend.md`
 **5셋** = `severstal carpet leather macaroni fryum`. casda=철강 전용→severstal만.
 **조건 격리**: 합성 3 arm(random/casda/aroma) 모두 `--blend-mode seamless` 동일, ROI 선택만 다름.
 
+## 스테이지별 런타임 (CPU/GPU)
+
+| § | 스테이지 | 런타임 | 비고 |
+|---|---------|--------|------|
+| 1 | Stage 3 ROI 선택 | **CPU** | DL 없음 |
+| 2 | exp2 (compat/quality) | **CPU** | JSON 집계 |
+| 3 | Stage 4 합성 (seamless) | **CPU** | copy_paste + cv2.seamlessClone + Reinhard, DL 없음 |
+| 4 | exp3 FID | **CPU 가능** | torchmetrics FID, GPU면 가속 |
+| 4 | exp3 AD (PaDiM) | **GPU 필수** | anomalib |
+| 5 | exp4v2 detection | **GPU 필수** | YOLOv8 학습 (Colab Pro A100 권장) |
+
+→ CPU 런타임으로 §1~3 + §4 FID 까지 수행 가능. **§4 AD·§5는 GPU 런타임 전환** 후 실행.
+
 ---
 
 ## 0. 전제 / 환경변수
@@ -55,7 +68,7 @@ def is_multi(ds): return CFG.get(ds, {}).get("class_mode") == "multi"   # severs
 
 ---
 
-## 1. Stage 3 — ROI 선택 (compatibility=aroma, random)
+## 1. Stage 3 — ROI 선택 (compatibility=aroma, random)  · 런타임: **CPU**
 
 AROMA arm은 신규 `--sampling_strategy compatibility`, random arm은 `--sampling_strategy random`. severstal은 multi-class 플래그.
 
@@ -96,7 +109,7 @@ for ds in DATASETS:
 
 ---
 
-## 2. exp2 — compatibility/quality 선택 지표 (inline, 스크립트 불요)
+## 2. exp2 — compatibility/quality 선택 지표 (inline, 스크립트 불요)  · 런타임: **CPU**
 
 선택된 ROI(`roi_selected.json`)의 평균 `ctx_prior`(=compatibility)·`quality_score`를 aroma vs random 비교. coverage/deficit 폐기.
 
@@ -126,7 +139,7 @@ print("\n기대: aroma compatibility > random (더 적합한 배경 선택). qua
 
 ---
 
-## 3. Stage 4 — 합성 (seamless 블렌딩, clean-bg gate ON)
+## 3. Stage 4 — 합성 (seamless 블렌딩, clean-bg gate ON)  · 런타임: **CPU**
 
 3 arm 모두 `--blend-mode seamless` + 게이트 ON. aroma는 `$ROI_MP`, random은 candidates 풀, casda는 severstal만.
 
@@ -186,7 +199,7 @@ if r.returncode!=0: print('\n'.join((r.stderr or '').splitlines()[-5:]))
 
 ---
 
-## 4. exp3 — FID + one-class AD (5셋, baseline/random/aroma)
+## 4. exp3 — FID + one-class AD (5셋, baseline/random/aroma)  · 런타임: FID **CPU 가능** / AD **GPU 필수**
 
 ```python
 !pip install torchmetrics[image] anomalib lpips -q
@@ -218,7 +231,7 @@ os.environ['DS_KEYS'] = DS_KEYS
 
 ---
 
-## 5. exp4v2 — supervised detection (2층위)
+## 5. exp4v2 — supervised detection (2층위)  · 런타임: **GPU 필수** (Colab Pro A100 권장)
 
 `{synthetic_dir}/{ds}/annotations.json`을 읽음 → §3 합성 산출 사용. multi-seed 권장(`--seeds 42 1 2`).
 
