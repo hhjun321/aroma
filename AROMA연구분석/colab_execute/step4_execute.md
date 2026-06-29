@@ -26,6 +26,19 @@ os.environ['NORMAL_DIR'] = _cfg[DATASET_KEY]['image_dir']
 print(f"NORMAL_DIR = {os.environ['NORMAL_DIR']}")
 ```
 
+> ⚠️ **재생성 전 기존 합성본 삭제 필수 (append 금지)**
+> clean-bg 게이트 정책으로 합성 출력 구성이 바뀌므로, 게이트 미적용 옛 이미지를 이어붙이면 안 된다. 재생성 전에 기존 합성 디렉토리를 반드시 삭제한다.
+> - **단일 실행**: `$SYNTHETIC_DIR` (= `$AROMA_OUT/synthetic/{ds}`)
+> - **배치 실행**: 대상 데이터셋들의 `synthetic/{ds}`
+>
+> 비교가 대칭이 되려면 AROMA + Random 양쪽을 모두 삭제 후 재생성해야 한다 (Random 삭제는 exp3 가이드에서 다룸).
+>
+> 삭제는 위험하므로 선택적 셀로만 제시 — 필요 시 실행:
+>
+> ```python
+> !rm -rf $SYNTHETIC_DIR
+> ```
+
 ## 실행
 
 ```python
@@ -38,7 +51,10 @@ print(f"NORMAL_DIR = {os.environ['NORMAL_DIR']}")
     --n_per_roi     3 \
     --feather_px    4 \
     --seed          42 \
-    --local_staging
+    --local_staging \
+    --reject-clean-bg \
+    --min-bg-quality   0.7 \
+    --bg-blur-threshold 100.0
 ```
 
 `--local_staging` 동작:
@@ -149,7 +165,10 @@ def run_one(ds):
            '--n_per_roi',  '3',
            '--feather_px', '4',
            '--seed',       '42',
-           '--local_staging']
+           '--local_staging',
+           '--reject-clean-bg',
+           '--min-bg-quality',   '0.7',
+           '--bg-blur-threshold', '100.0']
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         tail = '\n'.join(r.stderr.strip().splitlines()[-3:]) if r.stderr else ''

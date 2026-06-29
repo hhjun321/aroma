@@ -2,7 +2,7 @@
 
 **목적**: Random ROI vs AROMA ROI 2-way 비교 (FID + PaDiM AUROC)  
 **런타임**: FID 모드 = CPU 가능 | AD 모드 = GPU 필수  
-**전제**: Step 3 + Step 4가 4개 데이터셋에서 완료 (`synthetic_aroma/` 존재)
+**전제**: Step 3 + Step 4가 6개 데이터셋(mvtec_cable, mvtec_pill, mvtec_wood, mvtec_metal_nut, visa_cashew, severstal)에서 완료 (`synthetic_aroma/` 존재)
 
 ---
 
@@ -42,6 +42,18 @@ print("EXP3_OUT         :", os.environ['EXP3_OUT'])
 AROMA synthetic (`synthetic_aroma/`)은 Step 4에서 이미 완료.  
 Random baseline synthetic만 생성한다.
 
+> ⚠️ **게이트 ON 정책 재생성 안내**  
+> clean-background 게이트(`--reject-clean-bg`)는 출력 이미지 구성을 바꾸므로, 기존 합성본에 이어붙이면 게이트 미적용 이미지가 잔존한다. **재생성 전 Random과 AROMA 합성본을 둘 다 삭제 후 재생성**한다.  
+> - Random: `$RANDOM_SYNTH_DIR/{ds}` (= `synthetic_random/{ds}`)  
+> - AROMA: `$AROMA_SYNTH_DIR/{ds}` (= `synthetic/{ds}`)  
+>
+> 따라서 본 가이드 전제(상단 "Step 4가 6개 데이터셋에서 완료")는 **게이트 ON(`--reject-clean-bg`)으로 재실행된 step4**를 의미한다. AROMA 합성본은 step4 재실행으로, Random 합성본은 아래 0단계로 재생성한다.
+>
+> 삭제 예시 (각 데이터셋 `{ds}`에 대해):
+> ```python
+> !rm -rf $RANDOM_SYNTH_DIR/{ds} $AROMA_SYNTH_DIR/{ds}
+> ```
+
 ### dataset_config.json에서 normal_dir 자동 조회
 
 ```python
@@ -51,7 +63,7 @@ _cfg_path = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json
 with open(_cfg_path) as _f:
     DATASET_CONFIG = json.load(_f)
 
-DATASETS = ["isp_LSM_1", "mvtec_cable", "visa_cashew", "visa_pcb"]
+DATASETS = ["mvtec_cable", "mvtec_pill", "mvtec_wood", "mvtec_metal_nut", "visa_cashew", "severstal"]
 
 # 조회 결과 확인
 for ds in DATASETS:
@@ -79,7 +91,10 @@ for ds in DATASETS:
         --output_dir      $RANDOM_SYNTH_DS \
         --top_k           200 \
         --seed            42 \
-        --n_per_roi       3
+        --n_per_roi       3 \
+        --reject-clean-bg \
+        --min-bg-quality   0.7 \
+        --bg-blur-threshold 100.0
 ```
 
 **이미지 수 확인:**
@@ -106,7 +121,7 @@ for ds in DATASETS:
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
+    --dataset_keys         mvtec_cable mvtec_pill mvtec_wood mvtec_metal_nut visa_cashew severstal \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --device               cpu
@@ -145,7 +160,7 @@ PaDiM 3조건 학습 및 AUROC 측정. **Colab Pro A100 권장.**
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         isp_LSM_1 mvtec_cable visa_cashew visa_pcb \
+    --dataset_keys         mvtec_cable mvtec_pill mvtec_wood mvtec_metal_nut visa_cashew severstal \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --image_size           256
@@ -206,7 +221,7 @@ with open(f"{os.environ['EXP3_OUT']}/exp3_summary.md") as f:
 
 ## 주의사항
 
-- **AD 모드**: PaDiM 학습 4조건 × 4데이터셋 = 12회 학습. Colab Pro A100 기준 약 30-60분 소요.
+- **AD 모드**: PaDiM 학습 3조건 × 6데이터셋 = 18회 학습. Colab Pro A100 기준 약 45-90분 소요.
 - **FID 소표본 경고**: `fid_unstable: true`이면 real 패치 수가 50개 미만 — 값은 참고용.
-- **visa_pcb**: pcb4 단독 사용 (dataset_config.json 및 평가 스크립트 모두 pcb4 기준).
+- **severstal**: full-frame strip 도메인(다른 5셋은 object-centric). profiling/prompts/normal_dir 구성이 상이 — 실행 전 산출물 확인.
 - **Test set 원칙**: 합성 이미지는 train에만 포함. test/defect는 항상 real 이미지만.

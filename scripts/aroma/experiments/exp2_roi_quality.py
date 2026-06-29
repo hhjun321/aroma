@@ -182,6 +182,43 @@ def compute_metrics(
 
 
 # ---------------------------------------------------------------------------
+# Budget equalization (fair comparison)
+# ---------------------------------------------------------------------------
+
+def _equalize_budget(
+    aroma_sel: List[Dict[str, Any]],
+    random_sel: List[Dict[str, Any]],
+    seed: int,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
+    """
+    Subsample the larger selection down to ``n = min(len(aroma), len(random))``
+    so coverage/entropy/gini are compared at an EQUAL selection budget.
+
+    Coverage metrics are monotone in n_selected: a strategy that selects more
+    ROIs trivially covers more cells. When AROMA and Random were produced with
+    different budgets (e.g. severstal AROMA=1690 vs Random=200, a step3-vs-exp2
+    budget mismatch), the raw comparison is confounded. Equalizing removes the
+    n_selected advantage so the metrics reflect selection *quality*, not volume.
+
+    Deterministic (fixed seed). Only the larger list is subsampled; the smaller
+    is returned unchanged. When both sizes already match this is a no-op, so the
+    existing matched-budget datasets are byte-identical.
+    """
+    n = min(len(aroma_sel), len(random_sel))
+
+    def _sub(lst: List[Dict[str, Any]], tag: str, s: int) -> List[Dict[str, Any]]:
+        if len(lst) <= n:
+            return lst
+        rng = np.random.default_rng(s)
+        idx = sorted(rng.choice(len(lst), size=n, replace=False).tolist())
+        logger.info("equalize_budget: subsampled %s %d -> %d (seed=%d)",
+                    tag, len(lst), n, s)
+        return [lst[i] for i in idx]
+
+    return _sub(aroma_sel, "aroma", seed), _sub(random_sel, "random", seed + 1), n
+
+
+# ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
 
@@ -299,6 +336,8 @@ def run(
     random_roi_dir: str,
     dataset_keys: List[str],
     output_dir: str,
+    equalize_budget: bool = True,
+    seed: int = 42,
 ) -> Dict[str, Any]:
     results: Dict[str, Any] = {}
 
@@ -308,9 +347,16 @@ def run(
             continue
 
         cands = data["candidates"]
+        aroma_sel, random_sel = data["aroma_selected"], data["random_selected"]
+        n_equalized: Optional[int] = None
+        if equalize_budget:
+            aroma_sel, random_sel, n_equalized = _equalize_budget(
+                aroma_sel, random_sel, seed,
+            )
         results[ds] = {
-            "aroma":  compute_metrics(data["aroma_selected"],  cands),
-            "random": compute_metrics(data["random_selected"], cands),
+            "aroma":  compute_metrics(aroma_sel,  cands),
+            "random": compute_metrics(random_sel, cands),
+            "n_equalized": n_equalized,
         }
         logger.info(
             "  %s  AROMA morph=%.4f ctx=%.4f rare=%.4f entropy=%.4f gini=%.4f",
@@ -365,6 +411,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="비교할 데이터셋 키 목록 (예: isp_LSM_1 mvtec_cable)")
     p.add_argument("--output_dir",     required=True,
                    help="exp2_results.json, exp2_summary.md 저장 디렉터리")
+    p.add_argument("--no_equalize_budget", dest="equalize_budget",
+                   action="store_false",
+                   help="AROMA/Random 선택 수(n_selected)를 동일화하지 않음 "
+                        "(기본: 동일화 ON — 작은 쪽 예산으로 큰 쪽 서브샘플)")
+    p.add_argument("--seed", type=int, default=42,
+                   help="예산 동일화 서브샘플 시드 (기본 42)")
     return p.parse_args(argv)
 
 
@@ -375,6 +427,8 @@ def main(argv=None) -> None:
         random_roi_dir=args.random_roi_dir,
         dataset_keys=args.dataset_keys,
         output_dir=args.output_dir,
+        equalize_budget=args.equalize_budget,
+        seed=args.seed,
     )
     if result.get("status") != "ok":
         sys.exit(1)
