@@ -255,6 +255,68 @@ def _resolve_severstal_masks(
     return mask_map, class_mask_map
 
 
+# ---------------------------------------------------------------------------
+# dataset_config.json — config-driven dataset resolution (ported from exp3).
+# Lets generic handlers (e.g. visa_*) resolve non-trivial key→folder mappings
+# (visa_macaroni → macaroni1, visa_pcb → pcb4) from a single source of truth.
+# ---------------------------------------------------------------------------
+
+_DS_CFG_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_dataset_config() -> Dict[str, Any]:
+    """Load dataset_config.json once (env DATASET_CONFIG / AROMA_REF / clone default)."""
+    global _DS_CFG_CACHE
+    if _DS_CFG_CACHE is not None:
+        return _DS_CFG_CACHE
+    cands = [
+        os.environ.get("DATASET_CONFIG"),
+        os.path.join(os.environ.get("AROMA_REF", ""), "dataset_config.json"),
+        "/content/AROMA/dataset_config.json",
+    ]
+    for c in cands:
+        if c and Path(c).exists():
+            try:
+                with open(c, encoding="utf-8") as f:
+                    _DS_CFG_CACHE = json.load(f)
+                logger.info("dataset_config loaded: %s", c)
+                return _DS_CFG_CACHE
+            except Exception as e:
+                logger.warning("dataset_config load failed %s: %s", c, e)
+    logger.warning("dataset_config.json not found (set DATASET_CONFIG or AROMA_REF)")
+    _DS_CFG_CACHE = {}
+    return _DS_CFG_CACHE
+
+
+def _resolve_masks_generic(defect_paths: List[str], root: Path) -> Dict[str, str]:
+    """Resolve GT masks across mvtec/severstal/visa conventions. First hit wins.
+
+    Per defect image at <root>/test/<type>/<stem>.<ext>, tries:
+      ground_truth/<type>/<stem>_mask.png  (MVTec)
+      ground_truth/<type>/<stem>.png        (VisA prepared)
+      masks/<type>/<stem>.png
+      masks/<type>/<stem>_mask.png
+      ground_truth/<type>/<filename>
+    Missing masks are skipped (that defect carries no bbox label).
+    """
+    root = Path(root)
+    mapping: Dict[str, str] = {}
+    for img_p in defect_paths:
+        p = Path(img_p)
+        typ, stem = p.parent.name, p.stem
+        for m in (
+            root / "ground_truth" / typ / f"{stem}_mask.png",
+            root / "ground_truth" / typ / f"{stem}.png",
+            root / "masks" / typ / f"{stem}.png",
+            root / "masks" / typ / f"{stem}_mask.png",
+            root / "ground_truth" / typ / p.name,
+        ):
+            if m.exists():
+                mapping[img_p] = str(m)
+                break
+    return mapping
+
+
 def _get_image_lists(
     dataset_key: str,
     real_data_dir: str,
@@ -323,6 +385,38 @@ def _get_image_lists(
         train_normal, test_good = _split_normal(all_normal, test_split=test_split, seed=seed)
         test_defect  = _glob_images(str(ds / "Images" / "Anomaly"))
         mask_map     = _resolve_visa_masks(test_defect, str(ds / "Masks" / "Anomaly"))
+
+    elif dataset_key.startswith("visa_"):
+        # Generic config-driven VisA handler. dataset_config.json maps the key
+        # to the PREPARED layout (<cat>/train/good + test/{good,anomaly} +
+        # ground_truth), including non-trivial folders (visa_macaroni → macaroni1).
+        # visa_cashew / visa_pcb keep their explicit Data/-layout branches ABOVE
+        # (elif order: specific keys win before this generic fallback), so their
+        # behavior is unchanged.
+        entry = _load_dataset_config().get(dataset_key)
+        if not entry or not entry.get("image_dir"):
+            logger.warning("visa dataset_key not in dataset_config: %s", dataset_key)
+            return None
+        image_dir = Path(entry["image_dir"])           # .../<cat>/train/good
+        if not image_dir.exists():
+            logger.warning("%s image_dir missing: %s", dataset_key, image_dir)
+            return None
+        root = image_dir.parent.parent                 # .../<cat>
+        train_normal = _glob_images(str(image_dir))
+        test_good    = _glob_images(str(root / "test" / "good"))
+        seed_dirs = entry.get("seed_dirs")
+        if seed_dirs:
+            defect_dirs = [Path(d) for d in seed_dirs]
+        else:
+            troot = root / "test"
+            defect_dirs = (
+                [p for p in sorted(troot.iterdir()) if p.is_dir() and p.name != "good"]
+                if troot.exists() else []
+            )
+        test_defect = []
+        for d in defect_dirs:
+            test_defect.extend(_glob_images(str(d)))
+        mask_map = _resolve_masks_generic(test_defect, root)
 
     elif dataset_key == "severstal":
         # prepare_severstal.py layout:
