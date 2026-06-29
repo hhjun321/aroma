@@ -404,7 +404,12 @@ def _get_image_lists(
         root = image_dir.parent.parent                 # .../<cat>
         train_normal = _glob_images(str(image_dir))
         test_good    = _glob_images(str(root / "test" / "good"))
-        seed_dirs = entry.get("seed_dirs")
+        # dataset_config visa entries use singular "seed_dir"; mvtec/isp use
+        # plural "seed_dirs". Honor either (config = source of truth); else scan
+        # test/<non-good> (robust to multi-defect-dir layouts).
+        seed_dirs = entry.get("seed_dirs") or (
+            [entry["seed_dir"]] if entry.get("seed_dir") else None
+        )
         if seed_dirs:
             defect_dirs = [Path(d) for d in seed_dirs]
         else:
