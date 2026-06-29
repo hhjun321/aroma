@@ -1,0 +1,346 @@
+{
+  "severstal": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.39,
+        "map50_95": 0.172,
+        "precision": 0.4484,
+        "recall": 0.4276,
+        "n_train": 2534,
+        "n_real_train": 2534,
+        "n_synth_train": 0,
+        "n_seeds": 3,
+        "per_seed": {
+          "1": {
+            "map50": 0.4163,
+            "map50_95": 0.1859,
+            "precision": 0.4759,
+            "recall": 0.4189
+          },
+          "2": {
+            "map50": 0.3767,
+            "map50_95": 0.164,
+            "precision": 0.4458,
+            "recall": 0.4558
+          },
+          "43": {
+            "map50": 0.3769,
+            "map50_95": 0.1662,
+            "precision": 0.4235,
+            "recall": 0.4081
+          }
+        },
+        "std": {
+          "map50": 0.0228,
+          "map50_95": 0.0121,
+          "precision": 0.0263,
+          "recall": 0.025
+        },
+        "ci95": {
+          "map50": [
+            0.3333,
+            0.4466
+          ],
+          "map50_95": [
+            0.1421,
+            0.202
+          ],
+          "precision": [
+            0.3831,
+            0.5137
+          ],
+          "recall": [
+            0.3655,
+            0.4897
+          ]
+        },
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2/severstal_casda_1.0_cleanbg/_seeds/seed1/severstal/yolov8n/baseline/weights/best.pt",
+        "n_synth_per_class": {},
+        "per_class": {
+          "c1": {
+            "map50": 0.3458,
+            "map50_95": 0.1107,
+            "precision": 0.4893,
+            "recall": 0.361
+          },
+          "c2": {
+            "map50": 0.1998,
+            "map50_95": 0.0755,
+            "precision": 0.2687,
+            "recall": 0.2868
+          },
+          "c3": {
+            "map50": 0.5171,
+            "map50_95": 0.244,
+            "precision": 0.507,
+            "recall": 0.5566
+          },
+          "c4": {
+            "map50": 0.4972,
+            "map50_95": 0.2581,
+            "precision": 0.5286,
+            "recall": 0.506
+          }
+        }
+      },
+      "random": {
+        "map50": 0.3428,
+        "map50_95": 0.1509,
+        "precision": 0.4946,
+        "recall": 0.3509,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "n_seeds": 3,
+        "per_seed": {
+          "1": {
+            "map50": 0.3518,
+            "map50_95": 0.1574,
+            "precision": 0.6137,
+            "recall": 0.323
+          },
+          "2": {
+            "map50": 0.3523,
+            "map50_95": 0.152,
+            "precision": 0.4642,
+            "recall": 0.3704
+          },
+          "43": {
+            "map50": 0.3244,
+            "map50_95": 0.1434,
+            "precision": 0.4059,
+            "recall": 0.3593
+          }
+        },
+        "std": {
+          "map50": 0.016,
+          "map50_95": 0.0071,
+          "precision": 0.1072,
+          "recall": 0.0248
+        },
+        "ci95": {
+          "map50": [
+            0.3032,
+            0.3825
+          ],
+          "map50_95": [
+            0.1334,
+            0.1685
+          ],
+          "precision": [
+            0.2283,
+            0.7609
+          ],
+          "recall": [
+            0.2893,
+            0.4125
+          ]
+        },
+        "n_synth_per_class": {
+          "0": 369,
+          "1": 85,
+          "2": 1860,
+          "3": 220
+        },
+        "per_class": {
+          "c1": {
+            "map50": 0.2066,
+            "map50_95": 0.0663,
+            "precision": 0.4541,
+            "recall": 0.1753
+          },
+          "c2": {
+            "map50": 0.1659,
+            "map50_95": 0.0524,
+            "precision": 0.5266,
+            "recall": 0.1568
+          },
+          "c3": {
+            "map50": 0.487,
+            "map50_95": 0.2247,
+            "precision": 0.4405,
+            "recall": 0.5655
+          },
+          "c4": {
+            "map50": 0.5117,
+            "map50_95": 0.2602,
+            "precision": 0.5572,
+            "recall": 0.5059
+          }
+        }
+      },
+      "casda": {
+        "map50": 0.3381,
+        "map50_95": 0.1452,
+        "precision": 0.4838,
+        "recall": 0.3468,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "n_seeds": 3,
+        "per_seed": {
+          "1": {
+            "map50": 0.3621,
+            "map50_95": 0.1614,
+            "precision": 0.53,
+            "recall": 0.3458
+          },
+          "2": {
+            "map50": 0.3442,
+            "map50_95": 0.1459,
+            "precision": 0.4795,
+            "recall": 0.3611
+          },
+          "43": {
+            "map50": 0.308,
+            "map50_95": 0.1284,
+            "precision": 0.4419,
+            "recall": 0.3335
+          }
+        },
+        "std": {
+          "map50": 0.0276,
+          "map50_95": 0.0165,
+          "precision": 0.0442,
+          "recall": 0.0138
+        },
+        "ci95": {
+          "map50": [
+            0.2696,
+            0.4066
+          ],
+          "map50_95": [
+            0.1042,
+            0.1862
+          ],
+          "precision": [
+            0.374,
+            0.5936
+          ],
+          "recall": [
+            0.3125,
+            0.3811
+          ]
+        },
+        "n_synth_per_class": {
+          "0": 793,
+          "1": 175,
+          "2": 794,
+          "3": 772
+        },
+        "per_class": {
+          "c1": {
+            "map50": 0.2484,
+            "map50_95": 0.0759,
+            "precision": 0.458,
+            "recall": 0.2445
+          },
+          "c2": {
+            "map50": 0.1829,
+            "map50_95": 0.0636,
+            "precision": 0.4944,
+            "recall": 0.1341
+          },
+          "c3": {
+            "map50": 0.4612,
+            "map50_95": 0.2097,
+            "precision": 0.4208,
+            "recall": 0.5556
+          },
+          "c4": {
+            "map50": 0.4598,
+            "map50_95": 0.2316,
+            "precision": 0.5621,
+            "recall": 0.4529
+          }
+        }
+      },
+      "aroma": {
+        "map50": 0.3565,
+        "map50_95": 0.1665,
+        "precision": 0.4576,
+        "recall": 0.3746,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "n_seeds": 3,
+        "per_seed": {
+          "1": {
+            "map50": 0.3616,
+            "map50_95": 0.1759,
+            "precision": 0.4763,
+            "recall": 0.3684
+          },
+          "2": {
+            "map50": 0.3268,
+            "map50_95": 0.1455,
+            "precision": 0.426,
+            "recall": 0.3364
+          },
+          "43": {
+            "map50": 0.3811,
+            "map50_95": 0.1781,
+            "precision": 0.4706,
+            "recall": 0.4189
+          }
+        },
+        "std": {
+          "map50": 0.0275,
+          "map50_95": 0.0182,
+          "precision": 0.0275,
+          "recall": 0.0416
+        },
+        "ci95": {
+          "map50": [
+            0.2882,
+            0.4248
+          ],
+          "map50_95": [
+            0.1212,
+            0.2118
+          ],
+          "precision": [
+            0.3892,
+            0.5261
+          ],
+          "recall": [
+            0.2712,
+            0.4779
+          ]
+        },
+        "n_synth_per_class": {
+          "0": 655,
+          "1": 429,
+          "2": 916,
+          "3": 534
+        },
+        "per_class": {
+          "c1": {
+            "map50": 0.2405,
+            "map50_95": 0.0857,
+            "precision": 0.4994,
+            "recall": 0.2112
+          },
+          "c2": {
+            "map50": 0.1373,
+            "map50_95": 0.0517,
+            "precision": 0.207,
+            "recall": 0.2118
+          },
+          "c3": {
+            "map50": 0.5068,
+            "map50_95": 0.2455,
+            "precision": 0.5156,
+            "recall": 0.5443
+          },
+          "c4": {
+            "map50": 0.5414,
+            "map50_95": 0.2831,
+            "precision": 0.6085,
+            "recall": 0.5311
+          }
+        }
+      }
+    }
+  }
+}

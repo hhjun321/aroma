@@ -1,0 +1,166 @@
+{
+  "severstal": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.4163,
+        "map50_95": 0.1859,
+        "precision": 0.4759,
+        "recall": 0.4189,
+        "n_train": 2534,
+        "n_real_train": 2534,
+        "n_synth_train": 0,
+        "per_class": {
+          "c1": {
+            "map50": 0.3669,
+            "map50_95": 0.1183,
+            "precision": 0.6064,
+            "recall": 0.2876
+          },
+          "c2": {
+            "map50": 0.2257,
+            "map50_95": 0.0917,
+            "precision": 0.3467,
+            "recall": 0.2143
+          },
+          "c3": {
+            "map50": 0.5269,
+            "map50_95": 0.2535,
+            "precision": 0.4474,
+            "recall": 0.6031
+          },
+          "c4": {
+            "map50": 0.5458,
+            "map50_95": 0.2799,
+            "precision": 0.5032,
+            "recall": 0.5705
+          }
+        },
+        "n_synth_per_class": {},
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2/severstal_casda/_seeds/seed1/severstal/yolov8n/baseline/weights/best.pt"
+      },
+      "random": {
+        "map50": 0.3867,
+        "map50_95": 0.1755,
+        "precision": 0.5213,
+        "recall": 0.3661,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "per_class": {
+          "c1": {
+            "map50": 0.2666,
+            "map50_95": 0.0874,
+            "precision": 0.5918,
+            "recall": 0.1792
+          },
+          "c2": {
+            "map50": 0.1867,
+            "map50_95": 0.0739,
+            "precision": 0.3937,
+            "recall": 0.1667
+          },
+          "c3": {
+            "map50": 0.4953,
+            "map50_95": 0.239,
+            "precision": 0.5463,
+            "recall": 0.5041
+          },
+          "c4": {
+            "map50": 0.5982,
+            "map50_95": 0.3015,
+            "precision": 0.5532,
+            "recall": 0.6144
+          }
+        },
+        "n_synth_per_class": {
+          "0": 369,
+          "1": 85,
+          "2": 1860,
+          "3": 220
+        }
+      },
+      "casda": {
+        "map50": 0.433,
+        "map50_95": 0.1943,
+        "precision": 0.5599,
+        "recall": 0.4087,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "per_class": {
+          "c1": {
+            "map50": 0.357,
+            "map50_95": 0.1228,
+            "precision": 0.5895,
+            "recall": 0.2788
+          },
+          "c2": {
+            "map50": 0.2987,
+            "map50_95": 0.1175,
+            "precision": 0.4367,
+            "recall": 0.3333
+          },
+          "c3": {
+            "map50": 0.5288,
+            "map50_95": 0.2493,
+            "precision": 0.5623,
+            "recall": 0.5462
+          },
+          "c4": {
+            "map50": 0.5476,
+            "map50_95": 0.2877,
+            "precision": 0.6511,
+            "recall": 0.4765
+          }
+        },
+        "n_synth_per_class": {
+          "0": 793,
+          "1": 175,
+          "2": 794,
+          "3": 772
+        }
+      },
+      "aroma": {
+        "map50": 0.3132,
+        "map50_95": 0.1548,
+        "precision": 0.392,
+        "recall": 0.3247,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "per_class": {
+          "c1": {
+            "map50": 0.1862,
+            "map50_95": 0.0716,
+            "precision": 0.3815,
+            "recall": 0.1814
+          },
+          "c2": {
+            "map50": 0.0675,
+            "map50_95": 0.0349,
+            "precision": 0.1322,
+            "recall": 0.0714
+          },
+          "c3": {
+            "map50": 0.4803,
+            "map50_95": 0.2312,
+            "precision": 0.4884,
+            "recall": 0.5289
+          },
+          "c4": {
+            "map50": 0.5188,
+            "map50_95": 0.2813,
+            "precision": 0.5659,
+            "recall": 0.5172
+          }
+        },
+        "n_synth_per_class": {
+          "0": 655,
+          "1": 429,
+          "2": 916,
+          "3": 534
+        }
+      }
+    }
+  }
+}

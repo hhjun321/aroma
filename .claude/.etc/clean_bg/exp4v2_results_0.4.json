@@ -1,0 +1,298 @@
+{
+  "severstal": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.3769,
+        "map50_95": 0.1662,
+        "precision": 0.4235,
+        "recall": 0.4081,
+        "n_train": 2534,
+        "n_real_train": 2534,
+        "n_synth_train": 0,
+        "n_seeds": 1,
+        "per_seed": {
+          "43": {
+            "map50": 0.3769,
+            "map50_95": 0.1662,
+            "precision": 0.4235,
+            "recall": 0.4081
+          }
+        },
+        "std": {
+          "map50": 0.0,
+          "map50_95": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "ci95": {
+          "map50": [
+            0.3769,
+            0.3769
+          ],
+          "map50_95": [
+            0.1662,
+            0.1662
+          ],
+          "precision": [
+            0.4235,
+            0.4235
+          ],
+          "recall": [
+            0.4081,
+            0.4081
+          ]
+        },
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2/severstal_casda_0.4_cleanbg/_seeds/seed43/severstal/yolov8n/baseline/weights/best.pt",
+        "n_synth_per_class": {},
+        "per_class": {
+          "c1": {
+            "map50": 0.3163,
+            "map50_95": 0.1056,
+            "precision": 0.4021,
+            "recall": 0.4022
+          },
+          "c2": {
+            "map50": 0.1977,
+            "map50_95": 0.0636,
+            "precision": 0.2354,
+            "recall": 0.2414
+          },
+          "c3": {
+            "map50": 0.5187,
+            "map50_95": 0.2434,
+            "precision": 0.5135,
+            "recall": 0.5458
+          },
+          "c4": {
+            "map50": 0.4747,
+            "map50_95": 0.2523,
+            "precision": 0.543,
+            "recall": 0.4432
+          }
+        }
+      },
+      "random": {
+        "map50": 0.3573,
+        "map50_95": 0.1571,
+        "precision": 0.4409,
+        "recall": 0.3912,
+        "n_train": 3547,
+        "n_real_train": 2534,
+        "n_synth_train": 1013,
+        "n_seeds": 1,
+        "per_seed": {
+          "43": {
+            "map50": 0.3573,
+            "map50_95": 0.1571,
+            "precision": 0.4409,
+            "recall": 0.3912
+          }
+        },
+        "std": {
+          "map50": 0.0,
+          "map50_95": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "ci95": {
+          "map50": [
+            0.3573,
+            0.3573
+          ],
+          "map50_95": [
+            0.1571,
+            0.1571
+          ],
+          "precision": [
+            0.4409,
+            0.4409
+          ],
+          "recall": [
+            0.3912,
+            0.3912
+          ]
+        },
+        "n_synth_per_class": {
+          "0": 169,
+          "1": 42,
+          "2": 710,
+          "3": 92
+        },
+        "per_class": {
+          "c1": {
+            "map50": 0.2541,
+            "map50_95": 0.085,
+            "precision": 0.3989,
+            "recall": 0.2901
+          },
+          "c2": {
+            "map50": 0.1812,
+            "map50_95": 0.0556,
+            "precision": 0.3003,
+            "recall": 0.2414
+          },
+          "c3": {
+            "map50": 0.5031,
+            "map50_95": 0.2353,
+            "precision": 0.5214,
+            "recall": 0.5184
+          },
+          "c4": {
+            "map50": 0.4909,
+            "map50_95": 0.2523,
+            "precision": 0.5431,
+            "recall": 0.5152
+          }
+        }
+      },
+      "casda": {
+        "map50": 0.3331,
+        "map50_95": 0.1465,
+        "precision": 0.3828,
+        "recall": 0.3667,
+        "n_train": 3547,
+        "n_real_train": 2534,
+        "n_synth_train": 1013,
+        "n_seeds": 1,
+        "per_seed": {
+          "43": {
+            "map50": 0.3331,
+            "map50_95": 0.1465,
+            "precision": 0.3828,
+            "recall": 0.3667
+          }
+        },
+        "std": {
+          "map50": 0.0,
+          "map50_95": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "ci95": {
+          "map50": [
+            0.3331,
+            0.3331
+          ],
+          "map50_95": [
+            0.1465,
+            0.1465
+          ],
+          "precision": [
+            0.3828,
+            0.3828
+          ],
+          "recall": [
+            0.3667,
+            0.3667
+          ]
+        },
+        "n_synth_per_class": {
+          "0": 291,
+          "1": 67,
+          "2": 336,
+          "3": 319
+        },
+        "per_class": {
+          "c1": {
+            "map50": 0.208,
+            "map50_95": 0.0638,
+            "precision": 0.3521,
+            "recall": 0.2341
+          },
+          "c2": {
+            "map50": 0.1912,
+            "map50_95": 0.0583,
+            "precision": 0.3143,
+            "recall": 0.1819
+          },
+          "c3": {
+            "map50": 0.4717,
+            "map50_95": 0.2245,
+            "precision": 0.371,
+            "recall": 0.6001
+          },
+          "c4": {
+            "map50": 0.4614,
+            "map50_95": 0.2394,
+            "precision": 0.4938,
+            "recall": 0.4508
+          }
+        }
+      },
+      "aroma": {
+        "map50": 0.3183,
+        "map50_95": 0.1466,
+        "precision": 0.3978,
+        "recall": 0.3511,
+        "n_train": 3547,
+        "n_real_train": 2534,
+        "n_synth_train": 1013,
+        "n_seeds": 1,
+        "per_seed": {
+          "43": {
+            "map50": 0.3183,
+            "map50_95": 0.1466,
+            "precision": 0.3978,
+            "recall": 0.3511
+          }
+        },
+        "std": {
+          "map50": 0.0,
+          "map50_95": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "ci95": {
+          "map50": [
+            0.3183,
+            0.3183
+          ],
+          "map50_95": [
+            0.1466,
+            0.1466
+          ],
+          "precision": [
+            0.3978,
+            0.3978
+          ],
+          "recall": [
+            0.3511,
+            0.3511
+          ]
+        },
+        "n_synth_per_class": {
+          "0": 286,
+          "1": 152,
+          "2": 357,
+          "3": 218
+        },
+        "per_class": {
+          "c1": {
+            "map50": 0.1781,
+            "map50_95": 0.057,
+            "precision": 0.5406,
+            "recall": 0.1253
+          },
+          "c2": {
+            "map50": 0.1227,
+            "map50_95": 0.0525,
+            "precision": 0.2198,
+            "recall": 0.1207
+          },
+          "c3": {
+            "map50": 0.4825,
+            "map50_95": 0.2266,
+            "precision": 0.4037,
+            "recall": 0.5877
+          },
+          "c4": {
+            "map50": 0.4898,
+            "map50_95": 0.2502,
+            "precision": 0.4272,
+            "recall": 0.5706
+          }
+        }
+      }
+    }
+  }
+}

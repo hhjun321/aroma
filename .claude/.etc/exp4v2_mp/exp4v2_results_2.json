@@ -1,0 +1,66 @@
+{
+  "visa_macaroni": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.1043,
+        "map50_95": 0.0284,
+        "precision": 0.3291,
+        "recall": 0.1818,
+        "n_train": 70,
+        "n_real_train": 70,
+        "n_synth_train": 0,
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2_mp/objcentric/_seeds/seed2/visa_macaroni/yolov8n/baseline/weights/best.pt"
+      },
+      "random": {
+        "map50": 0.1011,
+        "map50_95": 0.0238,
+        "precision": 0.4799,
+        "recall": 0.0909,
+        "n_train": 105,
+        "n_real_train": 70,
+        "n_synth_train": 35
+      },
+      "aroma": {
+        "map50": 0.0627,
+        "map50_95": 0.0203,
+        "precision": 0.2025,
+        "recall": 0.1299,
+        "n_train": 105,
+        "n_real_train": 70,
+        "n_synth_train": 35
+      }
+    }
+  },
+  "visa_fryum": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.1587,
+        "map50_95": 0.1078,
+        "precision": 0.4776,
+        "recall": 0.1416,
+        "n_train": 70,
+        "n_real_train": 70,
+        "n_synth_train": 0,
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2_mp/objcentric/_seeds/seed2/visa_fryum/yolov8n/baseline/weights/best.pt"
+      },
+      "random": {
+        "map50": 0.2137,
+        "map50_95": 0.1146,
+        "precision": 0.5126,
+        "recall": 0.2254,
+        "n_train": 105,
+        "n_real_train": 70,
+        "n_synth_train": 35
+      },
+      "aroma": {
+        "map50": 0.1638,
+        "map50_95": 0.1078,
+        "precision": 0.3706,
+        "recall": 0.1831,
+        "n_train": 105,
+        "n_real_train": 70,
+        "n_synth_train": 35
+      }
+    }
+  }
+}
