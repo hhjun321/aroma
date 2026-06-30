@@ -87,9 +87,9 @@ os.environ['CROPS_AROMA']   = f"{os.environ['ARM_ROOT']}/aroma/crops"
 os.environ['CROPS_RANDOM']  = f"{os.environ['ARM_ROOT']}/random/crops"
 
 # --- per-arm ControlNet dataset / generated / Poisson 합성 출력 ---
-# ⚡ CN_ROOT(hints + generated)는 LOCAL(/content)에 — 수천 PNG를 Drive에 쓰면 매우 느림.
-#    intermediate라 영속 불요(세션 내 §3b→§3c 소비). 세션 리셋 시 재생성.
-os.environ['CN_ROOT']     = "/content/compound_cn/severstal"
+# CN_ROOT(hints + train.jsonl + generated)는 Drive에 — CPU(§3a)→GPU(§3b) 세션 분리 시
+# 산출물 영속 필요(세션 재기동하면 /content 로컬은 소실). prepare가 느리면 --workers -1로 완화.
+os.environ['CN_ROOT']     = f"{os.environ['AROMA_OUT']}/compound_cn/severstal"
 os.environ['SYN_CASDA']   = f"{os.environ['AROMA_OUT']}/compound_synth/severstal_casda"
 os.environ['SYN_AROMA']   = f"{os.environ['AROMA_OUT']}/compound_synth/severstal_aroma"
 os.environ['SYN_RANDOM']  = f"{os.environ['AROMA_OUT']}/compound_synth/severstal_random"
@@ -293,37 +293,15 @@ def prepare(arm):
 CN = {arm: prepare(arm) for arm in ARMS}
 # → 각 $CN_ROOT/{arm}/ 아래 hints + train.jsonl
 
-### 3a.5 — train.jsonl prompt를 각 arm 자기 prompt로 교체 (AROMA prompt 추론 참가)
+### 3a.5 — (비활성, 결정 (i)) AROMA step2 prompt patch 미사용
 
-CASDA packager는 train.jsonl prompt를 **CASDA식 재생성**한다. AROMA의 step2 prompt를 실제 생성에 쓰려면, prepare 후 jsonl prompt를 **입력 csv의 prompt**(arm 자기 것)로 덮어쓴다. aroma/random→AROMA step2 prompt, casda→CASDA prompt.
-
-```python
-import json, csv as _csv, os
-def patch_prompts(arm):
-    keymap = {}
-    with open(ARMS[arm], encoding='utf-8') as f:
-        for row in _csv.DictReader(f):
-            k = f"{row['image_id']}_class{row['class_id']}_region{row['region_id']}"
-            keymap[k] = (row.get('prompt') or '').strip()
-    jl = f"{CN[arm]}/train.jsonl"
-    if not os.path.exists(jl):
-        print(f"  [skip] {arm}: no train.jsonl"); return
-    items = [json.loads(l) for l in open(jl, encoding='utf-8') if l.strip()]
-    n = 0
-    for e in items:
-        base = os.path.basename(e.get('hint','')).replace('_hint.png','')
-        p = keymap.get(base, '')
-        if p:
-            e['prompt'] = p; n += 1
-    with open(jl, 'w', encoding='utf-8') as f:
-        for e in items:
-            f.write(json.dumps(e, ensure_ascii=False) + '\n')
-    print(f"  {arm}: patched {n}/{len(items)} prompts ← csv (자기 arm prompt)")
-
-for arm in ARMS: patch_prompts(arm)
-```
-
-> ⚠️ **OOD 주의 (reviewer)**: 트레인된 ControlNet은 **CASDA prompt 분포로 학습**됨 → aroma/random arm에 AROMA step2 prompt를 넣으면 분포 밖(OOD)일 수 있고, casda는 in-distribution → **prompt-분포 이점이 casda에 유리한 confound**. 해석 시 명시. (대안: prompt를 3 arm 동일 생성기로 통일하면 confound 제거되나 AROMA prompt 기여는 미반영 — 사용자 결정=각 arm 자기 prompt.)
+> ⛔ **이 단계는 실행하지 않는다.** smoke 결과: AROMA step2 자유서술 prompt를 트레인된 ControlNet(CASDA-prompt 학습)에 넣으니 **OOD → 생성 비현실**(A/B 확인: 동일 hint에 CASDA식 prompt는 그럴듯, AROMA step2 prompt는 깨짐).
+>
+> **결정 (i)**: prompt patch 제거 → **packager가 재생성한 CASDA식 prompt 사용**. 이 prompt는 AROMA의 `defect_subtype`(형태 분류) + background_type로 CASDA 템플릿으로 생성 → **in-distribution + AROMA 형태결정 반영**("AROMA-informed prompt").
+>
+> **train.jsonl이 이미 patch됐다면 §3a prepare를 재실행**(packager 재생성 prompt로 깨끗한 jsonl 복원)한 뒤 이 셀을 건너뛰고 §3b로 진행. 어댑터 csv의 `prompt` 컬럼(AROMA step2 prompt)은 packager가 무시하므로 무해(prompt-ablation 시 참조용).
+>
+> 📝 논문: AROMA Stage2 prompt-generation은 **별도 컴포넌트로 기술**하되, ControlNet 생성은 트레인 모델 분포에 맞춘 in-distribution rendering(AROMA subtype → CASDA 템플릿)을 사용함을 명시.
 ```
 
 > ⚠️ **CLI 확인 필요:** `prepare_controlnet_data.py`의 정확한 플래그(`--roi_metadata` vs `--roi_csv`, `--output_dir` vs `--out`)는 클론 후 `!python $PREP --help`로 확인 후 교체.
@@ -331,6 +309,74 @@ for arm in ARMS: patch_prompts(arm)
 ### 3b. `test_controlnet.py` — ControlNet 생성  · 🔴 GPU
 
 학습된 best_model로 hint→결함 이미지 생성. `StableDiffusionControlNetPipeline`(canny), 30 steps, conditioning_scale 0.7, res 512.
+
+> ⚠️ **세션 재기동(CPU→GPU) 시 필수**: §0 env 셀을 **먼저 재실행**한 뒤, 아래 재초기화 셀로 `CN/ARMS/SYN/GEN` 변수를 env에서 재구성. (§1~§3a.5는 산출물이 Drive에 영속하므로 재실행 불요 — train.jsonl/hints 존재만 확인.)
+
+```python
+# === GPU 세션 재초기화 (§0 env 재실행 후) — §3a 메모리 변수 복원 ===
+import os, subprocess, sys, glob, json
+arms = ['casda', 'aroma', 'random']
+ARMS = {'casda':  os.environ['CSV_CASDA'],
+        'aroma':  os.environ['CSV_AROMA'],
+        'random': os.environ['CSV_RANDOM']}
+CN   = {a: f"{os.environ['CN_ROOT']}/{a}"  for a in arms}      # §3a prepare 산출(Drive)
+GEN  = {a: f"{CN[a]}/generated"            for a in arms}
+SYN  = {'casda':  os.environ['SYN_CASDA'],
+        'aroma':  os.environ['SYN_AROMA'],
+        'random': os.environ['SYN_RANDOM']}
+# 영속 산출 확인 (재기동 후에도 Drive에 있어야 함)
+for a in arms:
+    jl = f"{CN[a]}/train.jsonl"
+    n  = sum(1 for _ in open(jl, encoding='utf-8')) if os.path.exists(jl) else 'MISSING'
+    h  = len(glob.glob(f"{CN[a]}/hints/*.png"))
+    print(f"{a:7} jsonl={n}  hints={h}")
+# GPU 확인
+import torch; print("CUDA:", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "")
+```
+
+#### 3b-smoke. aroma 4장 먼저 (best_model 로드 + AROMA-prompt 생성품질 확인)
+
+전량 전에 aroma 4개만 생성 → best_model 로드·파이프라인·OOD prompt 영향 확인.
+
+```python
+import json, subprocess, sys, os, glob
+TEST = f"{os.environ['CASDA_SCRIPTS']}/test_controlnet.py"
+
+src  = f"{CN['aroma']}/train.jsonl"
+mini = f"{CN['aroma']}/train_smoke.jsonl"
+lines = [l for l in open(src, encoding='utf-8') if l.strip()][:4]
+open(mini, 'w', encoding='utf-8').writelines(lines)
+print("smoke:", len(lines), "entries")
+for l in lines[:2]:
+    e = json.loads(l); print("  prompt:", e.get('prompt','')[:90])
+
+out = f"{CN['aroma']}/generated_smoke"
+r = subprocess.run([sys.executable, TEST,
+    "--model_path", os.environ['BEST_MODEL'],
+    "--jsonl_path", mini,
+    "--output_dir", out,
+    "--num_inference_steps","30",
+    "--guidance_scale","7.5",
+    "--controlnet_conditioning_scale","0.7",
+    "--resolution","512"], capture_output=True, text=True)
+print("rc:", r.returncode)
+print('STDOUT tail:\n' + '\n'.join((r.stdout or '').splitlines()[-15:]))
+if r.returncode != 0:
+    print('STDERR tail:\n' + '\n'.join((r.stderr or '').splitlines()[-20:]))
+```
+
+```python
+# 생성물 육안 (AROMA prompt OOD 영향: 결함이 그럴듯한가?)
+from IPython.display import Image as IPImage, display
+gens = sorted(glob.glob(f"{out}/**/*.png", recursive=True))
+print("generated:", len(gens))
+for g in gens[:4]:
+    print(g); display(IPImage(g))
+```
+
+> smoke OK(rc=0 + 결함 그럴듯)면 아래 전량 셀 실행. rc≠0이면 STDERR 보고 — best_model 경로/diffusers 버전/hint 경로 resolution 점검.
+
+#### 3b-full. 3 arm 전량 생성
 
 ```python
 TEST = f"{os.environ['CASDA_SCRIPTS']}/test_controlnet.py"
@@ -389,6 +435,8 @@ for arm in ARMS: compose(arm)
 > ✅ **변환 해소(§3d)**: `compose_casda_images.py` 출력(`images/`+`masks/`full-frame+`metadata.json`)을 §3d 셀이 exp4v2 `annotations.json`으로 변환. mask_path=full-frame mask, source_roi/cluster_id=파일명 `_class{N}_`. §3→§4 연결 완성.
 
 ### 3d. composed → exp4v2 annotations 변환  · 🟢 CPU  (§3→§4 연결, 갭 해소)
+
+> 💾 **저장 정책**: SYN(=compose 합성 결과: `images/`+`masks/`+`annotations.json`)은 **반드시 Drive**(`SYN_*`=AROMA_OUT 하위). 이 합성셋은 **향후 성능비교(exp4v2 multi-seed/ratio sweep 등)서 반복 재사용**되므로 영속 필수. annotations.json의 `image_path`/`mask_path`는 Drive 절대경로 → 세션 넘어 유효. (§3b `generated/`만 로컬 중간물.) compose 출력이 로컬이면 안 됨 — §3c `--output-dir`이 `{SYN[arm]}/severstal`(Drive)인지 확인.
 
 `compose_casda_images.py` 출력 = `{images/, masks/(full-frame 1600×256), metadata.json}`, 파일명에 `_class{N}_`. exp4v2 `_load_synth_annotations`는 `{synth_root}/severstal/annotations.json`(list, 각 `image_path`/`mask_path`(full-frame)/`source_roi`(class{N} 포함)/`cluster_id`(1-4)/`dry_run`)를 읽음. 아래로 변환:
 

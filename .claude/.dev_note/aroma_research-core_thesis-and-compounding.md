@@ -137,6 +137,6 @@ roi_selected.json(arm) → [어댑터] → roi_metadata.csv(CASDA 스키마)
 
 **가이드**: `AROMA연구분석/colab_execute/compounding_controlnet_execute.md` (§0 env → §1 ROI → §2 어댑터+cap → §3a prepare → §3b generate[GPU] → §3c compose → §3d convert → §4 exp4v2[GPU] → §5 결과).
 
-**prompt 결정 변경 (D1-b → 각 arm 자기 prompt, 추론 참가)**: AROMA prompt-generation(step2)이 논문 기여이므로 **추론에 AROMA prompt 사용**(사용자 결정). 어댑터가 csv `prompt`에 roi_selected step2 prompt 보존 → 가이드 §3a.5가 prepare 후 train.jsonl prompt를 csv 값으로 덮어씀(packager 재생성분 교체). aroma/random=AROMA step2 prompt, casda=CASDA prompt. ⚠️ **OOD/confound**: 트레인 ControlNet=CASDA-prompt 학습 → AROMA prompt OOD 가능, casda in-distribution → prompt-분포가 casda에 유리한 confound. 해석/논문에 명시. (대안: 3 arm 동일 prompt 생성기로 통일 시 confound 제거되나 AROMA prompt 기여 미반영.) 논문 §방법에 AROMA Stage2 prompt-generation 기술 필요.
+**prompt 결정 (최종, 실측 기반)**: AROMA step2 자유서술 prompt를 추론에 쓰려 했으나(§3a.5 patch), **smoke 실측 결과 OOD로 생성 비현실** — A/B 확인: 동일 aroma hint에 CASDA식 prompt=그럴듯, AROMA step2 prompt=깨짐. casda smoke(CASDA hint+prompt)=정상이라 엔진·hint는 OK → **원인=prompt 분포 불일치**. → **결정 (i): §3a.5 patch 미사용**, packager 재생성 **CASDA식 prompt**(AROMA `defect_subtype`+background_type → CASDA 템플릿) 사용 = in-distribution + AROMA 형태결정 반영("AROMA-informed prompt"). AROMA step2 자유서술 prompt-generation은 **논문 별도 컴포넌트로 기술**하되 생성엔 미사용. (어댑터 csv prompt 컬럼은 packager 무시 → 무해, prompt-ablation 참조용.) train.jsonl 이미 patch됐으면 §3a prepare 재실행으로 복원.
 
 **남은 검증**: GPU 실행(best_model 추론); §3d 변환 후 exp4v2 annotations 로드 확인; composed→exp4v2 normal_image 매핑(metadata.json) 선택 보강; AROMA prompt OOD 영향 점검(생성물 육안).
