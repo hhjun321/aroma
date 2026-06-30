@@ -312,6 +312,45 @@ def _class_id(entry: Dict[str, Any]) -> int:
     return 1
 
 
+def _stratified_cap(entries: List[Any], max_rois: Optional[int]) -> List[Any]:
+    """Cap entries to at most max_rois, BALANCED across class_id (round-robin).
+
+    Deterministic — no RNG. Preserves each class's existing selection order
+    (roi_selected is already ranked by the strategy) and round-robins across
+    classes so a rare class (e.g. severstal c2) is not starved by a dominant one.
+    Returns entries unchanged when max_rois is None/<=0 or already small enough.
+    This caps GENERATION cost AND equalizes per-arm ROI count (fair single-factor
+    swap: every arm capped to the same N before ControlNet inference).
+    """
+    if max_rois is None or max_rois <= 0 or len(entries) <= max_rois:
+        return entries
+    from collections import OrderedDict
+    groups: "OrderedDict[int, List[Any]]" = OrderedDict()
+    for e in entries:
+        cid = _class_id(e) if isinstance(e, dict) else 1
+        groups.setdefault(cid, []).append(e)
+    picked: List[Any] = []
+    idxs = {k: 0 for k in groups}
+    keys = list(groups.keys())
+    while len(picked) < max_rois:
+        progressed = False
+        for k in keys:
+            if len(picked) >= max_rois:
+                break
+            i = idxs[k]
+            if i < len(groups[k]):
+                picked.append(groups[k][i])
+                idxs[k] += 1
+                progressed = True
+        if not progressed:
+            break
+    per_class = {k: sum(1 for e in picked
+                        if (_class_id(e) if isinstance(e, dict) else 1) == k) for k in keys}
+    logger.info("stratified_cap: %d → %d ROIs (max_rois=%d); per-class=%s",
+                len(entries), len(picked), max_rois, dict(per_class))
+    return picked
+
+
 # ---------------------------------------------------------------------------
 # Crop writing (crop-aligned image + mask PNGs)
 # ---------------------------------------------------------------------------
@@ -443,6 +482,7 @@ def adapt(
     background_type: str = "complex_pattern",
     image_root: Optional[str] = None,
     make_crops: bool = True,
+    max_rois: Optional[int] = None,
 ) -> int:
     """Convert an AROMA roi_selected.json into a CASDA-schema roi_metadata.csv.
 
@@ -476,6 +516,10 @@ def adapt(
         entries = json.load(f)
     if not isinstance(entries, list):
         raise ValueError(f"roi_selected.json must be a list, got {type(entries).__name__}")
+
+    # Class-stratified cap BEFORE conversion/crops: equalizes per-arm ROI count
+    # (fair swap) and bounds ControlNet generation cost. No-op when max_rois unset.
+    entries = _stratified_cap(entries, max_rois)
 
     by_mask, by_img_bbox = _load_morphology(morphology_csv) if morphology_csv else ({}, {})
 
@@ -612,6 +656,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="CASDA background_type label (default complex_pattern; severstal)")
     p.add_argument("--image_root", default=None,
                    help="Optional prefix to re-root image_path/defect_mask_path (default none)")
+    p.add_argument("--max_rois", type=int, default=None,
+                   help="Cap total ROIs (class-stratified round-robin) BEFORE conversion. "
+                        "Equalizes per-arm ROI count + bounds ControlNet cost. Default none.")
     crop_grp = p.add_mutually_exclusive_group()
     crop_grp.add_argument("--make_crops", dest="make_crops", action="store_true",
                           help="Write crop-aligned PNGs (default)")
@@ -632,6 +679,7 @@ def main(argv=None) -> None:
             background_type=args.background_type,
             image_root=args.image_root,
             make_crops=args.make_crops,
+            max_rois=args.max_rois,
         )
         print(f"Wrote {n} CASDA ROI rows → {args.output_csv}")
     except (FileNotFoundError, ValueError) as e:
