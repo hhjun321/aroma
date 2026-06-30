@@ -103,3 +103,40 @@ AROMA는 생성/합성 품질에 개입하지 않는다(copy-paste 사용). 현 
 - [ ] **power analysis**: carpet 마진 0.019가 3-seed std 수준 — compounding delta 측정 가능 도메인 존재 여부 사전 확인.
 - [ ] **claim 언어 scoping**: abstract/intro/figure caption/ALL_CONDITION_KEYS legend 전부 — 'CASDA' 무자격 사용 금지, 'general' → 'cross-regime robustness', 'no diffusion was run' 명시.
 - [ ] **blend parity 검증**: 발표된 exp4v2 run config에서 모든 arm이 동일 blend_mode였는지 확인(alpha/seamless 혼용 시 compositing confound).
+
+---
+
+## ⑦ 구현 (compounding 엔진) — 2026-06-30
+
+**엔진 확정 (⑤ 옵션 A 폐기)**: dev_note ⑤는 in-repo `stage4_diffusion_synthesis.py`(ControlNet-**Inpaint**) 구현을 제안했으나, 코드 추적 결과 **학습된 모델은 CASDA `test_controlnet.py`(StableDiffusionControlNetPipeline, SD-v1.5+canny) + Stage C Poisson** regime으로 학습됨(04-StageB/C). Inpaint pipeline(SD-inpainting base)에 넣으면 **regime 불일치(OOD)**. → 엔진 = **CASDA 실제 추론(ControlNetPipeline+Poisson), CASDA 스크립트 무수정 호출**. 트레인 모델: `Severstal/controlnet_training_v5.5/best_model`(save_pretrained: config.json+fp16 safetensors).
+
+**파이프라인 (단일인자 swap = roi_metadata.csv만 차이)**:
+```
+roi_selected.json(arm) → [어댑터] → roi_metadata.csv(CASDA 스키마)
+  → prepare_controlnet_data.py (hint 3채널 + train.jsonl 자동 — csv prompt 무시·재생성)
+  → test_controlnet.py(best_model, 30steps/cond0.7/512)
+  → compose_casda_images.py (Poisson; 출력 images/+masks/full-frame+metadata.json)
+  → [§3d 변환] composed → exp4v2 annotations.json
+  → exp4v2 4-way(baseline/random/casda/aroma) severstal, --class_mode multi, seeds 42 1 2
+```
+
+**신규 코드**: `scripts/aroma/aroma_to_casda_roi.py` (AROMA roi_selected.json + morphology_features.csv → CASDA roi_metadata.csv). py_compile OK, severstal 로컬 검증(헤더 byte-exact, morphology join 100%).
+- 필드: defect_bbox[x,y,w,h]→"(x1,y1,x2,y2)", class_id←class_key, region_id per-image, background_type=complex_pattern, linearity/solidity/extent/aspect←morphology join(defect_mask_path key), prompt="" (packager 재생성), roi_image_path/roi_mask_path←crop-aligned PNG(`--make_crops`).
+
+**확정 결정 (reviewer 대응)**:
+| 결정 | 값 | 근거 / reviewer 방어 |
+|------|-----|------|
+| **MAX_ROIS** | **1383** (= CASDA 가용 ROI, binding constraint; aroma 1690·random 1690을 trim) | **보고 하이퍼파라미터 아님.** 보고 budget = synth:real **0.4 (1013장/arm)**, 전 조건 동일+이전 run 동일. 1383=생성 풀(최소 조건에 맞춘 엄격 parity), ≥1013이라 학습 budget 커버. 본문 아닌 부록. |
+| **패키징 필터 3종 균일 무력화** | aroma/random(어댑터): roi_bbox==defect_bbox(edge skip)+area 큼+score 0.7. casda(cap셀): roi_bbox=defect_bbox, area.clip(≥100), stability/matching=0.7, rec=acceptable | CASDA 패키징은 **edge(경계마진)+area(≥100)+quality(stability≥0.3·matching≥0.5)** 3필터. AROMA full-strip 결함(bbox 큼·경계닿음)+저스케일 roi_score → 적용 시 차등 컷(aroma 우회·casda 1383→465). generation 엔진 아닌 selection-side 필터이고 각 arm 선택은 상류 확정 → **3 arm 균일 무력화 = 단일인자 swap 정합**. `prepare` CLI 미노출+코어 무수정 → csv 컬럼으로만 가능. ⚠️ compose가 roi_bbox로 placement 결정 시 영향 — severstal full-strip이라 무해 추정, 실행 시 확인. |
+| **compositions-per-roi=1** | 풀=MAX_ROIS×1=1383 | synth_ratio 0.4 trim 1013과 정합, ×5 폭증 회피 |
+| **synth_ratio=0.4** | exp4v2 cap=1013 | 최근 severstal cleanbg 0.4 run(real 2534/synth 1013)과 직접 비교 |
+
+**CASDA CLI 확정**: `prepare_controlnet_data.py --roi_metadata --output_dir --train_images --train_csv --skip_validation --workers`(default 0=순차→`-1` 병렬 필수); `test_controlnet.py --model_path --jsonl_path --output_dir --num_inference_steps --guidance_scale --controlnet_conditioning_scale --resolution`; `compose_casda_images.py --generated-dir --hint-dir --metadata-csv --summary-json --clean-images-dir --train-csv --output-dir --compositions-per-roi`.
+
+**경로/성능**: CASDA 데이터 루트(`/content/drive/MyDrive/data/Severstal`)≠AROMA(`.../Aroma`). CN_ROOT(hints+generated) **로컬(/content)** 권장(Drive PNG write 병목). `CSV_CASDA_FULL`(원본 읽기전용)≠`CSV_CASDA`(capped 출력, 원본 보호).
+
+**가이드**: `AROMA연구분석/colab_execute/compounding_controlnet_execute.md` (§0 env → §1 ROI → §2 어댑터+cap → §3a prepare → §3b generate[GPU] → §3c compose → §3d convert → §4 exp4v2[GPU] → §5 결과).
+
+**prompt 결정 변경 (D1-b → 각 arm 자기 prompt, 추론 참가)**: AROMA prompt-generation(step2)이 논문 기여이므로 **추론에 AROMA prompt 사용**(사용자 결정). 어댑터가 csv `prompt`에 roi_selected step2 prompt 보존 → 가이드 §3a.5가 prepare 후 train.jsonl prompt를 csv 값으로 덮어씀(packager 재생성분 교체). aroma/random=AROMA step2 prompt, casda=CASDA prompt. ⚠️ **OOD/confound**: 트레인 ControlNet=CASDA-prompt 학습 → AROMA prompt OOD 가능, casda in-distribution → prompt-분포가 casda에 유리한 confound. 해석/논문에 명시. (대안: 3 arm 동일 prompt 생성기로 통일 시 confound 제거되나 AROMA prompt 기여 미반영.) 논문 §방법에 AROMA Stage2 prompt-generation 기술 필요.
+
+**남은 검증**: GPU 실행(best_model 추론); §3d 변환 후 exp4v2 annotations 로드 확인; composed→exp4v2 normal_image 매핑(metadata.json) 선택 보강; AROMA prompt OOD 영향 점검(생성물 육안).

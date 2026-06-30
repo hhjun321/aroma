@@ -229,15 +229,20 @@ if len(_cd) > MAX_ROIS:
     _cd = (_cd.groupby('class_id', group_keys=False)[_cd.columns.tolist()]
               .head(_per)                         # 선택순 상위 per-class (결정론적, 경고 없음)
               .head(MAX_ROIS))
-# ⚠️ 패키징 quality_filter(stability>=0.3, matching>=0.5, rec in[suitable,acceptable]) 무력화 —
-#    3 arm 동일 처리. CASDA 자기 필터가 또 prune(1152→432)하면 arm 차등=confound이므로,
-#    aroma/random(어댑터 casda_score=0.7)과 동일하게 casda도 전량 통과시킴(선택은 Stage A서 끝남).
+# ⚠️ 패키징 필터 3종(edge / area / quality) 3 arm 균일 무력화 —
+#    어댑터가 aroma/random에 적용하는 pass-through(roi_bbox==defect_bbox로 edge skip,
+#    area 큼, score 0.7)를 casda에도 동일 적용. 안 하면 casda만 edge+area 필터로
+#    1383→465 컷 → synth cap(1013) 미달 → parity 붕괴. (선택은 각 arm 상류서 확정;
+#    패키징 필터는 generation 엔진 아님 → 균일 무력화가 단일인자 swap 정합.)
 _cd = _cd.copy()
-_cd['stability_score'] = 0.7
+_cd['roi_bbox']        = _cd['defect_bbox']                 # edge filter skip (aroma와 동일)
+_cd['area']            = _cd['area'].clip(lower=100)        # area>=100 통과
+_cd['stability_score'] = 0.7                                # quality_filter 통과
 _cd['matching_score']  = 0.7
 _cd['recommendation']  = 'acceptable'
 _cd.to_csv(os.environ['CSV_CASDA'], index=False)
-print(f"casda arm: {os.environ['CSV_CASDA_FULL']} → {len(_cd)} rows (cap {MAX_ROIS}, filter 무력화) → {os.environ['CSV_CASDA']}")
+print(f"casda arm: {os.environ['CSV_CASDA_FULL']} → {len(_cd)} rows (cap {MAX_ROIS}, "
+      f"edge/area/quality 무력화) → {os.environ['CSV_CASDA']}")
 ```
 
 > **검증(어댑터 산출):** `pd.read_csv(CSV_AROMA)`의 컬럼이 §2.1 헤더 21열과 **순서까지 동일**한지, `roi_image_path`/`roi_mask_path` 파일이 실재하고 **동일 크기**인지 1~2개 샘플 확인. py_compile은 작성 후 `python -m py_compile scripts/aroma/aroma_to_casda_roi.py`로 로컬 점검(테스트 코드 작성 금지, Colab 직접 검증).
@@ -287,6 +292,38 @@ def prepare(arm):
 
 CN = {arm: prepare(arm) for arm in ARMS}
 # → 각 $CN_ROOT/{arm}/ 아래 hints + train.jsonl
+
+### 3a.5 — train.jsonl prompt를 각 arm 자기 prompt로 교체 (AROMA prompt 추론 참가)
+
+CASDA packager는 train.jsonl prompt를 **CASDA식 재생성**한다. AROMA의 step2 prompt를 실제 생성에 쓰려면, prepare 후 jsonl prompt를 **입력 csv의 prompt**(arm 자기 것)로 덮어쓴다. aroma/random→AROMA step2 prompt, casda→CASDA prompt.
+
+```python
+import json, csv as _csv, os
+def patch_prompts(arm):
+    keymap = {}
+    with open(ARMS[arm], encoding='utf-8') as f:
+        for row in _csv.DictReader(f):
+            k = f"{row['image_id']}_class{row['class_id']}_region{row['region_id']}"
+            keymap[k] = (row.get('prompt') or '').strip()
+    jl = f"{CN[arm]}/train.jsonl"
+    if not os.path.exists(jl):
+        print(f"  [skip] {arm}: no train.jsonl"); return
+    items = [json.loads(l) for l in open(jl, encoding='utf-8') if l.strip()]
+    n = 0
+    for e in items:
+        base = os.path.basename(e.get('hint','')).replace('_hint.png','')
+        p = keymap.get(base, '')
+        if p:
+            e['prompt'] = p; n += 1
+    with open(jl, 'w', encoding='utf-8') as f:
+        for e in items:
+            f.write(json.dumps(e, ensure_ascii=False) + '\n')
+    print(f"  {arm}: patched {n}/{len(items)} prompts ← csv (자기 arm prompt)")
+
+for arm in ARMS: patch_prompts(arm)
+```
+
+> ⚠️ **OOD 주의 (reviewer)**: 트레인된 ControlNet은 **CASDA prompt 분포로 학습**됨 → aroma/random arm에 AROMA step2 prompt를 넣으면 분포 밖(OOD)일 수 있고, casda는 in-distribution → **prompt-분포 이점이 casda에 유리한 confound**. 해석 시 명시. (대안: prompt를 3 arm 동일 생성기로 통일하면 confound 제거되나 AROMA prompt 기여는 미반영 — 사용자 결정=각 arm 자기 prompt.)
 ```
 
 > ⚠️ **CLI 확인 필요:** `prepare_controlnet_data.py`의 정확한 플래그(`--roi_metadata` vs `--roi_csv`, `--output_dir` vs `--out`)는 클론 후 `!python $PREP --help`로 확인 후 교체.

@@ -623,7 +623,10 @@ def adapt(
                 "continuity_score":  score,
                 "stability_score":   score,
                 "recommendation":    "acceptable",
-                "prompt":            "",  # CASDA PromptGenerator regenerates
+                # AROMA step2 prompt 보존. CASDA packager는 이 컬럼을 무시하고 hint 시점에
+                # 재생성하지만, 추론(test_controlnet) 전에 train.jsonl prompt를 이 값으로
+                # 덮어쓰는 post-patch(가이드 §3a.5)로 AROMA prompt를 실제 생성에 사용.
+                "prompt":            str(entry.get("prompt") or ""),
                 "roi_image_path":    roi_image_path,
                 "roi_mask_path":     roi_mask_path,
             }
