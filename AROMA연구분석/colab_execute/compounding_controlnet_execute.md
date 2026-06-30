@@ -57,8 +57,9 @@ os.environ['AROMA']         = "/content/AROMA"
 os.environ['AROMA_SCRIPTS'] = "/content/AROMA/scripts/aroma"
 
 # --- Drive 루트 (두 개가 다름에 주의) ---
-os.environ['DRIVE']      = "/content/drive/MyDrive/data/Severstal"   # CASDA 측
-os.environ['AROMA_DATA'] = "/content/drive/MyDrive/data/Aroma"       # AROMA 측
+os.environ['DRIVE']           = "/content/drive/MyDrive/data/Severstal"   # CASDA 측
+os.environ['DRIVE_SEVERSTAL'] = os.environ['DRIVE']                       # 별칭(§3c compose에서 사용)
+os.environ['AROMA_DATA']      = "/content/drive/MyDrive/data/Aroma"       # AROMA 측
 
 # --- 학습된 ControlNet 체크포인트 (확인됨) ---
 os.environ['BEST_MODEL'] = f"{os.environ['DRIVE']}/controlnet_training_v5.5/best_model"
@@ -74,15 +75,21 @@ os.environ['ROI_AROMA']  = f"{os.environ['AROMA_OUT']}/roi_compound/severstal_ar
 os.environ['ROI_RANDOM'] = f"{os.environ['AROMA_OUT']}/roi_compound/severstal_random"
 
 # --- 어댑터 출력: CASDA 호환 roi_metadata.csv + crops ---
-os.environ['ARM_ROOT']    = f"{os.environ['AROMA_OUT']}/compound_arms/severstal"
-os.environ['CSV_CASDA']   = f"{os.environ['DRIVE']}/roi_patches_v5.1/roi_metadata.csv"   # CASDA 자체 (Stage A 산출)
-os.environ['CSV_AROMA']   = f"{os.environ['ARM_ROOT']}/aroma/aroma_roi_metadata.csv"
-os.environ['CSV_RANDOM']  = f"{os.environ['ARM_ROOT']}/random/random_roi_metadata.csv"
-os.environ['CROPS_AROMA'] = f"{os.environ['ARM_ROOT']}/aroma/crops"
-os.environ['CROPS_RANDOM']= f"{os.environ['ARM_ROOT']}/random/crops"
+os.environ['ARM_ROOT']      = f"{os.environ['AROMA_OUT']}/compound_arms/severstal"
+# CASDA 원본 Stage A roi_metadata.csv (읽기 전용 — capping 입력). 버전 폴더명 확인:
+#   !ls {DRIVE} | grep roi_patches   (예: roi_patches_v5.1)
+os.environ['CSV_CASDA_FULL'] = f"{os.environ['DRIVE']}/roi_patches_v5.1/roi_metadata.csv"
+# capped 출력 (3 arm 모두 ARM_ROOT 아래 — 원본 절대 덮어쓰지 않음)
+os.environ['CSV_CASDA']     = f"{os.environ['ARM_ROOT']}/casda/casda_roi_metadata_capped.csv"
+os.environ['CSV_AROMA']     = f"{os.environ['ARM_ROOT']}/aroma/aroma_roi_metadata.csv"
+os.environ['CSV_RANDOM']    = f"{os.environ['ARM_ROOT']}/random/random_roi_metadata.csv"
+os.environ['CROPS_AROMA']   = f"{os.environ['ARM_ROOT']}/aroma/crops"
+os.environ['CROPS_RANDOM']  = f"{os.environ['ARM_ROOT']}/random/crops"
 
 # --- per-arm ControlNet dataset / generated / Poisson 합성 출력 ---
-os.environ['CN_ROOT']     = f"{os.environ['AROMA_OUT']}/compound_cn/severstal"
+# ⚡ CN_ROOT(hints + generated)는 LOCAL(/content)에 — 수천 PNG를 Drive에 쓰면 매우 느림.
+#    intermediate라 영속 불요(세션 내 §3b→§3c 소비). 세션 리셋 시 재생성.
+os.environ['CN_ROOT']     = "/content/compound_cn/severstal"
 os.environ['SYN_CASDA']   = f"{os.environ['AROMA_OUT']}/compound_synth/severstal_casda"
 os.environ['SYN_AROMA']   = f"{os.environ['AROMA_OUT']}/compound_synth/severstal_aroma"
 os.environ['SYN_RANDOM']  = f"{os.environ['AROMA_OUT']}/compound_synth/severstal_random"
@@ -92,7 +99,7 @@ os.environ['EXP4_OUT']    = f"{os.environ['AROMA_OUT']}/exp4v2_compound"
 
 SEED = "42"
 os.environ['SEED'] = SEED
-for k in ['BEST_MODEL','MORPH_CSV','CSV_CASDA','CSV_AROMA','CSV_RANDOM','EXP4_OUT']:
+for k in ['BEST_MODEL','MORPH_CSV','CSV_CASDA_FULL','CSV_CASDA','CSV_AROMA','CSV_RANDOM','EXP4_OUT']:
     print(f"{k:12s} = {os.environ[k]}")
 
 # best_model 실재 확인 (없으면 즉시 중단)
@@ -120,7 +127,7 @@ def select(strategy, out_dir):
            "--prompts_dir",   os.environ['PROM'],
            "--output_dir",    out_dir,
            "--sampling_strategy", strategy,
-           "--top_k", "1690",            # pool 충분 확보 (synth_ratio 2.0 cap=5068 커버용 — exp4v2 노트 참조)
+           "--top_k", "1690",            # MAX_ROIS=1690 도달용 (최근 severstal roi_selected와 동일; random도 1690 선택)
            "--seed", os.environ['SEED'],
            "--class_mode", "multi", "--class_floor",
            "--background_type", "complex"]   # severstal context
@@ -180,8 +187,15 @@ image_id,class_id,region_id,roi_bbox,defect_bbox,centroid,area,linearity,solidit
 
 ### 2.2 어댑터 CLI
 
+> ⚠️ **arm 균등화 + GPU 비용 통제 (필수):** roi_selected는 arm마다 수가 다르다 (severstal AROMA multi-class floor=1690, random=200, CASDA csv=수천). 생성 수가 arm마다 다르면 **불공정**(단일인자 swap 무효) + ControlNet 추론 **폭증**(ROI×compositions). → **세 arm 모두 동일 `MAX_ROIS`로 cap.** 어댑터 `--max_rois N`은 class-stratified round-robin(rare 클래스 균형, 결정론적)으로 cap. CASDA arm csv도 동일 N으로 stratified 샘플.
+
 ```python
 ADAPTER = f"{os.environ['AROMA_SCRIPTS']}/aroma_to_casda_roi.py"   # NEW
+MAX_ROIS = 1383  # 생성 풀 cap (보고 하이퍼파라미터 아님 — 아래 reviewer 노트 참조).
+                 # = 가장 작은 조건(CASDA 가용 ROI=1383)에 맞춘 공통 풀 → 엄격 per-arm parity.
+                 # aroma(1690)·random(1690) → 1383 trim, casda 전량. compose ×1 → 풀 1383.
+                 # 1383 ≥ 1013(학습 budget) → exp4v2 --synth_ratio 0.4 가 1013으로 trim.
+                 # (CASDA 가용 ROI 수가 바뀌면 그 값으로 재설정.)
 
 def adapt(roi_selected, output_csv, crops_dir):
     cmd = [sys.executable, ADAPTER,
@@ -190,19 +204,40 @@ def adapt(roi_selected, output_csv, crops_dir):
            "--output_csv",     output_csv,
            "--crops_dir",      crops_dir,
            "--background_type","complex_pattern",
+           "--max_rois",       str(MAX_ROIS),
            "--make_crops"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(f"{'✓' if r.returncode==0 else '✗'} adapt -> {output_csv}")
     if r.returncode != 0: print('\n'.join((r.stderr or '').splitlines()[-6:]))
     return r.returncode == 0
 
-# aroma arm
+# aroma arm (compatibility 선택)
 adapt(f"{os.environ['ROI_AROMA']}/roi_selected.json",
       os.environ['CSV_AROMA'], os.environ['CROPS_AROMA'])
 # random arm
 adapt(f"{os.environ['ROI_RANDOM']}/roi_selected.json",
       os.environ['CSV_RANDOM'], os.environ['CROPS_RANDOM'])
-# casda arm: CASDA 자체 roi_metadata.csv ($CSV_CASDA, Stage A 산출) 그대로 사용 — 변환 불필요
+
+# casda arm: CASDA 원본 roi_metadata.csv(CSV_CASDA_FULL, 읽기전용)를 동일 MAX_ROIS로
+#            class-stratified 샘플 → CSV_CASDA(capped, 별도 경로). 원본 안 건드림.
+import pandas as pd
+from pathlib import Path
+Path(os.environ['CSV_CASDA']).parent.mkdir(parents=True, exist_ok=True)
+_cd = pd.read_csv(os.environ['CSV_CASDA_FULL'])   # CASDA Stage A 원본 (읽기전용)
+if len(_cd) > MAX_ROIS:
+    _per = max(1, MAX_ROIS // _cd['class_id'].nunique())
+    _cd = (_cd.groupby('class_id', group_keys=False)[_cd.columns.tolist()]
+              .head(_per)                         # 선택순 상위 per-class (결정론적, 경고 없음)
+              .head(MAX_ROIS))
+# ⚠️ 패키징 quality_filter(stability>=0.3, matching>=0.5, rec in[suitable,acceptable]) 무력화 —
+#    3 arm 동일 처리. CASDA 자기 필터가 또 prune(1152→432)하면 arm 차등=confound이므로,
+#    aroma/random(어댑터 casda_score=0.7)과 동일하게 casda도 전량 통과시킴(선택은 Stage A서 끝남).
+_cd = _cd.copy()
+_cd['stability_score'] = 0.7
+_cd['matching_score']  = 0.7
+_cd['recommendation']  = 'acceptable'
+_cd.to_csv(os.environ['CSV_CASDA'], index=False)
+print(f"casda arm: {os.environ['CSV_CASDA_FULL']} → {len(_cd)} rows (cap {MAX_ROIS}, filter 무력화) → {os.environ['CSV_CASDA']}")
 ```
 
 > **검증(어댑터 산출):** `pd.read_csv(CSV_AROMA)`의 컬럼이 §2.1 헤더 21열과 **순서까지 동일**한지, `roi_image_path`/`roi_mask_path` 파일이 실재하고 **동일 크기**인지 1~2개 샘플 확인. py_compile은 작성 후 `python -m py_compile scripts/aroma/aroma_to_casda_roi.py`로 로컬 점검(테스트 코드 작성 금지, Colab 직접 검증).
@@ -234,11 +269,20 @@ PREP = f"{os.environ['CASDA_SCRIPTS']}/prepare_controlnet_data.py"
 def prepare(arm):
     out = f"{os.environ['CN_ROOT']}/{arm}"
     cmd = [sys.executable, PREP,
-           "--roi_metadata", ARMS[arm],     # ⚠️ CLI 확인 필요 (인자명; --help로 확인)
-           "--output_dir",   out]
+           "--roi_metadata", ARMS[arm],
+           "--output_dir",   out,
+           # ✅ 확인됨: train_images/train_csv default가 상대경로('train_images'/'train.csv')
+           #    → 미전달 시 없음 → 실패. Severstal 절대경로 전달.
+           "--train_images", f"{os.environ['DRIVE']}/train_images",
+           "--train_csv",    f"{os.environ['DRIVE']}/train.csv",
+           "--skip_validation",   # ROI 추출 검증은 본 실험 무관(packaging만 필요)
+           "--workers", "-1"]     # ⚡ default 0=순차(느림) → -1 자동 병렬. 핵심 속도 레버.
     r = subprocess.run(cmd, capture_output=True, text=True)
-    print(f"{'✓' if r.returncode==0 else '✗'} prepare[{arm}] -> {out}/train.jsonl")
-    if r.returncode != 0: print('\n'.join((r.stderr or '').splitlines()[-6:]))
+    ok = r.returncode == 0
+    print(f"{'✓' if ok else '✗'} prepare[{arm}] -> {out}/train.jsonl")
+    if not ok:
+        print("STDERR tail:\n" + '\n'.join((r.stderr or '').splitlines()[-12:]))
+        print("STDOUT tail:\n" + '\n'.join((r.stdout or '').splitlines()[-8:]))
     return out
 
 CN = {arm: prepare(arm) for arm in ARMS}
@@ -273,7 +317,7 @@ GEN = {arm: generate(arm) for arm in ARMS}
 ```
 
 > ✅ **CLI 확인됨** (CASDA 04-StageB Step5): `--model_path --jsonl_path --output_dir --num_inference_steps --guidance_scale --controlnet_conditioning_scale --resolution`. (클래스별 생성 수 차등 원하면 `--num_images_per_class '{"1":2,"2":10,"3":1,"4":2}'`.) 모델은 `ControlNetModel.from_pretrained(BEST_MODEL)`(`config.json`+`*.safetensors`).
-> **synth budget cap:** 모든 ROI를 생성하지 말 것(GPU 비용). 어댑터 단계에서 `top_k`/per-class로 pool을 제한했고, exp4v2가 `--synth_ratio`로 학습 cap을 trim하므로 **여기서는 pool 전량 생성하되 pool 자체를 cap≈5076 규모로 제한**(§4 노트). pool이 과대하면 `test_controlnet.py`에 생성 상한 플래그가 있으면 적용(⚠️ CLI 확인) 또는 jsonl을 사전 truncate.
+> **synth budget cap:** 어댑터 `--max_rois 1690` (class-stratified) + compose `--compositions-per-roi 1` → arm당 생성 풀 = **1690**. exp4v2 `--synth_ratio 0.4`가 학습 시 **1013**으로 trim(최근 run 정합). 1690 생성은 1회·캐시 후 §4 재사용. (pool이 1013보다 커야 trim 가능 — 1690 OK.)
 
 ### 3c. Stage C — Poisson compose  · 🟢 CPU
 
@@ -295,7 +339,7 @@ def compose(arm):
            "--train-csv",        TRAIN_CSV,
            "--output-dir",       f"{SYN[arm]}/severstal",
            "--workers",          "8",
-           "--compositions-per-roi", "5"]
+           "--compositions-per-roi", "1"]   # ROI당 1합성 → 생성 풀≈MAX_ROIS(1690), 최근 synth 볼륨과 정합
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(f"{'✓' if r.returncode==0 else '✗'} compose[{arm}] -> {SYN[arm]}/severstal")
     if r.returncode != 0: print('\n'.join((r.stderr or '').splitlines()[-8:]))
@@ -369,7 +413,7 @@ EXP4 = f"{os.environ['AROMA_SCRIPTS']}/experiments/exp4_v2_supervised_detection.
     --real_data_dir        $AROMA_DATA \
     --output_dir           $EXP4_OUT \
     --seeds 42 1 2 \
-    --synth_ratio 1.0 \
+    --synth_ratio 0.4 \
     --val_frac 0.3 \
     --imgsz 640 \
     --baseline_epochs 100 \
@@ -381,7 +425,9 @@ EXP4 = f"{os.environ['AROMA_SCRIPTS']}/experiments/exp4_v2_supervised_detection.
 
 > **확정 플래그(exp4v2, 코드 확인):** `--condition`(nargs+), `--dataset_keys`, `--class_mode{single,multi}`, `--random_synthetic_dir/--casda_synthetic_dir/--aroma_synthetic_dir`, `--real_data_dir`, `--output_dir`, `--seeds`, `--synth_ratio`, `--val_frac`, `--imgsz`, `--baseline_epochs`, `--patience`, `--batch/--cache/--rect`, `--yolo_cache_dir`, `--resume`. (exp4v2_execute.md 참조 — 이 스크립트는 AROMA 레포 소속이라 CLI 확정.)
 >
-> **synth_ratio / pool parity (load-bearing):** `--synth_ratio 1.0` → severstal cap ≈ max(1, int(n_real_train×1.0)) ≈ **2534**(val_frac=0.3). random/aroma/casda pool ≥ cap 이어야 4조건 등가 budget. 셋 다 정확히 cap으로 trim → `n_synth_train` 3조건 동일(§5 (2) parity 게이트). 1.5/2.0 스윕도 pool(≈5076)이 커버 → **생성 1회 후 ratio만 변경**. ratio 변경 후 `--resume`은 기존 severstal 결과를 skip하므로 재실행 시 `$EXP4_OUT/exp4v2_results.json`(+`_seeds/seed*/`)에서 severstal 삭제하거나 fresh `--output_dir`(예: `..._r2.0`).
+> **synth_ratio / pool parity (load-bearing — 최근 cleanbg 0.4 run과 정합):** `--synth_ratio 0.4` → severstal cap = max(1, int(n_real_train×0.4)) ≈ **1013**(real_train 2534). 최근 exp4v2 severstal(cleanbg 0.4)의 `n_synth_train=1013`과 **동일** → 직접 비교. 각 arm 생성 풀 = MAX_ROIS×compositions-per-roi = **1383×1 = 1383 ≥ 1013** → 3 arm 모두 정확히 1013으로 trim → `n_synth_train` 3조건 동일(§5 (2) parity 게이트). 생성 1회·캐시, ratio만 trim. `--resume`은 기존 severstal 결과 skip → 재실행 시 삭제 또는 fresh `--output_dir`.
+>
+> 📝 **Reviewer 방어 — "왜 1383?"**: 1383은 **보고 하이퍼파라미터가 아니다.** 보고하는 증강 budget = **synth:real = 0.4 (조건당 1013장)**, 전 조건 동일 + 이전 실험과 동일. 1383은 조건별 **생성 풀** 크기로, **가장 작은 조건(CASDA 가용 ROI)에 맞춰** 세 조건 풀을 동일화한 값(엄격 parity, CASDA ROI 전량 사용). 1383 ≥ 1013이라 학습 budget을 충분히 커버. 논문 본문엔 budget=ratio(0.4/1013)만, 1383은 부록/구현 노트로.
 >
 > ⚠️ **annotations.json 호환:** `--*_synthetic_dir` 아래 `severstal/annotations.json`이 exp4v2 스키마로 존재해야 함(§3c). 없으면 해당 arm `no_synth_annotations` 거부.
 

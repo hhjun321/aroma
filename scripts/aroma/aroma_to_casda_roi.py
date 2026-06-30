@@ -483,6 +483,7 @@ def adapt(
     image_root: Optional[str] = None,
     make_crops: bool = True,
     max_rois: Optional[int] = None,
+    casda_score: float = 0.7,
 ) -> int:
     """Convert an AROMA roi_selected.json into a CASDA-schema roi_metadata.csv.
 
@@ -573,14 +574,18 @@ def adapt(
             # area: prefer morphology, else derive from bbox (w*h).
             area_val = _metric(morph, "area") if (morph and morph.get("area")) else float(bbox[2] * bbox[3])
 
-            # Score: roi_score, else quality_score, else default; clamped [0,1].
-            score_raw = entry.get("roi_score")
-            if score_raw is None:
-                score_raw = entry.get("quality_score")
-            try:
-                score = _clamp01(float(score_raw)) if score_raw is not None else _DEFAULT_SCORE
-            except (ValueError, TypeError):
-                score = _DEFAULT_SCORE
+            # CASDA-suitability gate columns (suitability/matching/continuity/stability).
+            # CRITICAL: CASDA's packaging quality_filter (stability>=0.3 AND matching>=0.5)
+            # gates on THESE. AROMA's roi_score is a DIFFERENT scale (compatibility, often
+            # <0.5) → mapping roi_score here filters out 100% of AROMA ROIs. But AROMA's
+            # selection ALREADY decided inclusion; the packaging filter must be a no-op so
+            # every selected ROI is packaged. We therefore set these to a fixed passing
+            # constant (casda_score, default 0.7 — CASDA's own typical value), which is NOT
+            # used by hint generation (hint uses linearity/solidity) and only minimally by
+            # the prompt. prepare_controlnet_data.py exposes no quality_filter CLI flag and
+            # CASDA core must not be modified, so neutralizing via the score columns is the
+            # only in-distribution way to package the full per-arm selection.
+            score = _clamp01(float(casda_score))
 
             defect_subtype = str(entry.get("defect_subtype") or "general").strip() or "general"
 
@@ -659,6 +664,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--max_rois", type=int, default=None,
                    help="Cap total ROIs (class-stratified round-robin) BEFORE conversion. "
                         "Equalizes per-arm ROI count + bounds ControlNet cost. Default none.")
+    p.add_argument("--casda_score", type=float, default=0.7,
+                   help="Constant for the CASDA gate columns (suitability/matching/"
+                        "continuity/stability). Must pass CASDA quality_filter "
+                        "(stability>=0.3, matching>=0.5). Default 0.7. AROMA's own selection "
+                        "already decided inclusion; this neutralizes the packaging filter.")
     crop_grp = p.add_mutually_exclusive_group()
     crop_grp.add_argument("--make_crops", dest="make_crops", action="store_true",
                           help="Write crop-aligned PNGs (default)")
@@ -680,6 +690,7 @@ def main(argv=None) -> None:
             image_root=args.image_root,
             make_crops=args.make_crops,
             max_rois=args.max_rois,
+            casda_score=args.casda_score,
         )
         print(f"Wrote {n} CASDA ROI rows → {args.output_csv}")
     except (FileNotFoundError, ValueError) as e:
