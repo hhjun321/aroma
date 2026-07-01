@@ -185,7 +185,13 @@ def adapt(
     for ip in imgs:
         name = Path(ip).name
         cid = _cluster_id_from_name(name)
-        mp = masks_dir / name
+        # compose_casda_images.py writes masks as `{image_stem}_mask.png` (NOT the
+        # bare image name). Fall back to the bare name for any legacy layout.
+        mp = masks_dir / f"{Path(name).stem}_mask.png"
+        if not mp.exists():
+            legacy = masks_dir / name
+            if legacy.exists():
+                mp = legacy
 
         if not mp.exists():
             # No mask file at all → exp4v2 cannot derive a bbox → drop.
