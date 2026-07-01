@@ -142,3 +142,21 @@ roi_selected.json(arm) → [어댑터] → roi_metadata.csv(CASDA 스키마)
 **multi-model 결정 (게재 방어)**: 단일 YOLOv8n → reviewer 취약(일반성·아키텍처 의존성 미검증). exp4v2 `--model all`(yolov8n/s/m 3사이즈)로 severstal compounding 수행 — **synth는 arm당 1회 생성·재사용, detector만 재학습**(저비용). 계열내 스케일 robustness 확보. 비용: 3 model×4 cond×3 seed=36 run(GPU 3배) → smoke(n/1seed) 후 전량. **더 강한 주장엔 타계열 detector(RT-DETR 등) 1개 추가 권장**(별도 통합, TODO). 원 논문 "4 아키텍처" claim은 deprecated one-class AD 기반 → supervised detection 계열로 재구성 필요.
 
 **남은 검증**: GPU 실행(best_model 추론); §3d 변환 후 exp4v2 annotations 로드 확인; composed→exp4v2 normal_image 매핑(metadata.json) 선택 보강; AROMA prompt OOD 영향 점검(생성물 육안); **exp4v2 --model all 결과 per-model 집계**.
+
+---
+
+## ⑧ compounding 첫 run서 드러난 2 결함 + 수정 (2026-07-01)
+
+첫 severstal compounding(seed42, yolov8n) 실측: baseline 0.361 / random 0.375(synth 1013) / casda 0.326(**771/1013 labeled**) / aroma(1013/1013 labeled). 두 결함 확인:
+
+**결함1 — compatibility strategy가 class 불균형 (class_floor 무시)**
+- 실측 aroma synth per-class {c0:107, c1:49, **c2:826, c3:31**} vs random {184,38,674,117} vs casda {76,85,385,467}. **AROMA가 class2 과집중·class3 기아(31).**
+- 근본: `roi_selection.py:1256-1274` **compatibility 분기가 global top-k sort** (`sorted(compat_score)[:top_k]`), `if class_floor` 분기(1277)는 그 *뒤*라 deficit_aware에만 적용 → **`--class_floor` 무효**. 고-compat 후보(class2 다수)가 전역 상위 독점.
+- **수정**: compatibility에 class-stratified 할당 적용 — deficit_aware의 `_stratified_pair_aware`(bucket by class_key, floor=top_k//K, 내부 랭킹, backfill) 구조 차용하되 **랭킹 키를 deficit→compat_score**로. 또는 compatibility를 stratified wrapper 경유시키고 내부 정렬만 compat로. class3 기아 해소 → per-class AP 개선 기대.
+
+**결함2 — casda 빈-mask로 parity 붕괴 (771/1013)**
+- casda 1013 샘플 중 **771만 labeled**(242 drop). exp4v2 mask→bbox가 casda 242 synth의 **empty compose mask**서 bbox 못 뽑아 drop. random/aroma는 1013/1013(마스크 유효) → casda-특정(CASDA-ROI 생성 결함 일부 blank → compose mask empty).
+- 영향: casda 유효 771 ≠ random/aroma 1013 → **casda budget parity 붕괴** → aroma-vs-casda confound(aroma synth 더 많음). (compose count는 recompose로 1939 확보됐으나 labeling서 재감소.)
+- **수정**: §3d 변환기가 **빈-mask entry skip** — mask nonzero(→bbox 존재) 검증 후 annotations에 valid-only 기록 → exp4v2가 valid 풀서 샘플 → 1013 전부 labeled. 전제: casda valid 풀 ≥ cap(1939 composed − empties ≥ 1013 확인). 미달 시 casda 빈-mask 근본(ControlNet blank 생성/compose) 추가 진단.
+
+**영향/재실행**: 두 수정 모두 결과 변경 → **compounding 재실행 필요**. 단 현 run의 **aroma vs random(둘 다 1013 clean)은 유효** → 그 delta는 보고 가능(casda·class-balance는 수정 후 재판정). 수정 우선순위: 결함1(class balance, roi_selection)·결함2(§3d mask filter) 둘 다 casda/aroma 정합에 필요.

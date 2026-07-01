@@ -442,40 +442,47 @@ for arm in ARMS: compose(arm)
 
 > 💾 **저장 정책**: SYN(=compose 합성 결과: `images/`+`masks/`+`annotations.json`)은 **반드시 Drive**(`SYN_*`=AROMA_OUT 하위). 이 합성셋은 **향후 성능비교(exp4v2 multi-seed/ratio sweep 등)서 반복 재사용**되므로 영속 필수. annotations.json의 `image_path`/`mask_path`는 Drive 절대경로 → 세션 넘어 유효. (§3b `generated/`만 로컬 중간물.) compose 출력이 로컬이면 안 됨 — §3c `--output-dir`이 `{SYN[arm]}/severstal`(Drive)인지 확인.
 
-`compose_casda_images.py` 출력 = `{images/, masks/(full-frame 1600×256), metadata.json}`, 파일명에 `_class{N}_`. exp4v2 `_load_synth_annotations`는 `{synth_root}/severstal/annotations.json`(list, 각 `image_path`/`mask_path`(full-frame)/`source_roi`(class{N} 포함)/`cluster_id`(1-4)/`dry_run`)를 읽음. 아래로 변환:
+`compose_casda_images.py` 출력 = `{images/, masks/(full-frame 1600×256), metadata.json}`, 파일명에 `_class{N}_`. exp4v2 `_load_synth_annotations`는 `{synth_root}/severstal/annotations.json`(list, 각 `image_path`/`mask_path`(full-frame)/`source_roi`(class{N} 포함)/`cluster_id`(1-4)/`dry_run`)를 읽음.
+
+> ⚠️ **결함2 수정(dev_note ⑧) — 빈-mask skip 필수**: 인라인 변환은 **empty compose mask**(ControlNet blank 생성분)를 그대로 annotations에 넣어, exp4v2 mask→bbox가 bbox를 못 뽑아 **labeling 단계서 drop** → casda 771/1013(242 drop)로 **parity 붕괴**. 재사용 스크립트 `scripts/aroma/composed_to_exp4v2.py`는 **mask nonzero(>=1px) 검증 후 valid-only** 기록 → exp4v2가 valid 풀서 샘플 → 1013 전부 labeled. 인라인 셀 대신 이 스크립트를 subprocess로 arm별 호출:
 
 ```python
-import json, re, glob
-from pathlib import Path
+import subprocess, sys, os
+CONV = f"{os.environ['AROMA_SCRIPTS']}/composed_to_exp4v2.py"   # NEW (빈-mask skip 내장)
 
-def composed_to_exp4v2(composed_dir, syn_out):
-    """CASDA composed({images,masks}) → exp4v2 {severstal/annotations.json}."""
-    imgs = sorted(glob.glob(f"{composed_dir}/images/*.png"))
-    ann = []
-    for ip in imgs:
-        name = Path(ip).name
-        m = re.search(r"_class(\d+)", name)          # exp4v2 source_roi/cluster 라벨
-        cid = int(m.group(1)) if m else 1
-        mp = f"{composed_dir}/masks/{name}"
-        ann.append({
-            "image_path": ip,
-            "mask_path":  mp if Path(mp).exists() else None,  # full-frame → exp4v2 bbox 유도
-            "source_roi": name,        # class{N} 포함 → _parse_severstal_class 매칭
-            "cluster_id": cid,         # 1-4 fallback
-            "dry_run": False,
-        })
-    out = Path(syn_out) / "severstal"
-    out.mkdir(parents=True, exist_ok=True)
-    json.dump(ann, open(out / "annotations.json", "w"), indent=2)
-    print(f"  {composed_dir} -> {out}/annotations.json  ({len(ann)} entries)")
-    return str(out)
+def composed_to_exp4v2(arm):
+    """CASDA composed({images,masks}) → exp4v2 {severstal/annotations.json} (빈-mask skip)."""
+    composed_dir = f"{SYN[arm]}/severstal"
+    r = subprocess.run([sys.executable, CONV,
+        "--composed_dir", composed_dir,
+        "--output_dir",   SYN[arm],       # → {SYN[arm]}/severstal/annotations.json
+        "--dataset_key",  "severstal"], capture_output=True, text=True)
+    tail = '\n'.join((r.stdout or '').splitlines()[-4:] + (r.stderr or '').splitlines()[-4:])
+    print(f"{'✓' if r.returncode==0 else '✗'} convert[{arm}]  {tail}")
+    return r.returncode == 0
 
+n_valid = {}
 for arm in ARMS:
-    composed_to_exp4v2(f"{SYN[arm]}/severstal", SYN[arm])
-# → 각 $SYN[arm]/severstal/annotations.json (exp4v2 호환)
+    composed_to_exp4v2(arm)
+    # n_valid 확인: valid-only annotations 개수 (parity 게이트)
+    import json
+    ap = f"{SYN[arm]}/severstal/annotations.json"
+    n_valid[arm] = len(json.load(open(ap))) if os.path.exists(ap) else 0
+    print(f"    {arm}: n_valid = {n_valid[arm]}")
+# → 각 $SYN[arm]/severstal/annotations.json (exp4v2 호환, valid-only)
+
+# ⚠️ parity 전제: 각 arm의 valid 풀이 exp4v2 cap(synth_ratio 0.4 → 1013) 이상이어야
+#    3조건 동일 trim(단일인자 swap 정합). 미달 arm이 있으면 그 arm의 빈-mask 근본
+#    (ControlNet blank 생성 / compose mask empty)을 추가 진단해야 한다.
+CAP = 1013   # exp4v2 --synth_ratio 0.4 학습 budget
+under = {a: n for a, n in n_valid.items() if n < CAP}
+print(f"\nvalid parity {n_valid}  (cap {CAP}) -> "
+      f"{'OK (모든 arm >= cap)' if not under else f'⚠️ cap 미달: {under} — 빈-mask 근본 진단 필요'}")
 ```
 
-> ✅ mask_path = compose의 full-frame mask → exp4v2가 bbox 유도. source_roi 파일명 `_class{N}_` → class 라벨. cluster_id = 동일값 fallback. **이로써 §3→§4 연결 완성.**
+> ✅ mask_path = compose의 full-frame mask(**nonzero 검증됨**) → exp4v2가 bbox 유도. source_roi 파일명 `_class{N}_` → class 라벨. cluster_id = 동일값 fallback. **빈-mask entry는 스크립트가 skip**(로그: n_total / n_valid / n_skipped_empty / n_skipped_no_maskfile). **이로써 §3→§4 연결 완성 + parity 유지.**
+>
+> 📝 스크립트는 cv2 우선(없으면 PIL, 둘 다 없으면 mask 존재만으로 통과+경고)으로 pixel을 검사하고 결정론적으로 동작. import도 가능(`from composed_to_exp4v2 import convert, adapt`). py_compile은 `python -m py_compile scripts/aroma/composed_to_exp4v2.py`로 로컬 점검(테스트 코드 작성 금지, Colab 직접 검증).
 
 ### 3 단계 무결성 (single-factor swap)
 

@@ -1183,6 +1183,161 @@ def _stratified_pair_aware(
     return selected
 
 
+def _stratified_compat(
+    candidates: List[Dict[str, Any]],
+    top_k: int,
+    img_diversity_cap: int | None = None,
+) -> List[Dict[str, Any]]:
+    """
+    Class-stratified allocation for the *compatibility* strategy (Fix1, §8).
+
+    Mirrors the anti-starvation structure of :func:`_stratified_pair_aware`
+    (bucket by ``class_key``, symmetric floor ``top_k // K`` per class, then a
+    class-agnostic backfill) but the ranking key is the **compatibility score**
+
+        compat_score = 0.6 * ctx_prior + 0.4 * morph_prior
+
+    instead of the deficit-based ``moderated_score``. This exists because the
+    plain ``compatibility`` branch ranks GLOBALLY by compat_score, letting a
+    majority class (e.g. severstal class2) monopolise the global top-k and
+    starving a rare class (class3) — ``--class_floor`` had no effect on that
+    branch. Here every class is guaranteed a symmetric floor first.
+
+    Determinism: no RNG. Ties are resolved by :func:`_img_jitter` (a fixed
+    blake2b digest of the source crop), exactly as the global compat branch
+    does, so results are reproducible and consistent across arms.
+
+    With a single class (K <= 1) this returns the global compat top-k verbatim
+    (identical to the plain ``compatibility`` branch), keeping the single-class
+    path byte-identical.
+    """
+    if not candidates:
+        return []
+
+    def _compat_score(c: Dict[str, Any]) -> float:
+        cp = max(0.0, min(1.0, float(c.get("ctx_prior", 0.0))))
+        mp = max(0.0, min(1.0, float(c.get("morph_prior", 0.0))))
+        return 0.6 * cp + 0.4 * mp
+
+    # Deterministic combined key: compat_score desc, jitter breaks exact ties
+    # by spreading across distinct source crops (same key the global branch uses).
+    def _key(c: Dict[str, Any]) -> float:
+        return _compat_score(c) + _img_jitter(c)
+
+    # GLOBAL source-image cap (mirrors _stratified_pair_aware): one shared
+    # Counter so the per-(image, bbox) cap is enforced GLOBALLY across buckets.
+    # None ⇒ disabled.
+    img_cap = max(1, int(img_diversity_cap)) if img_diversity_cap is not None else None
+    src_counter: Counter = Counter()
+
+    def _src_ok(c: Dict[str, Any]) -> bool:
+        if img_cap is None:
+            return True
+        return src_counter[_source_key(c)] < img_cap
+
+    def _take(c: Dict[str, Any]) -> None:
+        if img_cap is not None:
+            src_counter[_source_key(c)] += 1
+
+    buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for c in candidates:
+        buckets[str(c.get("class_key") or "_")].append(c)
+
+    keys = list(buckets.keys())
+    K = len(keys)
+
+    if K <= 1:
+        # Single class ⇒ global compat top-k (matches plain compatibility branch)
+        # but still honour the source cap when one is set.
+        ranked = sorted(candidates, key=_key, reverse=True)
+        if img_cap is None:
+            return ranked[:top_k]
+        out: List[Dict[str, Any]] = []
+        for c in ranked:
+            if len(out) >= top_k:
+                break
+            if not _src_ok(c):
+                continue
+            out.append(c)
+            _take(c)
+        # bounded relaxation if distinct sources < top_k (mirror pair-aware)
+        if len(out) < top_k:
+            relaxed = img_cap
+            while len(out) < top_k:
+                relaxed += 1
+                progressed = False
+                for c in ranked:
+                    if len(out) >= top_k:
+                        break
+                    if src_counter[_source_key(c)] >= relaxed:
+                        continue
+                    out.append(c)
+                    src_counter[_source_key(c)] += 1
+                    progressed = True
+                if not progressed:
+                    break
+        return out
+
+    # --- symmetric floor per class ---
+    floor = top_k // K
+    selected: List[Dict[str, Any]] = []
+    selected_ids: set = set()
+
+    if floor > 0:
+        for k in keys:
+            pool = sorted(buckets[k], key=_key, reverse=True)
+            added = 0
+            for c in pool:
+                if added >= floor:
+                    break
+                if id(c) in selected_ids:
+                    continue
+                if not _src_ok(c):
+                    continue
+                selected.append(c)
+                selected_ids.add(id(c))
+                _take(c)
+                added += 1
+
+    # --- remainder backfill: class-agnostic, compat_score desc, cap-aware ---
+    slack = top_k - len(selected)
+    if slack > 0:
+        rest = sorted(
+            (c for c in candidates if id(c) not in selected_ids),
+            key=_key,
+            reverse=True,
+        )
+        for c in rest:
+            if slack <= 0:
+                break
+            if not _src_ok(c):
+                continue
+            selected.append(c)
+            selected_ids.add(id(c))
+            _take(c)
+            slack -= 1
+
+    # --- bounded-repetition fallback (only if a cap blocked reaching top_k) ---
+    if img_cap is not None and len(selected) < top_k:
+        ranked_all = sorted(candidates, key=_key, reverse=True)
+        relaxed = img_cap
+        while len(selected) < top_k:
+            relaxed += 1
+            progressed = False
+            for c in ranked_all:
+                if len(selected) >= top_k:
+                    break
+                if src_counter[_source_key(c)] >= relaxed:
+                    continue
+                selected.append(c)
+                src_counter[_source_key(c)] += 1
+                progressed = True
+            if not progressed:
+                break
+
+    return selected
+
+
 def select_rois(
     candidates: List[Dict[str, Any]],
     strategy: str = "deficit_aware",
@@ -1265,6 +1420,16 @@ def select_rois(
             cp = max(0.0, min(1.0, float(c.get("ctx_prior", 0.0))))
             mp = max(0.0, min(1.0, float(c.get("morph_prior", 0.0))))
             return 0.6 * cp + 0.4 * mp
+        # Fix1 (§8): when class_floor is requested and the pool spans >1 class,
+        # route through class-stratified allocation so no majority class can
+        # monopolise the global compat top-k and starve a rare class. Otherwise
+        # keep the legacy global compat sort (byte-identical single-class path).
+        if class_floor:
+            n_classes = len({str(c.get("class_key") or "_") for c in candidates})
+            if n_classes > 1:
+                return _stratified_compat(
+                    candidates, top_k, img_diversity_cap=img_diversity_cap,
+                )
         # Deterministic ordering: compat_score desc, then the same per-source
         # jitter used elsewhere to spread ties across distinct source crops.
         return sorted(
