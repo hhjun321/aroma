@@ -240,6 +240,8 @@ _cd['area']            = _cd['area'].clip(lower=100)        # area>=100 통과
 _cd['stability_score'] = 0.7                                # quality_filter 통과
 _cd['matching_score']  = 0.7
 _cd['recommendation']  = 'acceptable'
+_cd['background_type'] = 'complex_pattern'                  # compose bg-matching 균일 통과
+                                                           #   (안 하면 compose가 casda 다양 bg-type drop: 1152→651)
 _cd.to_csv(os.environ['CSV_CASDA'], index=False)
 print(f"casda arm: {os.environ['CSV_CASDA_FULL']} → {len(_cd)} rows (cap {MAX_ROIS}, "
       f"edge/area/quality 무력화) → {os.environ['CSV_CASDA']}")
@@ -422,7 +424,9 @@ def compose(arm):
            "--train-csv",        TRAIN_CSV,
            "--output-dir",       f"{SYN[arm]}/severstal",
            "--workers",          "8",
-           "--compositions-per-roi", "1"]   # ROI당 1합성 → 생성 풀≈MAX_ROIS(1690), 최근 synth 볼륨과 정합
+           "--compositions-per-roi", "3"]   # ROI당 3합성(다른 bg) → 풀 = gen×3 (casda 3456/aroma 4134/random 4140)
+                                            #   → 모두 ≥2534 = ratio 1.0 cap 커버 → synth_ratio 0.2~1.0 sweep 가능.
+                                            #   compose=CPU Poisson(저렴), generated 재사용(GPU regen 불요).
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(f"{'✓' if r.returncode==0 else '✗'} compose[{arm}] -> {SYN[arm]}/severstal")
     if r.returncode != 0: print('\n'.join((r.stderr or '').splitlines()[-8:]))
@@ -483,34 +487,51 @@ for arm in ARMS:
 
 ## 4. exp4v2 — Severstal 4-way detection  · 🔴 GPU
 
-exp4v2는 condition-agnostic(synthetic dir만 교체). 4 arm = baseline / random / casda / aroma. seeds 42 1 2.
+exp4v2는 condition-agnostic(synthetic dir만 교체) + **model-agnostic**. 4 arm = baseline / random / casda / aroma. **`--model all` = yolov8n/s/m 3사이즈** (동일 synth 재사용, detector만 재학습 → multi-architecture robustness). seeds 42 1 2.
+
+> **multi-model 근거**: 단일 detector(nano)로는 "증강 효과 일반화 + 아키텍처 의존성" 미검증 → reviewer 취약. synth는 arm당 1회 생성·재사용이므로 **n/s/m 추가는 detector 학습 반복만**(저비용). 계열내 스케일 robustness 확보. (더 강한 주장엔 타계열 detector 1개 추가 권장 — RT-DETR 등, 별도 통합.)
 
 ```python
-EXP4 = f"{os.environ['AROMA_SCRIPTS']}/experiments/exp4_v2_supervised_detection.py"
-!python $EXP4 \
-    --model yolov8n \
-    --condition baseline random casda aroma \
-    --dataset_keys severstal \
-    --class_mode multi \
-    --random_synthetic_dir $SYN_RANDOM \
-    --casda_synthetic_dir  $SYN_CASDA \
-    --aroma_synthetic_dir  $SYN_AROMA \
-    --real_data_dir        $AROMA_DATA \
-    --output_dir           $EXP4_OUT \
-    --seeds 42 1 2 \
-    --synth_ratio 0.4 \
-    --val_frac 0.3 \
-    --imgsz 640 \
-    --baseline_epochs 100 \
-    --patience 20 \
-    --batch 64 --cache ram --rect \
-    --yolo_cache_dir $AROMA_OUT/yolo_cache \
-    --resume
+os.environ['EXP4'] = f"{os.environ['AROMA_SCRIPTS']}/experiments/exp4_v2_supervised_detection.py"
+print("EXP4 =", os.environ['EXP4'])   # env var 여야 !python 에서 치환됨
+
+# ratio sweep: 합성 풀은 1회 생성(§3b~§3d, ≥2534)·재사용, exp4v2 학습만 ratio별 반복.
+# 각 ratio는 별도 --output_dir (덮어쓰기 방지). 비용: ratio당 model(3)×cond(4)×seed(3).
+for ratio in ["0.2", "0.4", "0.7", "1.0"]:
+    out = f"{os.environ['EXP4_OUT']}_r{ratio}"
+    print(f"\n===== synth_ratio {ratio} → {out} =====")
+    !python $EXP4 \
+        --model all \
+        --condition baseline random casda aroma \
+        --dataset_keys severstal \
+        --class_mode multi \
+        --random_synthetic_dir $SYN_RANDOM \
+        --casda_synthetic_dir  $SYN_CASDA \
+        --aroma_synthetic_dir  $SYN_AROMA \
+        --real_data_dir        $AROMA_DATA \
+        --output_dir           "$out" \
+        --seeds 42 1 2 \
+        --synth_ratio {ratio} \
+        --val_frac 0.3 \
+        --imgsz 640 \
+        --baseline_epochs 100 \
+        --patience 20 \
+        --batch 64 --cache ram --rect \
+        --yolo_cache_dir $AROMA_OUT/yolo_cache \
+        --resume
 ```
+
+> **ratio sweep 설계**: 합성 풀(compose ×3 → 각 arm ≥2534)은 **1회 생성·재사용**. exp4v2가 `--synth_ratio`별로 cap=int(2534×ratio)만큼 **각 arm에서 seeded subsample** → 모든 ratio·모든 arm 동일 cap = parity. ratio당 별도 `_r{ratio}` output. baseline(synth 무관)은 ratio 간 동일 → 첫 ratio 후 `--resume`이 skip(중복 학습 방지). **비용 급증** 주의: 4 ratio × 3 model × 4 cond × 3 seed. 처음엔 ratio 1개(예 0.4) + `--model yolov8n`로 smoke.
+
+> ⚠️ **비용 급증 주의**: `--model all`(3) × 4 condition × 3 seed = **36 학습 run** (baseline은 model×seed=9, 나머지는 synth 공유). GPU 시간 3배(단일 model 대비). 처음엔 `--model yolov8n --seeds 42`로 smoke 후 `--model all --seeds 42 1 2` 전량 권장. yolo_cache로 real 데이터 build-once 재사용.
 
 > **확정 플래그(exp4v2, 코드 확인):** `--condition`(nargs+), `--dataset_keys`, `--class_mode{single,multi}`, `--random_synthetic_dir/--casda_synthetic_dir/--aroma_synthetic_dir`, `--real_data_dir`, `--output_dir`, `--seeds`, `--synth_ratio`, `--val_frac`, `--imgsz`, `--baseline_epochs`, `--patience`, `--batch/--cache/--rect`, `--yolo_cache_dir`, `--resume`. (exp4v2_execute.md 참조 — 이 스크립트는 AROMA 레포 소속이라 CLI 확정.)
 >
-> **synth_ratio / pool parity (load-bearing — 최근 cleanbg 0.4 run과 정합):** `--synth_ratio 0.4` → severstal cap = max(1, int(n_real_train×0.4)) ≈ **1013**(real_train 2534). 최근 exp4v2 severstal(cleanbg 0.4)의 `n_synth_train=1013`과 **동일** → 직접 비교. 각 arm 생성 풀 = MAX_ROIS×compositions-per-roi = **1383×1 = 1383 ≥ 1013** → 3 arm 모두 정확히 1013으로 trim → `n_synth_train` 3조건 동일(§5 (2) parity 게이트). 생성 1회·캐시, ratio만 trim. `--resume`은 기존 severstal 결과 skip → 재실행 시 삭제 또는 fresh `--output_dir`.
+> **synth_ratio / pool parity (load-bearing):** cap = max(1, int(n_real_train×ratio)). 각 arm composed 풀 ≥ cap이어야 3조건 등가 trim. **casda background_type=complex_pattern 균일화** 후 composed 풀 = casda ~1152 / aroma 1378 / random 1379 → **셋 다 ≥ 1013** → **`--synth_ratio 0.4`** (cap 1013, 최근 cleanbg 0.4 run 정합) → 3 arm 1013 균일 trim → `n_synth_train` 동일(§5 parity 게이트 **필수 확인**).
+>
+> ⚠️ casda 균일화 안 하면 compose가 casda 다양 background_type을 drop(1152→651) → 0.4 불가. cap셀 `background_type='complex_pattern'`(또는 packaged csv 패치+recompose)로 해결. bg 선택만 균일화(hints/generated는 실제 bg-type로 생성됨 — 최종 clean본은 cap셀부터 complex_pattern로 regen 권장).
+>
+> `--resume`은 기존 severstal 결과 skip → 재실행 시 삭제 또는 fresh `--output_dir`.
 >
 > 📝 **Reviewer 방어 — "왜 1383?"**: 1383은 **보고 하이퍼파라미터가 아니다.** 보고하는 증강 budget = **synth:real = 0.4 (조건당 1013장)**, 전 조건 동일 + 이전 실험과 동일. 1383은 조건별 **생성 풀** 크기로, **가장 작은 조건(CASDA 가용 ROI)에 맞춰** 세 조건 풀을 동일화한 값(엄격 parity, CASDA ROI 전량 사용). 1383 ≥ 1013이라 학습 budget을 충분히 커버. 논문 본문엔 budget=ratio(0.4/1013)만, 1383은 부록/구현 노트로.
 >

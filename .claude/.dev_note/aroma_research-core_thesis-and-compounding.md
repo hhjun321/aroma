@@ -139,4 +139,6 @@ roi_selected.json(arm) → [어댑터] → roi_metadata.csv(CASDA 스키마)
 
 **prompt 결정 (최종, 실측 기반)**: AROMA step2 자유서술 prompt를 추론에 쓰려 했으나(§3a.5 patch), **smoke 실측 결과 OOD로 생성 비현실** — A/B 확인: 동일 aroma hint에 CASDA식 prompt=그럴듯, AROMA step2 prompt=깨짐. casda smoke(CASDA hint+prompt)=정상이라 엔진·hint는 OK → **원인=prompt 분포 불일치**. → **결정 (i): §3a.5 patch 미사용**, packager 재생성 **CASDA식 prompt**(AROMA `defect_subtype`+background_type → CASDA 템플릿) 사용 = in-distribution + AROMA 형태결정 반영("AROMA-informed prompt"). AROMA step2 자유서술 prompt-generation은 **논문 별도 컴포넌트로 기술**하되 생성엔 미사용. (어댑터 csv prompt 컬럼은 packager 무시 → 무해, prompt-ablation 참조용.) train.jsonl 이미 patch됐으면 §3a prepare 재실행으로 복원.
 
-**남은 검증**: GPU 실행(best_model 추론); §3d 변환 후 exp4v2 annotations 로드 확인; composed→exp4v2 normal_image 매핑(metadata.json) 선택 보강; AROMA prompt OOD 영향 점검(생성물 육안).
+**multi-model 결정 (게재 방어)**: 단일 YOLOv8n → reviewer 취약(일반성·아키텍처 의존성 미검증). exp4v2 `--model all`(yolov8n/s/m 3사이즈)로 severstal compounding 수행 — **synth는 arm당 1회 생성·재사용, detector만 재학습**(저비용). 계열내 스케일 robustness 확보. 비용: 3 model×4 cond×3 seed=36 run(GPU 3배) → smoke(n/1seed) 후 전량. **더 강한 주장엔 타계열 detector(RT-DETR 등) 1개 추가 권장**(별도 통합, TODO). 원 논문 "4 아키텍처" claim은 deprecated one-class AD 기반 → supervised detection 계열로 재구성 필요.
+
+**남은 검증**: GPU 실행(best_model 추론); §3d 변환 후 exp4v2 annotations 로드 확인; composed→exp4v2 normal_image 매핑(metadata.json) 선택 보강; AROMA prompt OOD 영향 점검(생성물 육안); **exp4v2 --model all 결과 per-model 집계**.
