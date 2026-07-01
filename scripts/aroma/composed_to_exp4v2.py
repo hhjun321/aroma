@@ -3,21 +3,21 @@
 CASDA composed output → exp4v2 synth annotations.json converter.
 
 This is the scriptified version of the compounding-guide §3d inline cell, with
-one CRITICAL added guarantee: **empty-mask entries are SKIPPED**.
+one CRITICAL added guarantee: **entries exp4v2 cannot label are SKIPPED**.
 
 Why (dev_note ⑧ 결함2 — parity 붕괴):
     CASDA `compose_casda_images.py` writes `{composed_dir}/images/*.png`,
-    `{composed_dir}/masks/{name}` (full-frame masks) and a metadata.json. Some
-    ControlNet-generated defects come out blank, so their composed mask has ZERO
-    nonzero pixels. exp4v2's mask→bbox step (`_mask_to_bboxes`) extracts no bbox
-    from an empty mask, so those synth images silently DROP during labeling.
-    The first compounding run showed casda arm = 771/1013 labeled (242 dropped)
+    `{composed_dir}/masks/{name}` (full-frame masks) and a metadata.json. Many
+    ControlNet-generated defects come out blank OR TINY, so their composed mask
+    yields no bbox with area >= exp4v2's min_area (50). exp4v2's mask→bbox step
+    (`_mask_to_bboxes`) extracts no bbox from such a mask, so those synth images
+    silently DROP during labeling. The compounding run showed the casda arm =
+    772/1013 labeled (241 dropped: 495/1939 masks were nonzero-but-tiny <50px)
     vs random/aroma = 1013/1013, breaking budget parity and confounding the
-    aroma-vs-casda comparison. The inline §3d cell wrote every composed image
-    (including empty-mask ones) into annotations.json, so the drop happened
-    downstream inside exp4v2. This converter instead validates the mask has >=1
-    nonzero pixel BEFORE recording the entry, so exp4v2 samples from a valid-only
-    pool and every sampled image is labelable.
+    aroma-vs-casda comparison. A naive ">=1 nonzero pixel" check does NOT catch
+    the tiny masks (they have nonzero pixels). This converter instead applies the
+    SAME bbox-area>=min_area criterion as exp4v2 BEFORE recording the entry, so
+    exp4v2 samples from a labelable-only pool and every sampled image is labeled.
 
 Output schema (matches exp4v2 `_load_synth_annotations`, verified):
     A list of dicts, each:
@@ -28,9 +28,10 @@ Output schema (matches exp4v2 `_load_synth_annotations`, verified):
         dry_run    : False
     Written to `{output_dir}/{dataset_key}/annotations.json`.
 
-Empty-mask skip precedence (deterministic):
+Skip precedence (deterministic):
     - mask file missing            → SKIP, n_skipped_no_maskfile++
-    - cv2/PIL available and mask has 0 nonzero pixels → SKIP, n_skipped_empty++
+    - cv2/PIL available and mask yields no bbox with area >= _MIN_BBOX_AREA (50)
+      → SKIP, n_skipped_no_bbox++  (matches exp4v2 `_mask_to_bboxes` min_area)
     - neither cv2 nor PIL available → cannot inspect pixels; pass on mask-EXISTS
       only (WARN once) so a no-image local env does not crash.
 
@@ -106,31 +107,59 @@ except Exception:
 _CLASS_RE = re.compile(r"_class(\d+)")
 
 
+# Minimum defect-bbox area (px) for a composed mask to count as labelable.
+# MUST match exp4v2 `_mask_to_bboxes(min_area=...)` (default 50): a mask with
+# nonzero pixels but whose every connected component's bbox is < this area yields
+# NO bbox in exp4v2 and is silently dropped at labeling — breaking budget parity
+# (the CASDA ControlNet arm produced ~25% such tiny-defect masks: 495/1939).
+# Filtering them HERE makes annotations.json == exactly what exp4v2 will label.
+_MIN_BBOX_AREA = 50
+
+
 # ---------------------------------------------------------------------------
 # Mask inspection
 # ---------------------------------------------------------------------------
 
-def _mask_has_nonzero(mask_path: str) -> Optional[bool]:
-    """Return True if the mask has >=1 nonzero pixel, False if all-zero.
+def _mask_has_valid_bbox(mask_path: str, min_area: int = _MIN_BBOX_AREA) -> Optional[bool]:
+    """Return True if the mask yields a bbox with area >= min_area, else False.
+
+    Mirrors exp4v2 `_mask_to_bboxes` (threshold >0 → external contours → keep a
+    bbox iff bw*bh >= min_area) so this converter's validity criterion EXACTLY
+    matches what exp4v2 will label. A mask with only sub-min_area (or zero)
+    foreground passes a naive ">=1 nonzero" check but is DROPPED by exp4v2 at
+    labeling → budget-parity break; catching it here prevents that.
 
     Returns None when the mask cannot be inspected (no cv2/PIL) — the caller then
-    falls back to a mask-EXISTS-only check. cv2 is preferred; PIL+numpy fallback.
-    A file that exists but fails to decode is treated as empty (False) so a
-    corrupt/blank mask is skipped rather than passed through.
+    falls back to a mask-EXISTS-only check. cv2 is preferred (per-contour, exact
+    match to exp4v2); PIL+numpy fallback approximates with the overall nonzero
+    bounding box. A file that exists but fails to decode is treated as invalid.
     """
     if HAS_CV2:
         arr = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         if arr is None:
             return False
-        # int() guards against numpy bool truthiness ambiguity.
-        return int((arr > 0).sum()) > 0
+        _, binm = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(binm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            x, y, bw, bh = cv2.boundingRect(c)
+            if bw * bh >= min_area:
+                return True
+        return False
     if HAS_PIL and HAS_NUMPY:
         try:
             im = Image.open(mask_path).convert("L")
         except Exception:  # noqa: BLE001
             return False
         arr = np.asarray(im)
-        return int((arr > 0).sum()) > 0
+        ys, xs = np.nonzero(arr > 0)
+        if xs.size == 0:
+            return False
+        # No cv2 → approximate exp4v2's per-contour test with the OVERALL nonzero
+        # bounding box (conservative: may keep a mask exp4v2 later drops when its
+        # pixels are scattered sub-min_area blobs; the cv2 path above is exact).
+        bw = int(xs.max() - xs.min() + 1)
+        bh = int(ys.max() - ys.min() + 1)
+        return bw * bh >= min_area
     # No image library — cannot inspect pixels.
     return None
 
@@ -156,15 +185,16 @@ def adapt(
     """Build the exp4v2 annotation list from a CASDA composed directory.
 
     Scans `{composed_dir}/images/*.png`, pairs each with
-    `{composed_dir}/masks/{name}`, and keeps only entries whose mask has a
-    nonzero pixel (i.e. exp4v2 can derive a bbox). Returns (annotations, stats).
+    `{composed_dir}/masks/{name}`, and keeps only entries whose mask yields a
+    bbox with area >= _MIN_BBOX_AREA (i.e. exp4v2 can label it). Returns
+    (annotations, stats).
 
     Args:
         composed_dir: CASDA compose output root (images/ + masks/ + metadata.json).
 
     Returns:
         (annotations, stats) where annotations is the valid-only list and stats
-        has keys n_total, n_valid, n_skipped_empty, n_skipped_no_maskfile.
+        has keys n_total, n_valid, n_skipped_no_bbox, n_skipped_no_maskfile.
 
     Raises:
         FileNotFoundError: composed_dir/images does not exist.
@@ -178,7 +208,7 @@ def adapt(
     imgs = sorted(glob.glob(str(images_dir / "*.png")))
     ann: List[Dict[str, Any]] = []
     n_total = len(imgs)
-    n_skipped_empty = 0
+    n_skipped_no_bbox = 0
     n_skipped_no_maskfile = 0
     warned_no_lib = False
 
@@ -199,20 +229,21 @@ def adapt(
             logger.debug("no mask file for %s — skip", name)
             continue
 
-        nz = _mask_has_nonzero(str(mp))
-        if nz is None:
+        ok = _mask_has_valid_bbox(str(mp))
+        if ok is None:
             # No cv2/PIL — cannot inspect pixels; pass on mask-exists only.
             if not warned_no_lib:
                 logger.warning(
-                    "Neither cv2 nor PIL available — empty-mask detection DISABLED; "
+                    "Neither cv2 nor PIL available — bbox-validity detection DISABLED; "
                     "keeping every entry whose mask file exists. Install "
-                    "opencv-python or pillow for the empty-mask skip guarantee."
+                    "opencv-python or pillow for the parity-preserving skip guarantee."
                 )
                 warned_no_lib = True
-        elif not nz:
-            # Mask exists but is all-zero → no bbox → parity-breaking drop. SKIP.
-            n_skipped_empty += 1
-            logger.debug("empty mask (0 nonzero px) for %s — skip", name)
+        elif not ok:
+            # No bbox >= min_area → exp4v2 drops it at labeling → SKIP here so
+            # annotations.json == exactly what exp4v2 will label (parity).
+            n_skipped_no_bbox += 1
+            logger.debug("no bbox >= %dpx for %s — skip", _MIN_BBOX_AREA, name)
             continue
 
         ann.append({
@@ -226,7 +257,7 @@ def adapt(
     stats = {
         "n_total": n_total,
         "n_valid": len(ann),
-        "n_skipped_empty": n_skipped_empty,
+        "n_skipped_no_bbox": n_skipped_no_bbox,
         "n_skipped_no_maskfile": n_skipped_no_maskfile,
     }
     return ann, stats
@@ -240,8 +271,8 @@ def convert(
     """Convert a CASDA composed dir → exp4v2 annotations.json (valid-only).
 
     Writes `{output_dir}/{dataset_key}/annotations.json` containing only entries
-    whose composed mask has a nonzero pixel (so exp4v2 can derive a bbox and
-    every sampled synth image is labelable — preserves budget parity across arms).
+    whose composed mask yields a bbox with area >= _MIN_BBOX_AREA (so exp4v2 can
+    label it and every sampled synth image is labelable — preserves budget parity).
 
     Args:
         composed_dir: CASDA compose output root (images/ + masks/ + metadata.json).
@@ -264,10 +295,10 @@ def convert(
         json.dump(ann, f, indent=2)
 
     logger.info(
-        "composed_to_exp4v2: n_total=%d, n_valid=%d, n_skipped_empty=%d, "
-        "n_skipped_no_maskfile=%d → %s",
-        stats["n_total"], stats["n_valid"], stats["n_skipped_empty"],
-        stats["n_skipped_no_maskfile"], out_path,
+        "composed_to_exp4v2: n_total=%d, n_valid=%d, n_skipped_no_bbox=%d, "
+        "n_skipped_no_maskfile=%d (min_bbox_area=%d) → %s",
+        stats["n_total"], stats["n_valid"], stats["n_skipped_no_bbox"],
+        stats["n_skipped_no_maskfile"], _MIN_BBOX_AREA, out_path,
     )
     return stats["n_valid"]
 
@@ -279,7 +310,7 @@ def convert(
 def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Convert CASDA composed output → exp4v2 annotations.json "
-                    "(skips empty-mask entries so budget parity holds)."
+                    "(skips masks with no bbox >= min_area so budget parity holds)."
     )
     p.add_argument("--composed_dir", required=True,
                    help="CASDA compose output root (images/ + masks/ + metadata.json)")
