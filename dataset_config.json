@@ -247,5 +247,36 @@
       "/content/drive/MyDrive/data/Aroma/severstal/test/class4"
     ],
     "notes": "1600x256px. 4 defect classes (ClassId 1-4 -> defect_type class1..class4; Class2 rare -> Neff<4 imbalance). Run prepare_severstal.py first (RLE->PNG masks under masks/ + masks/class{c}/). Baseline real-only scope; masks resolved from masks/ not ground_truth/. exp4v2 --class_mode {single,multi}."
+  },
+  "aitex": {
+    "domain": "aitex",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/aitex/train/good",
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/aitex/test/002",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/006",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/010",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/016",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/019",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/022",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/023",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/025",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/027",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/029",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/030",
+      "/content/drive/MyDrive/data/Aroma/aitex/test/036"
+    ],
+    "notes": "Textile. 4096x256px (extreme 16:1 aspect). ~105 defect / 140 good across 7 fabrics; ~12 defect codes (ddd token of nnnn_ddd_ff.png -> defect_type). Run prepare_aitex.py first (normalizes 3-folder Kaggle layout to MVTec-style: NODefect->train/good, Defect->test/{ddd}, Mask->ground_truth/{ddd}/{stem}_mask.png). Some defect images have no mask -> skipped by prepare. seed_dirs list is a placeholder superset; confirm actual on-disk test/{ddd} folders after prepare and prune to match (aitex_manifest.json defect_codes lists the real ones). masks resolved via ground_truth/{ddd}/{stem}_mask.png (aitex branch reuses mvtec resolution)."
+  },
+  "mtd": {
+    "domain": "mtd",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/MTD/MT_Free/Imgs",
+    "seed_dirs": [
+      "/content/drive/MyDrive/data/Aroma/MTD/MT_Blowhole/Imgs",
+      "/content/drive/MyDrive/data/Aroma/MTD/MT_Break/Imgs",
+      "/content/drive/MyDrive/data/Aroma/MTD/MT_Crack/Imgs",
+      "/content/drive/MyDrive/data/Aroma/MTD/MT_Fray/Imgs",
+      "/content/drive/MyDrive/data/Aroma/MTD/MT_Uneven/Imgs"
+    ],
+    "notes": "Magnetic tile. 1344 imgs (free 952 / defect 392), 5 defect classes. Variable-sized crops. git clone abin24/Magnetic-tile-defect-datasets. (trailing dot in repo name) into Drive; no prepare script needed. Each Imgs/ has co-located {stem}.jpg (image) + {stem}.png (pixel mask); for domain=='mtd' the image glob is restricted to .jpg/.jpeg so co-located .png masks are NOT ingested as images. defect_type is derived from the parent-of-Imgs folder name (MT_Blowhole/MT_Break/... -> 5 distinct classes), not the 'Imgs' leaf. masks resolved by mtd branch as image_path.with_suffix('.png') co-located. MT_Free .png masks are excluded from the good context by the same .jpg-only glob."
   }
 }

@@ -106,13 +106,27 @@ _CONTEXT_CSV_FIELDS = [
 # ---------------------------------------------------------------------------
 
 
-def _resolve_seed_entries(entry: dict) -> List[Tuple[str, Path]]:
+def _seed_defect_type(domain: str, d: str) -> str:
+    """Derive a defect_type label from a seed_dir path, domain-aware.
+
+    Default is the leaf folder name. For MTD every seed_dir ends in
+    ``MT_{class}/Imgs`` so the leaf ("Imgs") is identical across all 5 classes,
+    collapsing the class distinction and colliding mask_out_path stems. Use the
+    parent-of-Imgs folder name (``MT_Blowhole`` etc.) to keep classes distinct.
+    """
+    p = Path(d)
+    if domain == "mtd":
+        return p.parent.name if p.name == "Imgs" else p.name
+    return p.name
+
+
+def _resolve_seed_entries(entry: dict, domain: str = "unknown") -> List[Tuple[str, Path]]:
     """Normalize seed_dir (str) / seed_dirs (list) → [(defect_type, Path)]."""
     if "seed_dirs" in entry:
-        return [(Path(d).name, Path(d)) for d in entry["seed_dirs"]]
+        return [(_seed_defect_type(domain, d), Path(d)) for d in entry["seed_dirs"]]
     if "seed_dir" in entry:
         d = entry["seed_dir"]
-        return [(Path(d).name, Path(d))]
+        return [(_seed_defect_type(domain, d), Path(d))]
     return []
 
 
@@ -153,6 +167,29 @@ def _find_mask_path(domain: str, image_path: Path, defect_type: str) -> Optional
         merged = sev_root / "masks" / f"{stem}.png"
         if merged.exists():
             return merged
+
+    elif domain == "aitex":
+        # prepare_aitex.py normalizes AITEX into an MVTec-style layout:
+        #   image_path : .../aitex/test/{defect_type}/{stem}.png   (defect_type = ddd code)
+        #   → mask     : .../aitex/ground_truth/{defect_type}/{stem}_mask.png
+        candidate = (
+            image_path.parent.parent.parent
+            / "ground_truth"
+            / defect_type
+            / f"{stem}_mask.png"
+        )
+        if candidate.exists():
+            return candidate
+
+    elif domain == "mtd":
+        # MTD (Magnetic-tile-defect) masks are co-located with the image, same
+        # basename, .png extension (image is .jpg):
+        #   image_path : .../MTD/MT_{class}/Imgs/{stem}.jpg
+        #   → mask     : .../MTD/MT_{class}/Imgs/{stem}.png
+        for ext in (".png", ".PNG"):
+            candidate = image_path.with_suffix(ext)
+            if candidate.exists():
+                return candidate
 
     # isp: no ground-truth masks; other domains also return None → fallback
     return None
@@ -549,13 +586,17 @@ class DistributionProfiler:
         logger.info("[Step 1] Discovering image and mask paths...")
         domain = self.domain
         image_dir = Path(self.entry["image_dir"])
-        seed_entries = _resolve_seed_entries(self.entry)
+        seed_entries = _resolve_seed_entries(self.entry, domain)
 
         if not image_dir.exists():
             logger.warning(f"  image_dir not found: {image_dir}")
 
+        # MTD stores the pixel mask as a co-located {stem}.png beside the
+        # {stem}.jpg image; restrict to .jpg/.jpeg so masks are not ingested
+        # as images. All other domains keep the full image extension set.
+        img_exts = (".jpg", ".jpeg") if domain == "mtd" else (".png", ".jpg", ".jpeg", ".bmp")
         good_images = sorted(p for p in image_dir.glob("*.*")
-                             if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"))
+                             if p.suffix.lower() in img_exts)
         if self.max_images:
             good_images = good_images[: self.max_images]
 
@@ -572,7 +613,7 @@ class DistributionProfiler:
                 logger.warning(f"  seed_dir not found: {seed_dir}")
                 continue
             images = sorted(p for p in seed_dir.glob("*.*")
-                            if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"))
+                            if p.suffix.lower() in img_exts)
             if self.max_images:
                 images = images[: self.max_images]
 
