@@ -32,7 +32,8 @@ print("EXP2_SWEEP :", os.environ['EXP2_SWEEP'])
 
 ```python
 TOP_K_SWEEP = [20, 30, 50, 100, 200]
-DATASETS    = ["mvtec_carpet", "mvtec_leather", "visa_macaroni", "visa_fryum", "severstal"]
+# AROMA v2-1 데이터셋 4종 (aitex/mtd 선행: multidomain_integration_verify_execute.md로 prepare+Stage1-3 완료)
+DATASETS    = ["severstal", "mvtec_leather", "aitex", "mtd"]
 SEED        = 42
 
 # dataset_config에서 class_mode 조회 → multi면 stratified 플래그 추가

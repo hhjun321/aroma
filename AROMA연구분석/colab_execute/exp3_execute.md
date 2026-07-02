@@ -63,7 +63,8 @@ _cfg_path = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json
 with open(_cfg_path) as _f:
     DATASET_CONFIG = json.load(_f)
 
-DATASETS = ["mvtec_carpet", "mvtec_leather", "visa_macaroni", "visa_fryum", "severstal"]
+# AROMA v2-1 데이터셋 4종 (aitex/mtd 선행: multidomain_integration_verify_execute.md로 prepare+Stage1-3 완료)
+DATASETS = ["severstal", "mvtec_leather", "aitex", "mtd"]
 
 # 조회 결과 확인
 for ds in DATASETS:
@@ -121,7 +122,7 @@ for ds in DATASETS:
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         mvtec_carpet mvtec_leather visa_macaroni visa_fryum severstal \
+    --dataset_keys         severstal mvtec_leather aitex mtd \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --device               cpu
@@ -160,7 +161,7 @@ PaDiM 3조건 학습 및 AUROC 측정. **Colab Pro A100 권장.**
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         mvtec_carpet mvtec_leather visa_macaroni visa_fryum severstal \
+    --dataset_keys         severstal mvtec_leather aitex mtd \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --image_size           256

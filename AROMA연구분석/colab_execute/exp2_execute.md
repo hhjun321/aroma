@@ -36,7 +36,9 @@ print("EXP2_OUT      :", os.environ['EXP2_OUT'])
 AROMA ROI(`$AROMA_OUT/roi/`)를 덮어쓰지 않도록 **별도 디렉터리**(`roi_random/`)에 저장한다.
 
 ```python
-DATASETS = ["mvtec_carpet", "mvtec_leather", "visa_macaroni", "visa_fryum", "severstal"]
+# AROMA v2-1 데이터셋 4종: severstal(강판)/mvtec_leather(가죽)/aitex(텍스타일)/mtd(자성타일).
+#   aitex/mtd 선행: multidomain_integration_verify_execute.md로 다운로드+prepare+Stage1-3(profiling→roi) 완료.
+DATASETS = ["severstal", "mvtec_leather", "aitex", "mtd"]
 
 for ds in DATASETS:
     os.environ['PROFILING_DIR']     = f"{os.environ['AROMA_OUT']}/profiling/{ds}"
@@ -77,7 +79,7 @@ AROMA ROI vs Random ROI의 5개 지표(Coverage × 3, Entropy, Gini)를 비교�
 !python $AROMA_SCRIPTS/experiments/exp2_roi_quality.py \
     --aroma_roi_dir  $AROMA_OUT/roi \
     --random_roi_dir $RANDOM_ROI_DIR \
-    --dataset_keys   mvtec_carpet mvtec_leather visa_macaroni visa_fryum severstal \
+    --dataset_keys   severstal mvtec_leather aitex mtd \
     --output_dir     $EXP2_OUT
 ```
 
