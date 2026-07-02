@@ -4,7 +4,7 @@
 > **전제**:
 > - Google Drive 마운트 완료, `os.environ['DRIVE']` 설정됨 (예: `/content/drive/MyDrive/data/Aroma`).
 > - AROMA 저장소가 `/content/AROMA`로 clone 되어 있고 `dataset_config.json`에 `aitex`/`mtd` 엔트리 존재 (본 PR에서 추가).
-> - AITEX Kaggle 다운로드용 `kaggle.json` API 토큰을 Drive 루트(`$DRIVE/kaggle.json`)에 미리 보관 + Kaggle에서 해당 데이터셋 약관 수락 완료.
+> - AITEX Kaggle 다운로드용 **API 토큰(KGAT_...)** 준비 (Kaggle → Settings → API). STEP 1에서 `getpass`로 입력(평문 저장 금지). + Kaggle에서 해당 데이터셋 약관 수락 완료. (구버전 폴백: `kaggle.json`을 `$DRIVE`에 보관.)
 >
 > **목적**: 신규 2개 도메인(AITEX 텍스타일 / MTD 자성타일)이 Stage 1 파이프라인을 통과하고, morphology가 **fallback이 아닌 ground-truth mask**로 산출되는지 검증. `mask_source == 'ground_truth'` 및 비-degenerate morphology(solidity<1, extent<1)를 확인해 mask 경로 해소가 정상인지 판정한다.
 
@@ -46,21 +46,22 @@ print("MTD_DIR       :", os.environ['MTD_DIR'])
 
 ### 1-A. AITEX (Kaggle API → Drive)
 
-Kaggle CLI 설치 + 인증 후 데이터셋을 Drive로 내려받아 압축 해제한다. `kaggle.json`은 런타임이 초기화돼도 살아남도록 Drive에 보관해 매 세션 복사한다.
+Kaggle CLI(≥1.8.0) 설치 + **API 토큰(KGAT) 인증** 후 데이터셋을 Drive로 내려받아 압축 해제한다.
+
+> ⚠️ **보안**: KGAT 토큰은 자격증명이다. 노트북/채팅/git에 **평문으로 남기지 말 것.** 노출되면 즉시 Kaggle에서 revoke+재발급. 아래처럼 Colab **`getpass`로 입력**하면 셀 출력·저장본에 안 남는다. (Drive 파일로 두려면 `$DRIVE/kaggle_token.txt`에 두고 읽되, 그 파일 권한/공유에 주의.)
 
 ```python
-import os
-# 1) client 설치
-!pip -q install kaggle
-# 2) 인증: kaggle.json을 ~/.config/kaggle 로 복사 + chmod 600
-os.environ['KAGGLE_CONFIG_DIR'] = '/root/.config/kaggle'
-!mkdir -p $KAGGLE_CONFIG_DIR
-!cp "$DRIVE/kaggle.json" $KAGGLE_CONFIG_DIR/kaggle.json
-!chmod 600 $KAGGLE_CONFIG_DIR/kaggle.json
+import os, getpass
+# 1) KGAT 토큰 지원 버전 보장 (≥1.8.0)
+!pip -q install -U "kaggle>=1.8.0"
+# 2) 인증: API 토큰(KGAT_...)을 KAGGLE_API_TOKEN 으로. getpass → 출력에 안 남음
+os.environ['KAGGLE_API_TOKEN'] = getpass.getpass('Kaggle API token (KGAT_...): ')
 # 3) 다운로드 (-p: 대상 디렉토리)
 !mkdir -p $KAGGLE_DL
 !kaggle datasets download -d nexuswho/aitex-fabric-image-database -p $KAGGLE_DL
 ```
+
+> 대안(kaggle.json 방식): `$DRIVE/kaggle.json`(`{"username","key"}`)을 `~/.config/kaggle/`로 복사 후 `chmod 600` — 구버전 CLI 호환. KGAT 방식이 안 되면 이걸로 폴백.
 
 압축 해제 (`-o` 덮어쓰기로 비대화형 셀 hang 방지):
 

@@ -53,6 +53,43 @@ from typing import Dict, List, Optional, Tuple
 _IMG_EXTS = {".png", ".PNG"}
 _MASK_SUFFIX = "_mask"
 
+# Guarded image libs (cv2 preferred, PIL+numpy fallback) — used ONLY to detect
+# all-zero / unreadable masks so they are skipped, not silently passed to the
+# profiling Otsu fallback (which would invent a fake defect region). When no lib
+# is available we cannot inspect pixels → treat as "keep" (do not over-skip).
+try:
+    import numpy as _np  # type: ignore[import]
+    _HAS_NUMPY = True
+except Exception:
+    _HAS_NUMPY = False
+try:
+    import cv2 as _cv2  # type: ignore[import]
+    _HAS_CV2 = True
+except Exception:
+    _HAS_CV2 = False
+try:
+    from PIL import Image as _PILImage  # type: ignore[import]
+    _HAS_PIL = True
+except Exception:
+    _HAS_PIL = False
+
+
+def _mask_nonzero(mask_path: str) -> Optional[bool]:
+    """True if mask readable AND has >=1 nonzero pixel; False if unreadable or
+    all-zero; None if no image lib available (caller then keeps the mask)."""
+    if _HAS_CV2:
+        arr = _cv2.imread(mask_path, _cv2.IMREAD_GRAYSCALE)
+        if arr is None:
+            return False
+        return bool(arr.max() > 0)
+    if _HAS_PIL and _HAS_NUMPY:
+        try:
+            arr = _np.asarray(_PILImage.open(mask_path).convert("L"))
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(arr.max() > 0)
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Filename parsing
@@ -133,6 +170,7 @@ def prepare(
     # --- Defect images grouped by defect code; masks matched by stem ---
     per_code_counts: Dict[str, int] = {}
     n_skipped_no_mask = 0
+    n_skipped_empty_mask = 0
     n_unparsed_code = 0
     skipped_examples: List[str] = []
     manifest_defects: List[Dict[str, object]] = []
@@ -153,6 +191,16 @@ def prepare(
             n_skipped_no_mask += 1
             if len(skipped_examples) < 10:
                 skipped_examples.append(f"no_mask:{src.name}")
+            continue
+
+        # AITEX known quirk: some masks exist but are ALL-ZERO (no annotated
+        # defect region) or unreadable. Staging them lets profiling's Otsu
+        # fallback invent a fake defect (mask_source=fallback_otsu). Skip them
+        # like no-mask so only genuine ground-truth defects seed the pipeline.
+        if _mask_nonzero(str(mask_src)) is False:
+            n_skipped_empty_mask += 1
+            if len(skipped_examples) < 10:
+                skipped_examples.append(f"empty_mask:{src.name}")
             continue
 
         # Stage image under test/{ddd}/{stem}.png
@@ -185,6 +233,7 @@ def prepare(
             "defect_images_total": len(defect_files),
             "mask_files_total": len(mask_files),
             "skipped_no_mask": n_skipped_no_mask,
+            "skipped_empty_mask": n_skipped_empty_mask,
             "unparsed_code": n_unparsed_code,
             "per_defect_code": per_code_counts,
         },
@@ -204,6 +253,7 @@ def prepare(
           f"defect_matched={len(manifest_defects)}  "
           f"per_defect_code={per_code_counts}")
     print(f"[prepare_aitex] skipped_no_mask={n_skipped_no_mask}  "
+          f"skipped_empty_mask={n_skipped_empty_mask}  "
           f"unparsed_code={n_unparsed_code}")
     if skipped_examples:
         print(f"[prepare_aitex] skipped examples: {skipped_examples}")
