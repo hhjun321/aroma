@@ -95,6 +95,7 @@
   },
   "mvtec_leather": {
     "domain": "mvtec",
+    "class_mode": "multi",
     "image_dir": "/content/drive/MyDrive/data/Aroma/mvtec/leather/train/good",
     "seed_dirs": [
       "/content/drive/MyDrive/data/Aroma/mvtec/leather/test/color",
@@ -250,6 +251,7 @@
   },
   "aitex": {
     "domain": "aitex",
+    "class_mode": "multi",
     "image_dir": "/content/drive/MyDrive/data/Aroma/aitex/train/good",
     "seed_dirs": [
       "/content/drive/MyDrive/data/Aroma/aitex/test/002",
@@ -269,6 +271,7 @@
   },
   "mtd": {
     "domain": "mtd",
+    "class_mode": "multi",
     "image_dir": "/content/drive/MyDrive/data/Aroma/MTD/MT_Free/Imgs",
     "seed_dirs": [
       "/content/drive/MyDrive/data/Aroma/MTD/MT_Blowhole/Imgs",
