@@ -2926,7 +2926,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--dataset_keys",
         required=True,
         nargs="+",
-        help="평가할 데이터셋 키 목록 (e.g. isp_LSM_1 mvtec_cable visa_cashew visa_pcb)",
+        help="평가할 데이터셋 키 목록 (e.g. severstal mvtec_leather aitex mtd)",
     )
     p.add_argument(
         "--random_synthetic_dir",
