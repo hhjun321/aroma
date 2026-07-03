@@ -27,7 +27,8 @@ os.environ['DATASET_CONFIG'] = '/content/AROMA/dataset_config.json'
 os.environ['KAGGLE_DL']  = f"{os.environ['DRIVE']}/kaggle_download"
 os.environ['AITEX_RAW']  = f"{os.environ['DRIVE']}/aitex_raw"     # Kaggle 3폴더 압축 해제 위치
 os.environ['AITEX_OUT']  = f"{os.environ['DRIVE']}/aitex"         # prepare_aitex 정규화 출력 (dataset_config image_dir 기준)
-os.environ['MTD_DIR']    = f"{os.environ['DRIVE']}/MTD"           # MTD git clone 위치
+os.environ['MTD_RAW']    = f"{os.environ['DRIVE']}/mtd_raw"       # MTD Supervisely 루트 (ds/ann, ds/img, meta.json)
+os.environ['MTD_OUT']    = f"{os.environ['DRIVE']}/mtd"           # prepare_mtd 정규화 출력 (dataset_config image_dir 기준)
 
 print("AROMA_SCRIPTS      :", os.environ['AROMA_SCRIPTS'])
 print("AROMA_ROOT_SCRIPTS :", os.environ['AROMA_ROOT_SCRIPTS'])
@@ -35,10 +36,11 @@ print("AROMA_OUT     :", os.environ['AROMA_OUT'])
 print("DATASET_CONFIG:", os.environ['DATASET_CONFIG'])
 print("AITEX_RAW     :", os.environ['AITEX_RAW'])
 print("AITEX_OUT     :", os.environ['AITEX_OUT'])
-print("MTD_DIR       :", os.environ['MTD_DIR'])
+print("MTD_RAW       :", os.environ['MTD_RAW'])
+print("MTD_OUT       :", os.environ['MTD_OUT'])
 ```
 
-> ⚠️ `dataset_config.json`의 `aitex` `image_dir`은 `/content/drive/MyDrive/data/Aroma/aitex/train/good`, `mtd` `image_dir`은 `/content/drive/MyDrive/data/Aroma/MTD/MT_Free/Imgs`를 가정한다. `$DRIVE`가 다르면 config 경로도 함께 맞춰야 한다 (본 가이드는 `$DRIVE = /content/drive/MyDrive/data/Aroma` 가정).
+> ⚠️ `dataset_config.json`의 `aitex` `image_dir`은 `.../aitex/train/good`, `mtd` `image_dir`은 `.../mtd/train/good`(prepare_mtd 정규화 출력)를 가정한다. `$DRIVE`가 다르면 config 경로도 함께 맞춘다 (본 가이드는 `$DRIVE = /content/drive/MyDrive/data/Aroma` 가정).
 
 ---
 
@@ -75,46 +77,41 @@ import os
 
 > 다운로드 zip 파일명이 다르면(`aitex-fabric-image-database.zip` 이 아니면) `!ls $KAGGLE_DL` 로 실제 파일명을 확인해 위 unzip 경로를 수정한다. 3폴더가 상위 디렉토리 하나 더 안쪽에 풀릴 수 있으니 `ls -R` 결과로 실제 `Defect_images/` 위치를 확인하고 STEP 2의 인자 경로를 맞춘다.
 
-### 1-B. MTD (GitHub clone → Drive)
+### 1-B. MTD (Dataset Ninja **Supervisely** 배포판 → Drive)
 
-MTD 저장소 이름 끝에 **마침표(.)** 가 있다 (`Magnetic-tile-defect-datasets.`). clone URL은 마침표 + `.git` 이므로 `git` 앞에 점 2개다. 점을 빼면 404.
+⚠️ MTD는 **Supervisely 포맷**을 사용한다 (abin24 GitHub `MT_*/Imgs` co-located 아님). 구조:
+```
+<MTD_RAW>/meta.json                 # 5 클래스(blowhole/break/crack/fray/uneven), 전부 bitmap
+<MTD_RAW>/ds/img/<name>.jpg         # 1344장
+<MTD_RAW>/ds/ann/<name>.jpg.json    # {size, objects:[{classTitle, bitmap:{data(base64-zlib-PNG RGBA), origin}}], tags}
+```
+- `objects==[]` → good(956장), `objects!=[]` → 결함(388장, 459 obj). Dataset Ninja(datasetninja.com/magnetic-tile-surface-defect)에서 받아 `$MTD_RAW`에 둔다.
 
+원본 존재 확인:
 ```python
-import os
-# 저장소 이름 끝의 trailing dot 주의: ...datasets. + .git
-!git clone https://github.com/abin24/Magnetic-tile-defect-datasets..git "$DRIVE/_mtd_clone"
-# MT_* 폴더를 MTD_DIR 아래로 정리 (co-located jpg+png 구조 그대로 유지)
-!mkdir -p $MTD_DIR
-!cp -r "$DRIVE/_mtd_clone/MT_Blowhole" "$DRIVE/_mtd_clone/MT_Break" \
-       "$DRIVE/_mtd_clone/MT_Crack" "$DRIVE/_mtd_clone/MT_Fray" \
-       "$DRIVE/_mtd_clone/MT_Uneven" "$DRIVE/_mtd_clone/MT_Free" $MTD_DIR/
-!ls $MTD_DIR
-# 각 MT_* 안에 Imgs/ 가 있고 {id}.jpg + {id}.png 가 co-located 인지 확인
-!ls $MTD_DIR/MT_Blowhole/Imgs | head -6
+import os, glob, json, collections
+R = os.environ['MTD_RAW']                       # Supervisely 루트 (ds/ann, ds/img, meta.json)
+print("meta:", os.path.exists(f"{R}/meta.json"),
+      "| ann:", len(glob.glob(f"{R}/ds/ann/*.json")),
+      "| img:", len(glob.glob(f"{R}/ds/img/*")))
+# 클래스/그룹 분포 빠른 확인
+c=collections.Counter(); emp=0
+for f in glob.glob(f"{R}/ds/ann/*.json"):
+    o=json.load(open(f))['objects']
+    emp += (not o)
+    for x in o: c[x.get('classTitle')]+=1
+print("free(good)=", emp, "| obj per class=", dict(c))   # 기대: good≈956, 5 class 합≈459
 ```
 
-**출력 확인:**
-
-```python
-import os
-for sub in ['MT_Blowhole', 'MT_Break', 'MT_Crack', 'MT_Fray', 'MT_Uneven', 'MT_Free']:
-    p = f"{os.environ['MTD_DIR']}/{sub}/Imgs"
-    if os.path.isdir(p):
-        n_jpg = len([f for f in os.listdir(p) if f.lower().endswith('.jpg')])
-        n_png = len([f for f in os.listdir(p) if f.lower().endswith('.png')])
-        print(f"{sub}: jpg(이미지)={n_jpg}  png(mask)={n_png}")
-    else:
-        print(f"{sub}: MISSING — {p}")
-```
-
-> jpg(이미지) 수와 png(mask) 수가 서로 비슷해야 한다 (co-located 1:1). MT_Free의 png는 near-empty mask이며 good 이미지로만 쓰인다.
+> ann≈1344, img≈1344, good≈956. 다르면 `$MTD_RAW` 경로/다운로드 확인.
 
 ---
 
-## STEP 2 — prepare_aitex 정규화 (AITEX만)
+## STEP 2 — prepare 정규화 (AITEX + MTD)
 
-AITEX 3폴더 원본을 MVTec식 레이아웃으로 정규화한다: `NODefect_images → train/good`, `Defect_images → test/{ddd}`, `Mask_images → ground_truth/{ddd}/{stem}_mask.png`. mask 없는 결함 이미지는 skip + count. (MTD는 co-located mask라 prepare 불필요 — `_find_mask_path` mtd 분기가 직접 해소.)
+두 셋 모두 MVTec식 레이아웃(`train/good`, `test/{class}`, `ground_truth/{class}/{stem}_mask.png`)으로 정규화 → 기존 `_find_mask_path` 해소 재사용.
 
+**2-A. AITEX** — 3폴더 → `NODefect_images → train/good`, `Defect_images → test/{ddd}`, `Mask_images → ground_truth/{ddd}/{stem}_mask.png`. mask 없거나 빈 결함 skip+count.
 ```python
 !python $AROMA_SCRIPTS/prepare_aitex.py \
     --defect_images   $AITEX_RAW/Defect_images \
@@ -123,7 +120,25 @@ AITEX 3폴더 원본을 MVTec식 레이아웃으로 정규화한다: `NODefect_i
     --output_dir      $AITEX_OUT
 ```
 
-**출력 확인:**
+**2-B. MTD** — Supervisely bitmap 주석을 full-frame mask로 래스터화 → `objects==[] → train/good`, 결함 class별 → `test/{class}` + `ground_truth/{class}/{stem}_mask.png`(class-union). 빈 mask skip+count.
+```python
+!python $AROMA_SCRIPTS/prepare_mtd.py \
+    --supervisely_root $MTD_RAW \
+    --output_dir       $MTD_OUT
+# 산출 확인
+import json, os
+mani = f"{os.environ['MTD_OUT']}/mtd_manifest.json"
+if os.path.exists(mani):
+    c = json.load(open(mani))['counts']
+    print("good           :", c['good'])              # ≈956
+    print("defect_entries :", c['defect_entries'])    # ≈459
+    print("per_class      :", c['per_class'])
+    print("skipped_empty  :", c['skipped_empty_mask'], " no_img:", c['skipped_no_img'])
+else:
+    print("MISSING —", mani)
+```
+
+**출력 확인 (AITEX):**
 
 ```python
 import json, os
@@ -292,7 +307,7 @@ def verify(ds, env):
           f"(mask_source 전부 ground_truth={ok_gt}, 비-degenerate morphology={ok_morph})")
     if not ok_gt:
         print(f"      ✗ fallback_* 존재 → mask 경로 해소 실패. "
-              f"aitex: prepare_aitex ground_truth/{{ddd}}/ 확인 / mtd: co-located {{stem}}.png 확인")
+              f"aitex: prepare_aitex ground_truth/{{ddd}}/ 확인 / mtd: prepare_mtd ground_truth/{{class}}/{{stem}}_mask.png 확인")
     if not ok_morph:
         print(f"      ✗ morphology 붕괴(solidity/extent≈1) → mask가 bbox로 대체됨. mask 내용 점검")
     print()
@@ -311,7 +326,7 @@ verify('mtd',   'PROFILING_MTD')
 | csv rows | > 0 | 0 → 모든 결함 drop (mask 로드/추출 전부 실패) |
 
 - **AITEX**: `fallback_*`가 나오면 → `prepare_aitex.py`가 `ground_truth/{ddd}/{stem}_mask.png`를 생성했는지, config seed_dirs의 `{ddd}` 폴더명이 `ground_truth/{ddd}` 와 일치하는지 확인 (`_find_mask_path` aitex 분기는 `image_path.parent.parent.parent/ground_truth/{defect_type}/{stem}_mask.png` 조회).
-- **MTD**: `fallback_*`가 나오면 → 각 `{stem}.jpg` 옆에 동일 stem `{stem}.png` mask가 실제로 co-located 인지, MT_Free가 아닌 결함 클래스인지 확인 (`_find_mask_path` mtd 분기는 `image_path.with_suffix('.png')` 조회).
+- **MTD**: `fallback_*`가 나오면 → `prepare_mtd.py`가 `ground_truth/{class}/{stem}_mask.png`를 생성했는지, config seed_dirs `test/{class}`와 클래스명이 일치하는지 확인 (`_find_mask_path` mtd 분기는 `image_path.parent.parent.parent/ground_truth/{defect_type}/{stem}_mask.png` 조회, aitex 미러).
 
 ---
 

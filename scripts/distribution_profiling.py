@@ -182,14 +182,18 @@ def _find_mask_path(domain: str, image_path: Path, defect_type: str) -> Optional
             return candidate
 
     elif domain == "mtd":
-        # MTD (Magnetic-tile-defect) masks are co-located with the image, same
-        # basename, .png extension (image is .jpg):
-        #   image_path : .../MTD/MT_{class}/Imgs/{stem}.jpg
-        #   → mask     : .../MTD/MT_{class}/Imgs/{stem}.png
-        for ext in (".png", ".PNG"):
-            candidate = image_path.with_suffix(ext)
-            if candidate.exists():
-                return candidate
+        # prepare_mtd.py normalizes the MTD Supervisely distribution into an
+        # MVTec-style layout (bitmap annotations rasterized to full-frame masks):
+        #   image_path : .../mtd/test/{defect_type}/{stem}.jpg   (defect_type = classTitle)
+        #   → mask     : .../mtd/ground_truth/{defect_type}/{stem}_mask.png
+        candidate = (
+            image_path.parent.parent.parent
+            / "ground_truth"
+            / defect_type
+            / f"{stem}_mask.png"
+        )
+        if candidate.exists():
+            return candidate
 
     # isp: no ground-truth masks; other domains also return None → fallback
     return None

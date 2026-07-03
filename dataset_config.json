@@ -272,14 +272,14 @@
   "mtd": {
     "domain": "mtd",
     "class_mode": "multi",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/MTD/MT_Free/Imgs",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/mtd/train/good",
     "seed_dirs": [
-      "/content/drive/MyDrive/data/Aroma/MTD/MT_Blowhole/Imgs",
-      "/content/drive/MyDrive/data/Aroma/MTD/MT_Break/Imgs",
-      "/content/drive/MyDrive/data/Aroma/MTD/MT_Crack/Imgs",
-      "/content/drive/MyDrive/data/Aroma/MTD/MT_Fray/Imgs",
-      "/content/drive/MyDrive/data/Aroma/MTD/MT_Uneven/Imgs"
+      "/content/drive/MyDrive/data/Aroma/mtd/test/blowhole",
+      "/content/drive/MyDrive/data/Aroma/mtd/test/break",
+      "/content/drive/MyDrive/data/Aroma/mtd/test/crack",
+      "/content/drive/MyDrive/data/Aroma/mtd/test/fray",
+      "/content/drive/MyDrive/data/Aroma/mtd/test/uneven"
     ],
-    "notes": "Magnetic tile. 1344 imgs (free 952 / defect 392), 5 defect classes. Variable-sized crops. git clone abin24/Magnetic-tile-defect-datasets. (trailing dot in repo name) into Drive; no prepare script needed. Each Imgs/ has co-located {stem}.jpg (image) + {stem}.png (pixel mask); for domain=='mtd' the image glob is restricted to .jpg/.jpeg so co-located .png masks are NOT ingested as images. defect_type is derived from the parent-of-Imgs folder name (MT_Blowhole/MT_Break/... -> 5 distinct classes), not the 'Imgs' leaf. masks resolved by mtd branch as image_path.with_suffix('.png') co-located. MT_Free .png masks are excluded from the good context by the same .jpg-only glob."
+    "notes": "Magnetic tile (Dataset Ninja Supervisely 배포판). 1344 imgs (free 956 / defect 388, 459 obj), 5 classes (blowhole/break/crack/fray/uneven), all bitmap annotations. prepare_mtd.py normalizes ds/ann(*.jpg.json)+ds/img into MVTec-style layout: train/good, test/{class}/{name}.jpg, ground_truth/{class}/{stem}_mask.png (bitmap base64-zlib-PNG rasterized to full-frame; empty masks skipped). Masks resolved by the mtd _find_mask_path branch (mvtec-style ground_truth/{class}/{stem}_mask.png). Images are .jpg; domain=='mtd' image glob restricted to .jpg/.jpeg. Multi-defect images appear under each present class with a class-union mask."
   }
 }
