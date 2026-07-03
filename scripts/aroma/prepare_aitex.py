@@ -111,12 +111,19 @@ def _parse_defect_code(stem: str) -> Optional[str]:
 # File listing / staging
 # ---------------------------------------------------------------------------
 
-def _list_pngs(directory: str) -> List[Path]:
-    """Sorted list of .png files directly under `directory` (empty if missing)."""
+def _list_pngs(directory: str, recursive: bool = False) -> List[Path]:
+    """Sorted .png files under `directory` (empty if missing).
+
+    recursive=False: files directly under `directory` (Defect_images/Mask_images
+    are flat). recursive=True: also descends into subfolders — AITEX
+    NODefect_images groups defect-free images in per-fabric SUBFOLDERS, so a
+    non-recursive scan there returns nothing and leaves train/good empty.
+    """
     d = Path(directory)
     if not d.exists():
         return []
-    return sorted(p for p in d.iterdir() if p.is_file() and p.suffix in _IMG_EXTS)
+    it = d.rglob("*") if recursive else d.iterdir()
+    return sorted(p for p in it if p.is_file() and p.suffix in _IMG_EXTS)
 
 
 def _link_or_copy(src: str, dst: str) -> None:
@@ -142,7 +149,7 @@ def prepare(
     output_dir: str,
 ) -> Dict[str, object]:
     defect_files = _list_pngs(defect_images)
-    nodefect_files = _list_pngs(nodefect_images)
+    nodefect_files = _list_pngs(nodefect_images, recursive=True)  # NODefect_images는 fabric별 서브폴더 중첩
     mask_files = _list_pngs(mask_images)
     print(f"[prepare_aitex] defect_images={len(defect_files)}  "
           f"nodefect_images={len(nodefect_files)}  mask_images={len(mask_files)}")

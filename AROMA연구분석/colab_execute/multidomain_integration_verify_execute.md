@@ -339,7 +339,7 @@ verify('mtd',   'PROFILING_MTD')
 | 데이터셋 | mask_source | morphology | 비고 |
 |---------|-------------|-----------|------|
 | aitex | ground_truth | solidity/extent < 1 | mask 없는 결함은 prepare 단계서 skip됨(정상) |
-| mtd | ground_truth | solidity/extent < 1 | defect_type = MT_{class} (Blowhole/Break/Crack/Fray/Uneven) 5종으로 구분됨. co-located .png mask는 이미지 glob(.jpg 전용)에서 제외됨 |
+| mtd | ground_truth | solidity/extent < 1 | prepare_mtd가 Supervisely bitmap을 full-frame mask로 래스터화. defect_type = class(blowhole/break/crack/fray/uneven) 5종. 빈 bitmap mask는 prepare 단계서 skip됨 |
 
 ## 출력 파일
 
