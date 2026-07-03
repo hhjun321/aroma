@@ -21,7 +21,8 @@ Synthetic label 유도:
 - composite(synth) 와 background(normal) 의 image diff → threshold → contour bbox.
 - synthesis 재실행 불필요 — label 을 post-hoc 로 유도.
 
-Datasets: isp_LSM_1, mvtec_cable, visa_cashew, visa_pcb (pcb4)
+Datasets: isp_LSM_1, mvtec_*, visa_* (cashew/pcb4/config-driven), severstal,
+aitex, mtd (v2-1 primary set: severstal mvtec_leather aitex mtd)
 
 I/O 가속 (두 단계 캐시):
 - Local cache (`--no_local_cache` 로 끔): Linux/Colab 에서 Drive 이미지를 /tmp 로
@@ -36,7 +37,7 @@ Usage (Colab):
     !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \\
         --model yolov8n \\
         --condition all \\
-        --dataset_keys isp_LSM_1 mvtec_cable visa_cashew visa_pcb \\
+        --dataset_keys severstal mvtec_leather aitex mtd \\
         --random_synthetic_dir $RANDOM_SYNTH_DIR \\
         --aroma_synthetic_dir  $AROMA_SYNTH_DIR \\
         --real_data_dir        $AROMA_DATA \\
@@ -418,6 +419,35 @@ def _get_image_lists(
                 [p for p in sorted(troot.iterdir()) if p.is_dir() and p.name != "good"]
                 if troot.exists() else []
             )
+        test_defect = []
+        for d in defect_dirs:
+            test_defect.extend(_glob_images(str(d)))
+        mask_map = _resolve_masks_generic(test_defect, root)
+
+    elif dataset_key in ("aitex", "mtd"):
+        # Config-driven MVTec-style prepared layouts (prepare_aitex.py /
+        # prepare_mtd.py): <root>/train/good + test/{defect_type}/ +
+        # ground_truth/{defect_type}/{stem}_mask.png. dataset_config.json's
+        # image_dir points at .../<root>/train/good (source of truth for root).
+        entry = _load_dataset_config().get(dataset_key)
+        if not entry or not entry.get("image_dir"):
+            logger.warning("%s not in dataset_config: run prepare first", dataset_key)
+            return None
+        image_dir = Path(entry["image_dir"])           # .../<root>/train/good
+        if not image_dir.exists():
+            logger.warning("%s image_dir missing: %s", dataset_key, image_dir)
+            return None
+        root = image_dir.parent.parent                 # .../<root>
+        train_normal = _glob_images(str(image_dir))
+        test_good    = _glob_images(str(root / "test" / "good"))
+        # Scan test/<non-good> on disk rather than trusting seed_dirs — the
+        # aitex config's seed_dirs is a placeholder superset of defect codes;
+        # only folders prepare actually produced should be used.
+        troot = root / "test"
+        defect_dirs = (
+            [p for p in sorted(troot.iterdir()) if p.is_dir() and p.name != "good"]
+            if troot.exists() else []
+        )
         test_defect = []
         for d in defect_dirs:
             test_defect.extend(_glob_images(str(d)))
