@@ -694,13 +694,21 @@ def copy_paste_synthesis(
         crop_w, crop_h = defect_crop.size
         bw_norm, bh_norm = normal_img.size  # (width, height) of background
 
-        # Defect crop must fit inside the background; otherwise skip cleanly.
+        # Defect crop must fit inside the background. When it is larger (common on
+        # size-heterogeneous sets like mtd/aitex), rescale it down — preserving the
+        # aspect ratio — instead of dropping the sample. The 0.95 factor leaves a
+        # placement margin so foreground/random sampling still has room to move.
         if crop_w > bw_norm or crop_h > bh_norm:
-            logger.warning(
-                "Defect crop (%dx%d) larger than normal image (%dx%d) — skipping %s",
-                crop_w, crop_h, bw_norm, bh_norm, defect_path,
+            scale = min(bw_norm / crop_w, bh_norm / crop_h) * 0.95
+            new_w = max(1, int(crop_w * scale))
+            new_h = max(1, int(crop_h * scale))
+            defect_crop = defect_crop.resize((new_w, new_h), PILImage.LANCZOS)
+            mask = mask.resize((new_w, new_h), PILImage.NEAREST)
+            logger.info(
+                "Defect crop (%dx%d) rescaled to (%dx%d) to fit normal (%dx%d): %s",
+                crop_w, crop_h, new_w, new_h, bw_norm, bh_norm, defect_path,
             )
-            return None
+            crop_w, crop_h = new_w, new_h
 
         # Constrain placement to the object foreground when one can be estimated
         # (object-centric datasets like visa_pcb). Falls back to fully random

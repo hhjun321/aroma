@@ -34,7 +34,8 @@ print("EXP2_SWEEP :", os.environ['EXP2_SWEEP'])
 TOP_K_SWEEP = [20, 30, 50, 100, 200]
 # AROMA v2-1 데이터셋 4종 (aitex/mtd 선행: multidomain_integration_verify_execute.md로 prepare+Stage1-3 완료)
 DATASETS    = ["severstal", "mvtec_leather", "aitex", "mtd"]
-SEED        = 42
+SEED        = 42                        # AROMA deterministic seed (deficit_aware는 RNG 미사용 → 값 불변)
+RANDOM_SEEDS = [42, 43, 44, 45, 46]     # random arm ≥5 seed (significance용 — 단일 seed 소표본 노이즈 제거)
 
 # dataset_config에서 class_mode 조회 → multi면 stratified 플래그 추가
 with open(os.environ['DATASET_CONFIG']) as f:
@@ -67,7 +68,7 @@ AROMA_SCRIPTS = os.environ['AROMA_SCRIPTS']
 SWEEP_ROOT    = os.environ['SWEEP_ROOT']
 SCRIPT        = f"{AROMA_SCRIPTS}/roi_selection.py"
 
-def select(ds, strategy, top_k, out_dir):
+def select(ds, strategy, top_k, out_dir, seed=SEED):
     prof = f"{AROMA_OUT}/profiling/{ds}"
     prom = f"{AROMA_OUT}/prompts/{ds}"
     if not Path(f"{prof}").exists() or not Path(f"{prom}").exists():
@@ -78,7 +79,7 @@ def select(ds, strategy, top_k, out_dir):
            '--output_dir',    out_dir,
            '--sampling_strategy', strategy,
            '--top_k', str(top_k),
-           '--seed',  str(SEED)]
+           '--seed',  str(seed)]
     if strategy == 'deficit_aware':
         cmd += ['--img_diversity_cap', '1'] + aroma_class_flags(ds)
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -87,18 +88,22 @@ def select(ds, strategy, top_k, out_dir):
         return 'fail', f"{ds}: {tail}"
     return 'ok', ''
 
+# AROMA(deficit_aware)는 결정론 → (k,ds)당 1회. random은 uniform RNG → RANDOM_SEEDS별 재선택.
 for K in TOP_K_SWEEP:
     print(f"\n===== top_k = {K} =====")
     for ds in DATASETS:
         a_out = f"{SWEEP_ROOT}/aroma/k{K}/{ds}"
-        r_out = f"{SWEEP_ROOT}/random/k{K}/{ds}"
-        sa, ma = select(ds, 'deficit_aware', K, a_out)
-        sr, mr = select(ds, 'random',        K, r_out)
-        icon = '✓' if (sa == 'ok' and sr == 'ok') else ('↷' if 'skip' in (sa, sr) else '✗')
-        print(f"  {icon} {ds:18s} aroma={sa} random={sr}")
-        for m in (ma, mr):
-            if m:
-                print(f"      {m}")
+        sa, ma = select(ds, 'deficit_aware', K, a_out)          # 결정론, 1회
+        rstats = []
+        for S in RANDOM_SEEDS:
+            r_out = f"{SWEEP_ROOT}/random/k{K}/seed{S}/{ds}"     # seed별 별도 디렉터리
+            sr, mr = select(ds, 'random', K, r_out, seed=S)
+            rstats.append(sr)
+            if mr: print(f"      seed{S}: {mr}")
+        ok_r = all(s == 'ok' for s in rstats)
+        icon = '✓' if (sa == 'ok' and ok_r) else ('↷' if ('skip' in [sa]+rstats) else '✗')
+        print(f"  {icon} {ds:18s} aroma={sa}  random={len([s for s in rstats if s=='ok'])}/{len(RANDOM_SEEDS)} ok")
+        if ma: print(f"      {ma}")
 ```
 
 ---
@@ -109,22 +114,24 @@ for K in TOP_K_SWEEP:
 EXP2_SWEEP = os.environ['EXP2_SWEEP']
 EXP2_SCRIPT = f"{AROMA_SCRIPTS}/experiments/exp2_roi_quality.py"
 
+# (K, seed)별 exp2: aroma_root는 결정론(동일), random_root만 seed별. → aroma 지표는
+# 매 run 동일값, random 지표만 seed별 변동 → STEP3서 random을 mean±std로 집계.
 for K in TOP_K_SWEEP:
     a_root = f"{SWEEP_ROOT}/aroma/k{K}"
-    r_root = f"{SWEEP_ROOT}/random/k{K}"
-    out    = f"{EXP2_SWEEP}/k{K}"
-    cmd = [sys.executable, EXP2_SCRIPT,
-           '--aroma_roi_dir',  a_root,
-           '--random_roi_dir', r_root,
-           '--dataset_keys',   *DATASETS,
-           '--output_dir',     out,
-           '--seed', str(SEED)]
-    # 각 top_k에서 aroma/random n_selected는 이미 동일(=K, 후보 부족 시 동일 캡)
-    # → equalize는 no-op이지만 안전하게 기본 ON 유지
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    print(f"top_k={K}: {'ok' if r.returncode == 0 else 'FAIL'}")
-    if r.returncode != 0:
-        print('\n'.join((r.stderr or '').strip().splitlines()[-5:]))
+    for S in RANDOM_SEEDS:
+        r_root = f"{SWEEP_ROOT}/random/k{K}/seed{S}"
+        out    = f"{EXP2_SWEEP}/k{K}/seed{S}"
+        cmd = [sys.executable, EXP2_SCRIPT,
+               '--aroma_roi_dir',  a_root,
+               '--random_roi_dir', r_root,
+               '--dataset_keys',   *DATASETS,
+               '--output_dir',     out,
+               '--seed', str(S)]   # exp2 --seed는 equalize 전용(선택엔 무관)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        tag = f"k{K}/seed{S}"
+        print(f"{tag}: {'ok' if r.returncode == 0 else 'FAIL'}")
+        if r.returncode != 0:
+            print('\n'.join((r.stderr or '').strip().splitlines()[-5:]))
 ```
 
 ---
