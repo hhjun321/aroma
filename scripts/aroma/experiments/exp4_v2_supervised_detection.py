@@ -513,6 +513,10 @@ def _get_image_lists(
         )
         if class_mode == "multi":
             result["class_mask_map"] = class_mask_map
+            _cn, _n2i = _enumerate_defect_classes(test_defect)
+            if _cn:
+                result["class_names"] = _cn
+                result["name_to_id"] = _n2i
         return result
 
     else:
@@ -523,12 +527,33 @@ def _get_image_lists(
         "%s: train_normal=%d  test_good=%d  test_defect=%d  masks_matched=%d",
         dataset_key, len(train_normal), len(test_good), len(test_defect), len(mask_map),
     )
-    return dict(
+    result = dict(
         train_normal=train_normal,
         test_good=test_good,
         test_defect=test_defect,
         mask_map=mask_map,
     )
+    if class_mode == "multi":
+        # Generic per-class enumeration (mvtec/visa/isp/aitex/mtd): class = the
+        # test/{type} parent folder of each resolved defect path. nc<=1 → single.
+        _cn, _n2i = _enumerate_defect_classes(test_defect)
+        if _cn:
+            result["class_names"] = _cn
+            result["name_to_id"] = _n2i
+            # Route generic multi real labels through the SAME per-image
+            # class_mask_map branch severstal uses. That path is staging-safe:
+            # _local_cache_for_yolo rewrites class_mask_map KEYS lockstep with
+            # test_defect, so a /tmp-staged image still resolves its class —
+            # unlike a Path(img).parent.name lookup, which would read the staged
+            # ".../images/" folder and collapse every real label to class 0.
+            # Keys are 1-based ordinals (YOLO id + 1) so the branch's `cls-1`
+            # yields the 0-based id; each generic image has exactly one class
+            # (its test/{type} folder), so the merged GT mask is that class's mask.
+            result["class_mask_map"] = {
+                p: {_n2i[Path(p).parent.name] + 1: mask_map[p]}
+                for p in test_defect if p in mask_map
+            }
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -910,54 +935,73 @@ def _template_match_bbox(
     return [(int(x), int(y), int(bw), int(bh))]
 
 
-def _parse_severstal_class(source_roi: Optional[str]) -> Optional[int]:
+def _enumerate_defect_classes(
+    test_defect_paths: List[str],
+) -> Tuple[List[str], Dict[str, int]]:
+    """Enumerate per-dataset defect classes from resolved real defect paths.
+
+    Class = parent folder name of each defect image (``test/{type}/{stem}``).
+    Dataset-agnostic: works for any dataset whose ``_get_image_lists`` resolves
+    ``test_defect`` under ``test/{type}/`` (severstal ``class1..class4``,
+    mvtec/aitex/mtd defect-type folders). Uses the already-resolved ABSOLUTE
+    paths (not a guessed ``{ds}/test`` scan), so nested layouts like
+    ``mvtec/leather`` are handled correctly.
+
+    Returns ``(class_names, name_to_id)`` with 0-based ids = sorted index.
+    ``nc <= 1`` degenerates to single: returns ``([], {})`` so callers fall back
+    to the historical single-class ('defect') path (byte-identical).
     """
-    Severstal source_roi 경로(.../test/class{N}/{id}.png)에서 0-indexed class id 추출.
+    names = sorted({Path(p).parent.name for p in test_defect_paths})
+    if len(names) <= 1:
+        return [], {}
+    return names, {n: i for i, n in enumerate(names)}
 
-    'class{N}' 의 N (1~4) → N-1 (0~3) 반환. 패턴 미발견 또는 범위 밖이면 None.
-    real path(_get_real_test_images_and_labels)가 cls-1 을 쓰므로 synth 도 동일하게 N-1.
+
+def _display_class_names(dataset_key: str, class_names: List[str]) -> List[str]:
+    """Display names for the YAML ``names:`` line (→ val_results.names → per_class keys).
+
+    severstal keeps the historical ``c1..c4`` labels (backward-compat with
+    existing results + aroma_exp4v2_per-class-metrics), in the SAME id order as
+    the raw ``class1..class4`` folders. All other datasets use raw folder names.
     """
-    if not source_roi:
-        return None
-    # Anchor to a real .../class{N}/ path segment (between separators) so a stray
-    # 'class<digits>' elsewhere in the path can't be mis-parsed. Fallback to the
-    # loose match only if the anchored form misses.
-    m = re.search(r"[\\/]class(\d+)[\\/]", str(source_roi)) or re.search(
-        r"class(\d+)", str(source_roi)
-    )
-    if not m:
-        return None
-    cls = int(m.group(1)) - 1
-    if 0 <= cls <= 3:
-        return cls
-    return None
+    if dataset_key == "severstal":
+        return [f"c{i + 1}" for i in range(len(class_names))]
+    return list(class_names)
 
 
-def _resolve_synth_class(ann: Dict[str, Any]) -> Optional[int]:
-    """0-indexed severstal class for a synth annotation (multi mode).
+def _resolve_synth_class(
+    ann: Dict[str, Any],
+    name_to_id: Optional[Dict[str, int]] = None,
+    dataset_key: Optional[str] = None,
+) -> Optional[int]:
+    """0-indexed defect class for a synth annotation (multi mode) — dataset-generic.
 
     Priority:
-      1. source_roi .../class{N}/ path parse — correct for random/aroma whose
-         source_roi points at real test images.
-      2. cluster_id fallback — CASDA's source_roi is an ROI-crop path with no
-         class{N} segment, so it never parses; casda_roi_adapter writes
+      1. source_roi (fallback normal_image) ``.../test/{type}/`` segment →
+         name_to_id. Works for every dataset whose synth source_roi points at a
+         real defect under ``test/{type}/`` (severstal ``test/class{N}`` →
+         name_to_id['classN']=N-1; mvtec/aitex/mtd ``test/{type}``). Subsumes the
+         old ``class{N}`` parse.
+      2. severstal-only cluster_id fallback — CASDA's source_roi is an ROI-crop
+         path with no ``test/{type}`` segment; casda_roi_adapter writes
          cluster_id = Severstal class 1-4, so cluster_id-1 gives the 0-indexed
-         class. Validated to 0..3; out-of-range (e.g. an AROMA morphology
-         cluster id, which would only appear here if source_roi unexpectedly
-         failed to parse) is rejected.
+         class. Guarded by ``dataset_key == 'severstal'`` (aroma's cluster_id is
+         a morphology cluster id, NOT a class, so must not be used elsewhere).
 
-    Returns None when neither signal yields a valid 0..3 class.
+    Returns None when neither signal yields a valid class (caller defaults to 0).
     """
-    cls = _parse_severstal_class(ann.get("source_roi"))
-    if cls is not None:
-        return cls
-    raw = ann.get("cluster_id")
-    try:
-        cid = int(raw) - 1
-    except (TypeError, ValueError):
-        return None
-    if 0 <= cid <= 3:
-        return cid
+    src = str(ann.get("source_roi") or ann.get("normal_image") or "")
+    if name_to_id:
+        m = re.search(r"[\\/]test[\\/]([^\\/]+)[\\/]", src)
+        if m and m.group(1) in name_to_id:
+            return name_to_id[m.group(1)]
+    if dataset_key == "severstal":
+        try:
+            cid = int(ann.get("cluster_id")) - 1
+        except (TypeError, ValueError):
+            return None
+        if 0 <= cid <= 3:
+            return cid
     return None
 
 
@@ -967,6 +1011,8 @@ def _write_yolo_labels(
     image_dir_out: str,
     min_area: int = 200,
     class_mode: str = "single",
+    name_to_id: Optional[Dict[str, int]] = None,
+    dataset_key: Optional[str] = None,
 ) -> int:
     """
     synthetic annotation 마다 defect bbox 추출 후 YOLO label 작성.
@@ -1022,10 +1068,10 @@ def _write_yolo_labels(
             continue
 
         if class_mode == "multi":
-            cls_id = _resolve_synth_class(ann)
+            cls_id = _resolve_synth_class(ann, name_to_id, dataset_key)
             if cls_id is None:
                 logger.warning(
-                    "multi mode: could not resolve severstal class "
+                    "multi mode: could not resolve defect class "
                     "(source_roi=%s cluster_id=%s, synth idx %d) -> defaulting to "
                     "class 0",
                     ann.get("source_roi"), ann.get("cluster_id"), i,
@@ -1408,6 +1454,8 @@ def _get_real_test_images_and_labels(
                 for (x, y, bw, bh) in m_bboxes
             ]
 
+        # single/merged path: class_id=0. multi(generic + severstal)은 위
+        # `class_mask_map is not None` 분기에서 처리되어 여기 도달하지 않는다.
         lines = _bboxes_to_yolo_lines(m_bboxes, img_w, img_h, class_id=0)
         if not lines:
             n_no_lines += 1
@@ -1438,16 +1486,23 @@ def _write_yolo_yaml(
     val_img_subdir: str,
     yaml_path: str,
     class_mode: str = "single",
+    class_names: Optional[List[str]] = None,
+    dataset_key: Optional[str] = None,
 ) -> None:
     """Write ultralytics dataset YAML.
 
     class_mode='single' (default): nc=1, names=['defect'] — byte-identical to the
-    historical output for all existing datasets. class_mode='multi': nc=4,
-    names=['c1','c2','c3','c4'] (severstal 4-class).
+    historical output for all existing datasets. class_mode='multi' with
+    class_names: nc/names are derived per-dataset (severstal→c1..c4 display,
+    others→raw defect-type folder names). Multi without class_names degrades to
+    single (defensive).
     """
-    if class_mode == "multi":
-        nc_line = "nc: 4\n"
-        names_line = "names: ['c1', 'c2', 'c3', 'c4']\n"
+    if class_mode == "multi" and class_names:
+        disp = _display_class_names(dataset_key or "", class_names)
+        nc_line = f"nc: {len(disp)}\n"
+        # Quote every name so numeric-looking codes (e.g. aitex '002') are NOT
+        # parsed by YOLO's YAML loader as integers.
+        names_line = "names: [" + ", ".join(f"'{n}'" for n in disp) + "]\n"
     else:
         nc_line = "nc: 1\n"
         names_line = "names: ['defect']\n"
@@ -1578,6 +1633,9 @@ def _build_or_load_real_yolo_dataset(
     """
     use_cache = cache_dir is not None
     # Isolate multi-class caches from single so the two label sets never collide.
+    # BOTH severstal and generic multi now supply class_mask_map (generic builds a
+    # {img: {id+1: merged_mask}} in _get_image_lists), so this single check routes
+    # every multi dataset to real_multi and never reuses a single-class 'real' cache.
     cache_leaf = "real_multi" if class_mask_map is not None else "real"
     cache_root = Path(cache_dir) / ds_key / cache_leaf if use_cache else None
 
@@ -1715,6 +1773,9 @@ def _run_yolo_condition(
     device: int = 0,
     patience: int = 0,
     class_mode: str = "single",
+    class_names: Optional[List[str]] = None,
+    name_to_id: Optional[Dict[str, int]] = None,
+    dataset_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     하나의 (model, condition) 조합을 학습/평가.
@@ -1794,6 +1855,8 @@ def _run_yolo_condition(
                     image_dir_out=train_img,
                     min_area=50,  # unify with real val GT (_build_real min_area=50)
                     class_mode=class_mode,
+                    name_to_id=name_to_id,
+                    dataset_key=dataset_key,
                 )
                 logger.info(
                     "    %s train: %d/%d synth imgs labeled (additive)",
@@ -1813,7 +1876,7 @@ def _run_yolo_condition(
                         # then cluster_id fallback) so the diagnostic matches what
                         # actually gets labeled — CASDA c4/c2 starvation surfaces
                         # here instead of collapsing into the -1 bucket.
-                        _cls = _resolve_synth_class(_ann)
+                        _cls = _resolve_synth_class(_ann, name_to_id, dataset_key)
                         _key = _cls if _cls is not None else -1  # -1 = unresolved
                         n_synth_per_class[_key] = n_synth_per_class.get(_key, 0) + 1
                         _sr = _ann.get("source_roi")
@@ -1873,6 +1936,8 @@ def _run_yolo_condition(
                 val_img_subdir="val/images",
                 yaml_path=yaml_path,
                 class_mode=class_mode,
+                class_names=class_names,
+                dataset_key=dataset_key,
             )
 
             # --- Weights selection: baseline=COCO, others=baseline best.pt ---
@@ -1986,7 +2051,10 @@ def _run_yolo_condition(
                     # is None 체크: 빈 dict를 유효 매핑으로 오인하지 않음.
                     names = getattr(val_results, "names", None)
                     if names is None:
-                        names = {0: "c1", 1: "c2", 2: "c3", 3: "c4"}
+                        # Mirror the YAML display names so per_class keys stay
+                        # consistent (severstal→c1..c4, others→folder names).
+                        _disp = _display_class_names(dataset_key or "", class_names or [])
+                        names = {i: n for i, n in enumerate(_disp)}
                     # ap_class_index 는 numpy 배열 → `or []` 같은 truthiness 평가
                     # 금지(원소>1 이면 "ambiguous truth value" 예외). None 만 분기.
                     _idx_raw = getattr(box, "ap_class_index", None)
@@ -2104,8 +2172,11 @@ def _run_detection_mode(
         ds_stage: Optional[str] = None  # per-dataset real staging dir (cleaned in finally)
         try:
             logger.info("=== Detection dataset: %s ===", ds)
-            # class_mode='multi' only affects severstal; other datasets ignore it.
-            ds_class_mode = class_mode if ds == "severstal" else "single"
+            # multi-class는 데이터셋-일반 기능: --class_mode 를 전 데이터셋에 그대로
+            # 적용한다. 실제 nc/names는 test/{type} 열거로 데이터셋별 결정되고, test
+            # 폴더가 1개뿐이면 _enumerate_defect_classes가 single로 축퇴시킨다.
+            # (기본값 single이라 플래그 미지정 시 전 데이터셋 byte-identical.)
+            ds_class_mode = class_mode
             lists = _get_image_lists(
                 ds, real_data_dir, seed=seed, class_mode=ds_class_mode,
             )
@@ -2150,6 +2221,11 @@ def _run_detection_mode(
             # Reading it before would retain Drive-path keys that never match the
             # /tmp test_defect paths used downstream -> 0 multi-mode labels.
             class_mask_map = lists.get("class_mask_map") if ds_class_mode == "multi" else None
+            # class_names/name_to_id are path-independent (folder-name strings +
+            # name→int), so _local_cache_for_yolo's {**lists} spread carries them
+            # through unchanged (no key rewrite needed, unlike class_mask_map).
+            name_to_id = lists.get("name_to_id") if ds_class_mode == "multi" else None
+            class_names = lists.get("class_names") if ds_class_mode == "multi" else None
 
             train_normal = lists["train_normal"]
             all_defect   = lists["test_defect"]
@@ -2326,6 +2402,9 @@ def _run_detection_mode(
                         device=device,
                         patience=patience,
                         class_mode=ds_class_mode,
+                        class_names=class_names,
+                        name_to_id=name_to_id,
+                        dataset_key=ds,
                     )
                     model_results[cond] = res
                     logger.info(
@@ -3011,7 +3090,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
         default="single",
         help=(
             "단일(single)=nc1 'defect' (기존 전 데이터셋 동작 불변, default). "
-            "multi=nc4 (severstal 4-class 전용; 다른 데이터셋엔 영향 없음)."
+            "multi=데이터셋별 per-class (test/{type} 폴더로 nc/names 자동 결정: "
+            "severstal 4·mvtec_leather 5·aitex 12·mtd 5 등). test 폴더가 1개뿐이면 "
+            "single로 축퇴. 전 데이터셋 적용."
         ),
     )
     p.add_argument("--seed",   type=int, default=42,
