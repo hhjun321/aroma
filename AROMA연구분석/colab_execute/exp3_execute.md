@@ -98,6 +98,8 @@ for ds in DATASETS:
         --bg-blur-threshold 100.0
 ```
 
+> **(선택) quality gate parity**: step3에서 aroma에 `--min_quality`를 켠 경우, 위 커맨드에 **동일 값**으로 `--min_quality <값>`을 추가해야 한다(random도 같은 게이트 풀에서 샘플 = 공정성). 기본 OFF(0.0)면 추가 불필요. threshold는 step3 가이드의 data-driven 실측 셀로 결정.
+
 **이미지 수 확인:**
 
 ```python

@@ -295,7 +295,8 @@ for ds in sorted(results):
     --resume
 ```
 
-> **공정성 게이트**: 결과 JSON에서 random/casda/aroma의 `n_synth_train`이 **3조건 동일**해야 한다(cap 트리밍 결과). 다르면 cap 누락 의심. 확인 코드·CASDA 합성 생성(Stage A + generate_casda)은 부록 E.
+> **공정성 게이트**: 결과 JSON에서 random/casda/aroma의 `n_synth_train`이 **3조건 동일**해야 한다(cap 트리밍 결과). 다르면 cap 누락 의심.
+> **quality gate ON 시 추가 확인**: step3/exp3에서 `--min_quality`를 켰다면 (1) aroma·random이 **동일 threshold**로 생성됐는지, (2) 게이트-후 synth pool이 여전히 `synth_ratio` cap 이상인지(부족하면 no-trim → parity 붕괴), (3) `n_synth_train` 동일 여부를 반드시 재확인. 확인 코드·CASDA 합성 생성(Stage A + generate_casda)은 부록 E.
 
 ---
 

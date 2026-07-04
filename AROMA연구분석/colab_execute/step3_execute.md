@@ -62,6 +62,46 @@ print('MULTI_FLAGS:', repr(os.environ['MULTI_FLAGS']))
     $MULTI_FLAGS
 ```
 
+### (선택) ROI quality gate — data-driven threshold
+
+`--min_quality`(기본 0.0=OFF)는 subtype↔background 매칭 스코어 하한 필터. **켜려면 반드시 random(exp3 0단계 `generate_random --min_quality`)에도 동일 값을 지정**해야 budget parity가 유지된다(aroma만 게이트하면 confound).
+
+threshold는 data-driven으로 결정한다 — quality_score는 `MATCHING_RULES`(subtype×background) 이산 수준(≤5개)이므로 **수준 간 최대 갭의 중점**에 컷을 놓는다 (가드: pass율 ≥50%, class별 passing>0):
+
+```python
+# 데이터셋별 quality_score 분포 실측 + MIN_QUALITY 추천
+import os, json
+from collections import Counter
+
+MATCHING_RULES = {  # utils/suitability.py와 동일 표
+    "linear_scratch": {"smooth":0.5,"directional":1.0,"periodic":0.7,"organic":0.3,"complex":0.3},
+    "elongated":      {"smooth":0.6,"directional":0.9,"periodic":0.7,"organic":0.4,"complex":0.4},
+    "compact_blob":   {"smooth":0.9,"directional":0.4,"periodic":0.7,"organic":0.6,"complex":0.5},
+    "irregular":      {"smooth":0.5,"directional":0.4,"periodic":0.5,"organic":0.8,"complex":0.9},
+    "general":        {"smooth":0.5,"directional":0.5,"periodic":0.5,"organic":0.5,"complex":0.5},
+}
+BG = {"severstal":"directional", "aitex":"periodic", "mvtec_leather":"organic", "mtd":"smooth"}
+
+for ds, bg in BG.items():
+    path = f"{os.environ['AROMA_OUT']}/roi/{ds}/roi_candidates.json"
+    cands = json.load(open(path))
+    # 저장 subtype에서 bg 기준 score 재계산 (저장 quality_score는 step3 당시
+    # --background_type(기본 directional) 기준이라 비-severstal엔 재계산 필수)
+    scores = [MATCHING_RULES.get(c.get("defect_subtype","general"), MATCHING_RULES["general"]).get(bg,0.5) for c in cands]
+    dist = Counter(scores); n = len(scores); levels = sorted(dist)
+    print(f"\n=== {ds} (bg={bg})  n={n} ===")
+    print("  subtype:", dict(Counter(c.get('defect_subtype','general') for c in cands)))
+    for lv in levels: print(f"  score={lv:.2f}  {dist[lv]:5d} ({dist[lv]/n:5.1%})")
+    best = None
+    for a, b in zip(levels, levels[1:]):
+        thr = (a+b)/2; keep = sum(v for k,v in dist.items() if k >= thr)/n
+        if keep >= 0.5 and (best is None or (b-a) > best[0]): best = (b-a, thr, keep)
+    print(f"  -> 추천 MIN_QUALITY = {best[1]:.2f} (gap={best[0]:.2f}, pass={best[2]:.1%})" if best
+          else "  -> 유의미한 컷 없음 — 게이트 OFF 권장")
+```
+
+켤 때는 aroma 실행 커맨드에 `--min_quality <확정값> --background_type <표의 bg>`를 추가하고, 같은 값을 exp3 0단계 random에도 준다. 확정 전에는 **기본 OFF 유지**.
+
 ### 전략 옵션
 
 | `--sampling_strategy` | 설명 |

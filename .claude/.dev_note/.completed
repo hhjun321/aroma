@@ -39,3 +39,4 @@ aroma_exp4v2_per-class-metrics.md
 aroma_exp4v2_foreground-void-rejection.md
 aroma_exp4v2_visa-config-driven-loader.md
 aroma_exp4v2_multiclass-all-datasets.md
+aroma_exp4v2_quality-gate-fairness.md

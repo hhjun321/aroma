@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -75,6 +76,18 @@ except Exception:
 # Random selection
 # ---------------------------------------------------------------------------
 
+def _q(c: Dict[str, Any]) -> float:
+    """quality_score 추출 — roi_selection.apply_quality_gate._q와 동일 semantics.
+
+    결측 → 1.0 (quality-unknown은 통과, 오분류 drop 방지),
+    NaN → 0.0 (최악 처리, silent pass 금지).
+    roi_selection.py를 import하지 않고 3줄 복제 — quality deps
+    (utils.suitability 등) 로드 없이 저장된 값만 읽는다.
+    """
+    qs = float(c.get("quality_score", 1.0))
+    return 0.0 if math.isnan(qs) else qs
+
+
 def select_random(
     candidates: List[Dict[str, Any]],
     top_k: int,
@@ -107,6 +120,7 @@ def run(
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
     blend_mode: str = "alpha",
+    min_quality: float = 0.0,
 ) -> Dict[str, Any]:
     """Run random ROI selection then copy-paste synthesis.
 
@@ -128,6 +142,12 @@ def run(
                                 ('alpha' or 'seamless'). Default 'alpha'. Lets the
                                 random arm use the same blender as aroma for a fair
                                 comparison.
+        min_quality:            Quality-gate parity filter (default 0.0 = OFF,
+                                byte-identical legacy). When >0, drops candidates
+                                whose STORED quality_score < min_quality BEFORE
+                                uniform sampling — same threshold semantics as
+                                roi_selection --min_quality, so random samples
+                                from the SAME gated pool as aroma (fairness).
 
     Returns:
         generate_defects.run() result dict + n_rois_selected.
@@ -140,6 +160,26 @@ def run(
     candidates: List[Dict[str, Any]] = load_json(str(cand_path))
     logger.info("Loaded %d candidates from %s", len(candidates), candidates_json)
 
+    # Quality-gate parity filter (opt-in): aroma의 roi_selection --min_quality와
+    # 동일 threshold로 동일 풀을 구성한 뒤에야 균일 샘플 — "selection 전략만
+    # 다르다" 불변식 유지. min_quality<=0 이면 이 블록을 건너뛰어 byte-identical.
+    # TRUST ASSUMPTION: 저장된 quality_score가 유의미하려면 원본 roi_candidates가
+    # quality deps 사용 가능 상태의 roi_selection에서 생성됐어야 한다(deps 불가면
+    # 전부 no-op 1.0으로 저장됨 — 이 스크립트는 deps를 import하지 않아 감지 불가).
+    # min_quality>0 사용 시 step3 로그에 "deps unavailable" 경고가 없었는지 확인.
+    if min_quality > 0.0:
+        n_before = len(candidates)
+        candidates = [c for c in candidates if _q(c) >= min_quality]
+        logger.info(
+            "Quality gate (random parity): min_quality=%.3f -> %d/%d candidates pass",
+            min_quality, len(candidates), n_before,
+        )
+        if len(candidates) < top_k:
+            logger.warning(
+                "Gated pool (%d) < top_k (%d) — using full gated pool "
+                "(no fallback to un-gated candidates)", len(candidates), top_k,
+            )
+
     selected = select_random(candidates, top_k=top_k, seed=seed)
     logger.info("Randomly selected %d / %d ROIs (top_k=%d, seed=%d)",
                 len(selected), len(candidates), top_k, seed)
@@ -149,7 +189,9 @@ def run(
     Path(roi_dir).mkdir(parents=True, exist_ok=True)
     save_json(selected, str(Path(roi_dir) / "roi_selected.json"))
 
-    # Copy candidates alongside selection for ROI quality metrics
+    # Copy the (gate-filtered, if ON) sampling pool alongside the selection.
+    # NOTE: 현재 exp1/exp2 metrics는 aroma_roi_dir의 candidates만 읽으므로 이
+    # 복사본은 자동 소비되지 않음 — 수동 검사/parity 검증용 기록이다.
     save_json(candidates, str(Path(roi_dir) / "roi_candidates.json"))
 
     result = generate_defects.run(
@@ -209,6 +251,10 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    choices=["alpha", "seamless"], default="alpha",
                    help="Blending mode forwarded to generate_defects "
                         "(default alpha; 'seamless' = same blender as aroma)")
+    p.add_argument("--min_quality",      type=float, default=0.0,
+                   help="roi_candidates.json의 quality_score 필터 (0=OFF, 기존 "
+                        "동작). aroma roi_selection --min_quality와 동일 값 지정 "
+                        "필수 → 동일 게이트 풀에서 균일 샘플 (공정성 parity)")
     return p.parse_args(argv)
 
 
@@ -227,6 +273,7 @@ def main(argv=None) -> None:
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
         blend_mode=args.blend_mode,
+        min_quality=args.min_quality,
     )
     status = result.get("status", "unknown")
     n_gen = result.get("n_generated", 0)
