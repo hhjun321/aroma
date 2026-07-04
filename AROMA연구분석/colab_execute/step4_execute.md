@@ -4,6 +4,9 @@
 > Step 3 ROI 목록을 읽어 결함 이미지를 정상 배경 위에 합성.
 > Step 3 완료 후 실행.
 
+> **exp4v2 대상 데이터셋 (v2-1 확정 4종)**: `severstal`·`mvtec_leather`·`aitex`·`mtd`. (aitex/mtd 선행: `multidomain_integration_verify_execute.md`)
+> 이 단계 출력(`synthetic/{ds}`)이 exp4v2의 AROMA 조건 입력이 된다. Random 조건은 exp3 0단계(`generate_random.py`)로 생성.
+
 ## 환경변수
 
 ```python
@@ -13,7 +16,7 @@ os.environ['AROMA_SCRIPTS']    = '/content/AROMA/scripts/aroma'
 os.environ['AROMA_OUT']      = f"{os.environ['DRIVE']}/aroma_output"
 os.environ['DATASET_CONFIG']   = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 
-DATASET_KEY = 'isp_LSM_1'   # ← 변경 시 여기만 수정
+DATASET_KEY = 'severstal'   # ← 확정 4종: severstal / mvtec_leather / aitex / mtd
 
 os.environ['DATASET_KEY']      = DATASET_KEY
 os.environ['ROI_DIR']          = f"{os.environ['AROMA_OUT']}/roi/{DATASET_KEY}"
@@ -71,6 +74,18 @@ print(f"NORMAL_DIR = {os.environ['NORMAL_DIR']}")
 | `controlnet` | stub (미구현) | GPU 필요 |
 | `inpainting` | stub (미구현) | GPU 필요 |
 
+### 4종 데이터셋 관련 최근 개선 (자동 적용 — CLI 변화 없음)
+
+`generate_defects.py`에 다음 두 개선이 반영되어, 확정 4종(특히 aitex/mtd)의 합성 손실·오배치가 줄었다. 별도 플래그 없이 항상 적용된다.
+
+| 개선 | 내용 | 영향 데이터셋 |
+|------|------|--------------|
+| **Void 거부 brightness-agnostic** | `_foreground_mask`의 void 거부 가드가 밝기 무관 **flatness(std)** 기준으로 판정(구 dark-only `mean` 조건 제거). 평탄한 빈 여백(void)이 결함 배치 대상이 되는 것을 밝기와 무관하게 차단. | **aitex**(흰색 void — 기존엔 통과됨), severstal(검은 void) 모두. leather/mtd는 평탄 void 없어 무영향(오거부 0%) |
+| **Oversized crop 리스케일** | defect crop이 배경보다 크면 skip하지 않고 **aspect 보존 리스케일**(배경의 0.95배 이내로 축소) 후 배치. | **mtd/aitex**(이미지 크기 이질성 큼) — 기존엔 큰 crop이 통째로 드롭되어 합성 수 감소 |
+
+> 로그 확인: void 거부는 `_foreground_mask`가 None 폴백(random 배치)으로 빠지는 것으로, 리스케일은 `Defect crop (WxH) rescaled to (wxh) to fit normal ...` INFO 로그로 나타난다.
+> 상세 검증 가이드: `foreground_roi_filter_verify_execute.md`.
+
 ## 결과 확인
 
 ```python
@@ -126,7 +141,9 @@ DATASET_CONFIG = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config
 
 with open(DATASET_CONFIG) as f:
     cfg = json.load(f)
-datasets = [k for k in cfg if not k.startswith('_')]
+# exp4v2 확정 4종만 실행. config 전체(비-exp4v2 포함)를 돌리려면 아래 줄로 교체.
+datasets = ["severstal", "mvtec_leather", "aitex", "mtd"]
+# datasets = [k for k in cfg if not k.startswith('_')]
 print(f"총 {len(datasets)}개 데이터셋\n")
 
 for ds in datasets:
@@ -149,7 +166,9 @@ MAX_WORKERS    = 3
 
 with open(DATASET_CONFIG) as f:
     cfg = json.load(f)
-datasets = [k for k in cfg if not k.startswith('_')]
+# exp4v2 확정 4종만 실행. config 전체(비-exp4v2 포함)를 돌리려면 아래 줄로 교체.
+datasets = ["severstal", "mvtec_leather", "aitex", "mtd"]
+# datasets = [k for k in cfg if not k.startswith('_')]
 
 def run_one(ds):
     if not Path(f"{AROMA_OUT}/roi/{ds}/roi_selected.json").exists():

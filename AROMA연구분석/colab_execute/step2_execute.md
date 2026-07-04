@@ -4,6 +4,8 @@
 > Phase 0 + Step 1 출력을 읽어 형태학 클러스터 × 컨텍스트 빈 조합별 자연어 프롬프트 생성.
 > Step 1 완료 후 실행.
 
+> **exp4v2 대상 데이터셋 (v2-1 확정 4종)**: `severstal`·`mvtec_leather`·`aitex`·`mtd`. (aitex/mtd 선행: `multidomain_integration_verify_execute.md`)
+
 ## 환경변수
 
 ```python
@@ -12,7 +14,7 @@ import os
 os.environ['AROMA_SCRIPTS']  = '/content/AROMA/scripts/aroma'
 os.environ['AROMA_OUT']      = f"{os.environ['DRIVE']}/aroma_output"
 
-DATASET_KEY = 'isp_LSM_1'   # ← 변경 시 여기만 수정
+DATASET_KEY = 'severstal'   # ← 확정 4종: severstal / mvtec_leather / aitex / mtd
 
 os.environ['DATASET_KEY']    = DATASET_KEY
 os.environ['PROFILING_DIR']  = f"{os.environ['AROMA_OUT']}/profiling/{DATASET_KEY}"
@@ -83,7 +85,9 @@ DATASET_CONFIG = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config
 
 with open(DATASET_CONFIG) as f:
     cfg = json.load(f)
-datasets = [k for k in cfg if not k.startswith('_')]
+# exp4v2 확정 4종만 실행. config 전체(비-exp4v2 포함)를 돌리려면 아래 줄로 교체.
+datasets = ["severstal", "mvtec_leather", "aitex", "mtd"]
+# datasets = [k for k in cfg if not k.startswith('_')]
 print(f"총 {len(datasets)}개 데이터셋\n")
 
 for ds in datasets:
@@ -106,7 +110,9 @@ MAX_WORKERS    = 3
 
 with open(DATASET_CONFIG) as f:
     cfg = json.load(f)
-datasets = [k for k in cfg if not k.startswith('_')]
+# exp4v2 확정 4종만 실행. config 전체(비-exp4v2 포함)를 돌리려면 아래 줄로 교체.
+datasets = ["severstal", "mvtec_leather", "aitex", "mtd"]
+# datasets = [k for k in cfg if not k.startswith('_')]
 
 def run_one(ds):
     if not Path(f"{AROMA_OUT}/complexity/{ds}").exists():
