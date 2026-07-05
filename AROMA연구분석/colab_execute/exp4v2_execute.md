@@ -513,7 +513,8 @@ for cls in classes:
 - **`annotations.json`의 `normal_image` 필드**: mask 없을 때 bbox 추출에 배경 경로로 사용.
 - **합성 bbox 추출**: `mask`/`roi_mask`/`mask_path` 또는 `masks/{stem}.png`가 있으면 mask에서 직접. 없으면 composite−background diff → threshold=8(미검출 시 Otsu) → contour bbox.
 - **real 라벨 0개**: `_get_real: 0 labels (no_mask=.. bad_size=.. no_bbox=.. no_lines=..)`. `no_mask`↑=mask 경로 매핑 문제, `no_bbox`↑=`min_area`(기본 50)가 해당 mask 해상도 대비 과대.
-- **YOLO 캐시 schema_version=2**: bbox 로직 변경으로 기존 v1 캐시는 자동 무효화·1회 재빌드. 소스 결함 이미지 수가 변하면 자동 재빌드(`[YoloCache] built+saved`).
+- **YOLO 캐시 schema_version=3**: bbox 로직 변경(union-bbox 폴백 — 점상/미세 mask 라벨 회수) 시 스키마가 상향되어 기존(v2 이하) 캐시는 자동 무효화·1회 재빌드. 소스 결함 이미지 수가 변하면 자동 재빌드(`[YoloCache] built+saved`).
+- **mask 존재 시 diff 폴백 금지**: synth 라벨은 mask가 있으면 mask만 사용(0-box면 background 처리). diff/template 폴백은 mask-less annotation 전용 — 직물류(aitex)에서 diff 노이즈 파편 bbox(이미지당 수십 개) 방지.
 - **`n_train` 의미**: 레이블 있는 훈련 이미지 수(real_defect + synth). background negative(`n_real_train`만큼)는 미포함. 실제 YOLO가 보는 이미지 ≈ `n_train + n_real_train`.
 - **세 조건 독립 실행**: baseline best.pt를 random/aroma가 미사용 → baseline 실패와 무관하게 `--condition random`/`aroma` 단독 실행 가능.
 - **staging 로그 = 정상 신호**: real 이미지는 데이터셋당 1회 local staging(Drive→local `copy`), 조건별은 `hardlink`. `[Stage] ... done N in X.Xs (hardlink=H copy=C)`가 보이면 진행 중.

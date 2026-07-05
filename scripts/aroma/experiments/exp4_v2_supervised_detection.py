@@ -652,6 +652,18 @@ def _mask_to_bboxes(
         x, y, bw, bh = cv2.boundingRect(c)
         if bw * bh >= min_area:
             bboxes.append((int(x), int(y), int(bw), int(bh)))
+
+    # Union-bbox fallback: 점상/미세 mask(예: aitex thread 결함 — 전 성분이
+    # min_area 미달, 총 유효픽셀 수십 px)는 성분별 필터에서 전멸한다. 그대로
+    # 0-box를 반환하면 (1) real 라벨이 통째로 탈락하고 (2) synth 라벨이 diff
+    # 폴백으로 빠져 텍스처 노이즈 파편 bbox(이미지당 수십 개)를 양산한다.
+    # → 유효픽셀이 존재하면 그 합집합 1-bbox를 반환해 GT를 보존한다.
+    # blob mask(severstal 등)는 성분 bbox가 항상 나와 이 분기에 도달하지 않음.
+    if not bboxes and contours:
+        nz = cv2.findNonZero(binm)
+        if nz is not None:
+            x, y, bw, bh = cv2.boundingRect(nz)
+            bboxes = [(int(x), int(y), int(bw), int(bh))]
     return bboxes, mw, mh
 
 
@@ -1038,9 +1050,14 @@ def _write_yolo_labels(
         if img_w <= 0 or img_h <= 0:
             continue
 
-        # Prefer an explicit GT mask when available (exact bbox); only fall back
-        # to composite-vs-normal image differencing when no mask is persisted.
-        if mask_path and Path(mask_path).exists():
+        # Prefer an explicit GT mask when available (exact bbox). A readable
+        # mask is AUTHORITATIVE: diff/template fallbacks are reserved for
+        # mask-less annotations only. (aitex 실측: 미세 mask가 0-box일 때 diff로
+        # 빠지면 직물 텍스처 노이즈가 이미지당 수십~수백 개 파편 bbox를 양산 —
+        # mean 40.4, max 394. _mask_to_bboxes의 union 폴백이 유효픽셀 mask를
+        # 1-bbox로 회수하므로, 여기 도달해 0-box면 mask가 진짜 빈 것 → negative.)
+        mask_present = bool(mask_path and Path(mask_path).exists())
+        if mask_present:
             m_bboxes, mw, mh = _mask_to_bboxes(mask_path, min_area=min_area)
             if m_bboxes and (mw, mh) != (img_w, img_h) and mw > 0 and mh > 0:
                 sx = img_w / mw
@@ -1050,13 +1067,14 @@ def _write_yolo_labels(
                     for (x, y, bw, bh) in m_bboxes
                 ]
             bboxes = m_bboxes
-        if not bboxes and normal_path and Path(normal_path).exists():
+        if not bboxes and not mask_present and normal_path and Path(normal_path).exists():
             bboxes = _extract_defect_bboxes(synth_path, normal_path, min_area=min_area)
 
         # Final fallback: source_roi template matching (handles stale
-        # normal_image paths left over from local_staging runs).
+        # normal_image paths left over from local_staging runs). Mask-less only.
         source_roi_path = ann.get("source_roi")
-        if not bboxes and source_roi_path and Path(source_roi_path).exists() and _CV2_AVAILABLE:
+        if (not bboxes and not mask_present and source_roi_path
+                and Path(source_roi_path).exists() and _CV2_AVAILABLE):
             bboxes = _template_match_bbox(synth_path, source_roi_path, min_area=min_area)
 
         stem = f"syn_{i:06d}"
@@ -1558,7 +1576,9 @@ def _validate_real_cache(
     except (json.JSONDecodeError, OSError):
         return None
 
-    if meta.get("schema_version") != 2:
+    # v3: _mask_to_bboxes union-bbox 폴백 추가 (점상/미세 mask 라벨 회수) —
+    # real 라벨 결과가 달라지므로 v2 캐시는 자동 무효화·재빌드.
+    if meta.get("schema_version") != 3:
         return None
     if meta.get("min_area") != min_area:
         return None
@@ -1711,7 +1731,7 @@ def _build_or_load_real_yolo_dataset(
     if use_cache and cache_root is not None:
         meta = {
             "dataset_key": ds_key,
-            "schema_version": 2,
+            "schema_version": 3,
             "splits": per_split_meta,
             "n_images": sum(v["n_images"] for v in per_split_meta.values()),
             "n_labeled": total,
