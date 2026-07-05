@@ -41,3 +41,5 @@ aroma_exp4v2_visa-config-driven-loader.md
 aroma_exp4v2_multiclass-all-datasets.md
 aroma_exp4v2_quality-gate-fairness.md
 aroma_exp5_prdc-coverage.md
+aroma_exp6_knn-test-coverage.md
+aroma_exp6_rare-mode-coverage.md
