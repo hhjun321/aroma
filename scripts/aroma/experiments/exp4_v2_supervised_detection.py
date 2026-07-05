@@ -1642,6 +1642,7 @@ def _build_or_load_real_yolo_dataset(
     val_frac: float = 0.5,
     split_seed: int = 42,
     class_mask_map: Optional[Dict[str, Dict[int, str]]] = None,
+    real_frac: float = 1.0,
 ) -> Dict[str, Tuple[List[str], List[str], int]]:
     """
     Build or load cached per-split real YOLO dataset.
@@ -1657,6 +1658,10 @@ def _build_or_load_real_yolo_dataset(
     # {img: {id+1: merged_mask}} in _get_image_lists), so this single check routes
     # every multi dataset to real_multi and never reuses a single-class 'real' cache.
     cache_leaf = "real_multi" if class_mask_map is not None else "real"
+    # real_frac<1.0 은 train 부분집합이라 full 캐시와 n_source_defects 가 달라
+    # 상호 무효화 thrash 발생 → frac 별 별도 leaf 로 격리 (1.0 은 기존 경로 불변).
+    if real_frac < 1.0:
+        cache_leaf = f"{cache_leaf}_frac{real_frac:g}"
     cache_root = Path(cache_dir) / ds_key / cache_leaf if use_cache else None
 
     # --- CACHE HIT ---
@@ -2156,6 +2161,7 @@ def _run_detection_mode(
     local_cache: bool = True,
     patience: int = 0,
     class_mode: str = "single",
+    real_frac: float = 1.0,
 ) -> Dict[str, Any]:
     """
     Iterate datasets x models x conditions (COCO pretrained start).
@@ -2265,6 +2271,20 @@ def _run_detection_mode(
                 )
                 continue
 
+            # --real_frac: label-efficiency 커브용 real train 축소 (val 은 불변 —
+            # 전 frac 지점에서 동일 평가셋이어야 커브 비교 가능). seed 종속
+            # subsample 이라 --seeds 반복 시 seed 별 다른 부분집합(의도).
+            # 하위 synth cap([SynthRatio])은 len(train_defect) 기반이라 자동 축소.
+            if real_frac < 1.0 and train_defect:
+                _n_before = len(train_defect)
+                _k = max(1, int(round(_n_before * real_frac)))
+                _rng_rf = random.Random(seed)
+                train_defect = sorted(_rng_rf.sample(train_defect, _k))
+                logger.info(
+                    "  [RealFrac] %s: real train %d -> %d (frac=%.2f, val unchanged=%d)",
+                    ds, _n_before, _k, real_frac, len(val_defect),
+                )
+
             # Ratio-based synth cap (synth_ratio 지정 시 max_synth_per_ds 보다 우선).
             if synth_ratio is not None:
                 n_real_train = len(train_defect)
@@ -2296,6 +2316,7 @@ def _run_detection_mode(
                 val_frac=val_frac,
                 split_seed=seed,
                 class_mask_map=class_mask_map,
+                real_frac=real_frac,
             )
 
             # --- Per-dataset real staging (ONCE) -------------------------------
@@ -2901,6 +2922,7 @@ def run(
     local_cache: bool = True,
     patience: int = 0,
     class_mode: str = "single",
+    real_frac: float = 1.0,
 ) -> Dict[str, Any]:
     if not _CV2_AVAILABLE:
         logger.error("OpenCV (cv2) not installed. Run: pip install opencv-python-headless")
@@ -2967,6 +2989,7 @@ def run(
                 local_cache=local_cache,
                 patience=patience,
                 class_mode=class_mode,
+                real_frac=real_frac,
             )
             per_seed_results[s] = res_s
             save_json(res_s, seed_output_path)
@@ -3057,6 +3080,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="baseline(real-only) 학습 epoch (default: 50)")
     p.add_argument("--val_frac", type=float, default=0.3,
                    help="real defect 중 val 비율 (나머지는 train, default: 0.3)")
+    p.add_argument(
+        "--real_frac", type=float, default=1.0,
+        help=(
+            "label-efficiency 커브용 real train 축소 비율 (default: 1.0=전량, "
+            "기존 동작 불변). val 은 불변(전 frac 지점 동일 평가셋). "
+            "synth cap 은 축소된 train 기준 자동 재계산. 주 주장은 Δ(aroma-random) "
+            "커브로 한정. frac 지점별 fresh --output_dir 사용(resume 충돌 방지)."
+        ),
+    )
     p.add_argument(
         "--max_synth_per_ds", type=int, default=None,
         help="데이터셋·조건당 synth annotation 최대 사용 수. None=제한 없음(기본). "
@@ -3189,6 +3221,7 @@ def main(argv=None) -> None:
         local_cache=not args.no_local_cache,
         patience=args.patience,
         class_mode=args.class_mode,
+        real_frac=args.real_frac,
     )
     status = result.get("status", "unknown")
     n_ds   = len(result.get("results", {}))

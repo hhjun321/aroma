@@ -43,3 +43,5 @@ aroma_exp4v2_quality-gate-fairness.md
 aroma_exp5_prdc-coverage.md
 aroma_exp6_knn-test-coverage.md
 aroma_exp6_rare-mode-coverage.md
+aroma_exp4v2_epoch-pilot.md
+aroma_exp4v2_real-frac-curve.md
