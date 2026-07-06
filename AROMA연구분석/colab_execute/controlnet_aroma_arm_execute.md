@@ -2,7 +2,8 @@
 
 **목적**: AROMA arm의 합성을 copy-paste → **ControlNet 생성(텍스처) + AROMA ROI paste**로 교체한 뒤, exp4v2에서 random(copy-paste, 기존 결과 재사용)과 재비교.
 **설계 (단일변수 비교)**: 기존 `roi_selected.json`을 **그대로 재사용** — ROI 선택·배치·블렌딩·GT mask(seed mask)는 동일, **결함 crop 픽셀 생성만** ControlNet으로 교체. copy-paste aroma(20260705) vs ControlNet aroma vs random 삼각 비교 가능.
-**대상 데이터셋**: `mvtec_leather` · `mtd` · `severstal` (aitex 제외 — baseline 학습 실패 상태)
+**대상 데이터셋**: `mvtec_leather` · `mtd` · `severstal` · `aitex`
+> **aitex 특수 처리**: aitex는 tiled(256×256/stride128)+단일클래스 전환으로 baseline이 정상화되어 편입한다. 단 **20260705 결과에 aitex가 없어 이식 불가**하고, 이번 실험에서 **aroma-CP(copy-paste) 비교를 하지 않으므로** 이식할 이점이 없다. 따라서 aitex만 **이식 스킵 + `--condition all` fresh 학습**(baseline/random/aroma-CN 한 run), **seed 1 2 42**, **imgsz 256**(rect 미사용), grayscale target ON, single class. 나머지 3종은 기존 이식(seed 42 1 2, imgsz 640 rect) 그대로.
 **런타임**: 학습·생성·벤치마크 GPU 필수 (Colab Pro A100 권장)
 
 > **parity 설계 노트**: GT mask는 항상 실물 seed mask이므로 생성물이 흐릿해도 bbox는 유효 — dev_note ⑧의 empty-mask parity 붕괴(casda 771/1013)를 구조적으로 회피한다. blank 생성물은 seed-shift 재시도(2회) 후 skip되며 `cn_stats`로 관측된다. copy-paste 폴백 없음(arm 순수성).
@@ -21,7 +22,7 @@
 | 5 | 생성 pilot 육안 gate | GPU | 3종 |
 | 6 | 전량 생성 + paste (`generate_defects --method controlnet`) | **GPU** | 3종 |
 | 7 | parity / cn_stats 게이트 | CPU | — |
-| 8 | exp4v2 (baseline/random 이식 + aroma arm만 학습) | **GPU** | — |
+| 8 | exp4v2 — 3종: baseline/random 이식 + aroma arm만 학습 / **aitex: 이식 스킵 + `--condition all` fresh** | **GPU** | — |
 | 9 | 결과 비교 | CPU | — |
 
 ---
@@ -43,10 +44,16 @@ os.environ['CN_DATA']    = f"{os.environ['AROMA_OUT']}/controlnet_data"      # t
 os.environ['CN_MODELS']  = f"{os.environ['AROMA_OUT']}/controlnet_models"    # 학습 체크포인트/best_model
 os.environ['SYN_CN']     = f"{os.environ['AROMA_OUT']}/synthetic_cn"         # ControlNet 합성 산출
 os.environ['EXP4V2_CN']  = f"{os.environ['AROMA_OUT']}/exp4v2/20260705_cn"   # fresh 벤치 출력
-os.environ['EXP4V2_REF'] = f"{os.environ['AROMA_OUT']}/exp4v2/20260705"      # 기존 결과 (이식 소스)
+os.environ['EXP4V2_REF'] = f"{os.environ['AROMA_OUT']}/exp4v2/20260705"      # 기존 결과 (이식 소스, 3종 전용)
 
-DATASETS = ["mvtec_leather", "mtd", "severstal"]
-for k in ['CN_DATA','CN_MODELS','SYN_CN','EXP4V2_CN','EXP4V2_REF']:
+# aitex tiled 레이아웃 (구 비타일 aitex와 별도). normal_dir은 dataset_config aitex entry로 자동 해소됨.
+os.environ['AITEX_TILED'] = f"{os.environ['DRIVE']}/aitex_tiled"
+
+# 전체 대상. STEP 3~7은 4종 공통 루프. STEP 8만 이식 대상(GRAFT)과 fresh(aitex)로 분리.
+DATASETS       = ["mvtec_leather", "mtd", "severstal", "aitex"]
+GRAFT_DATASETS = ["mvtec_leather", "mtd", "severstal"]   # 20260705 baseline/random 이식 대상
+FRESH_DATASETS = ["aitex"]                                # 이식 없이 --condition all fresh 학습
+for k in ['CN_DATA','CN_MODELS','SYN_CN','EXP4V2_CN','EXP4V2_REF','AITEX_TILED']:
     print(k, '=', os.environ[k])
 
 with open(os.environ['DATASET_CONFIG']) as f:
@@ -102,7 +109,8 @@ print("\nMISSING:", len(need))
 ```
 
 > 모두 ✓여야 진행. `roi_selected.json`은 **20260705 aroma arm이 쓴 것과 동일 파일**이어야 단일변수 비교가 성립한다.
-> ⚠️ 가이드 규약 표기는 `--seeds 1 2 43`이지만 **20260705 실측 per_seed는 42/1/2** — 본 가이드는 실측에 맞춰 `--seeds 42 1 2`를 사용한다.
+> ⚠️ 3종(GRAFT_DATASETS) 규약: 가이드 표기는 `--seeds 1 2 43`이지만 **20260705 실측 per_seed는 42/1/2** — 본 가이드는 실측에 맞춰 `--seeds 42 1 2`를 사용한다.
+> ⚠️ **aitex(FRESH_DATASETS)는 위 20260705 seed 체크와 무관** — 이식하지 않고 fresh 학습하므로 `EXP4V2_REF`에 aitex가 없어도 정상이다. aitex는 `profiling/aitex`·`roi/aitex`·`synthetic_random/aitex`·`synthetic/aitex`(tiled 재실행 산출)만 ✓이면 된다. seed는 **1 2 42**(tiled 재실행의 1 2 43은 오실행이므로 정정).
 
 ---
 
@@ -145,6 +153,7 @@ for ds in DATASETS:
 |---------|------|--------|-----------|------------------|
 | severstal | 수천 crop | 100 | OFF | 기본 ON (강판 grayscale) |
 | mtd | 수백 | 150 | **ON** | 기본 ON (자성타일 grayscale) |
+| aitex | 수백 타일(~352) | 150 | **ON** | 기본 ON (직물 grayscale) — mtd 준용 |
 | mvtec_leather | ~수십·소수 | 300 | **ON** | **OFF** (`--no_force_grayscale_target`, 컬러 가죽) |
 
 ```python
@@ -166,6 +175,23 @@ os.environ['DS'] = "severstal"
 ```python
 # ── mtd ──
 os.environ['DS'] = "mtd"
+!python /content/AROMA/scripts/train_controlnet.py \
+    --data_dir $CN_DATA/$DS \
+    --output_dir $CN_MODELS/$DS \
+    --mixed_precision fp16 \
+    --gradient_checkpointing \
+    --num_train_epochs 150 \
+    --augment \
+    --early_stopping_patience 20 \
+    --checkpointing_steps 500 \
+    --save_optimizer_state \
+    --save_fp16 \
+    --resume_from_checkpoint latest
+```
+
+```python
+# ── aitex (tiled/single: mtd 준용 — 수백 타일, augment ON, grayscale 기본 ON) ──
+os.environ['DS'] = "aitex"
 !python /content/AROMA/scripts/train_controlnet.py \
     --data_dir $CN_DATA/$DS \
     --output_dir $CN_MODELS/$DS \
@@ -276,7 +302,7 @@ for ds in DATASETS:
 ```
 
 ```python
-N_PER_ROI = {"mvtec_leather": 3, "mtd": 3, "severstal": 3}   # ← 위 셀 출력으로 교체
+N_PER_ROI = {"mvtec_leather": 3, "mtd": 3, "severstal": 3, "aitex": 3}   # ← 위 셀 출력으로 교체
 
 for ds in DATASETS:
     os.environ['DS'] = ds
@@ -309,16 +335,24 @@ for ds in DATASETS:
 ## STEP 7 — parity / cn_stats 게이트 (CPU)
 
 ```python
-# random arm의 n_synth_train (20260705 실측): 이 값 이상이어야 synth_ratio=1.0 cap 충족
+# 3종(GRAFT): random arm의 n_synth_train (20260705 실측). 이 값 이상이어야 synth_ratio=1.0 cap 충족.
+# aitex(FRESH): 20260705에 없으므로 synthetic_random/aitex 실측 라벨수를 런타임 계산해 요구치로 사용.
 RANDOM_N = {"mvtec_leather": 64, "mtd": 272, "severstal": 2534}
 
+def _live_labelable(path):
+    ann = json.load(open(path))
+    return [a for a in ann if not a.get("dry_run") and a.get("bbox")]
+
 for ds in DATASETS:
-    ann = json.load(open(f"{os.environ['SYN_CN']}/{ds}/annotations.json"))
-    live = [a for a in ann if not a.get("dry_run") and a.get("bbox")]
+    live = _live_labelable(f"{os.environ['SYN_CN']}/{ds}/annotations.json")
     with_mask = sum(1 for a in live if a.get("mask_path"))
-    ok = len(live) >= RANDOM_N[ds]
+    if ds in RANDOM_N:
+        need = RANDOM_N[ds]
+    else:  # aitex: random pool 실측에서 동적 산출
+        need = len(_live_labelable(f"{os.environ['AROMA_OUT']}/synthetic_random/{ds}/annotations.json"))
+    ok = len(live) >= need
     print(f"{'✓' if ok else '✗ PARITY FAIL'} {ds:14s} labelable={len(live)} "
-          f"(mask={with_mask})  needed>={RANDOM_N[ds]}")
+          f"(mask={with_mask})  needed>={need}")
 ```
 
 > ✗이 뜨면 STEP 6 재실행 전에 `N_PER_ROI[ds] += 1` 후 동일 셀 재실행 — 캐시 덕에 기존 생성분은 skip되고 부족분만 추가 생성된다.
@@ -326,9 +360,9 @@ for ds in DATASETS:
 
 ---
 
-## STEP 8 — exp4v2 (baseline/random 이식 + aroma arm만 학습, GPU)
+## STEP 8 — exp4v2 (GRAFT 3종: 이식 + aroma만 학습 / aitex: fresh `--condition all`, GPU)
 
-### 8-A. 20260705 baseline/random 결과 이식 (aroma 항목만 제거)
+### 8-A. 20260705 baseline/random 결과 이식 (GRAFT_DATASETS만, aroma 항목만 제거)
 
 ```python
 import copy, pathlib, json
@@ -340,7 +374,7 @@ for s in (42, 1, 2):
     res = json.load(open(src))
     out = {}
     for ds, models in res.items():
-        if ds not in DATASETS:      # aitex 제외
+        if ds not in GRAFT_DATASETS:   # aitex는 이식 대상 아님(20260705에 없음, fresh 학습)
             continue
         out[ds] = {}
         for model, conds in models.items():
@@ -350,7 +384,9 @@ for s in (42, 1, 2):
     print(f"seed{s}: 이식 완료 → {kept}")
 ```
 
-### 8-B. 실행 — 파라미터는 20260705과 완전 동일 (seeds 42 1 2)
+> aitex는 8-A에서 이식하지 않는다 — 8-C에서 baseline/random/aroma를 fresh 학습해 per-seed JSON(seed1/2/42)에 병합한다. GRAFT 3종과 aitex의 seed 집합이 {1,2,42}로 동일하므로 같은 `_seeds/seed*` 디렉토리를 공유하되, `--dataset_keys`로 대상이 분리되어 서로 덮어쓰지 않는다(exp4v2 --resume은 기존 키 보존 병합).
+
+### 8-B. GRAFT 3종 실행 — 파라미터는 20260705과 완전 동일 (seeds 42 1 2, imgsz 640 rect)
 
 ```python
 !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
@@ -377,6 +413,35 @@ for s in (42, 1, 2):
 > `--resume` + 이식된 per-seed JSON → baseline/random은 skip, **aroma(ControlNet)만 학습** (3 ds × 3 seed = 9 run).
 > ⚠️ 위 파라미터(imgsz/val_frac/synth_ratio/epochs/batch/rect)를 하나라도 바꾸면 이식된 baseline/random과 비교 불가.
 
+### 8-C. aitex 실행 — 이식 없음, `--condition all` fresh (seeds 1 2 42, imgsz 256, rect 미사용)
+
+aitex는 20260705에 없어 이식 소스가 없고 aroma-CP 비교도 하지 않으므로, **baseline/random/aroma-CN 세 조건을 한 run에서 fresh 학습**한다. 한 run 내 세 조건이 동일 seed·split을 공유하여 단일변수 비교가 내부적으로 완결된다.
+
+```python
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolov8n \
+    --condition all \
+    --dataset_keys aitex \
+    --random_synthetic_dir $AROMA_OUT/synthetic_random \
+    --aroma_synthetic_dir  $SYN_CN \
+    --real_data_dir        $AROMA_DATA \
+    --output_dir           $EXP4V2_CN \
+    --yolo_cache_dir       $AROMA_OUT/yolo_cache \
+    --imgsz 256 \
+    --val_frac 0.3 \
+    --synth_ratio 1.0 \
+    --baseline_epochs 300 \
+    --patience 50 \
+    --batch 64 \
+    --cache ram \
+    --seeds 1 2 42 \
+    --resume
+```
+
+> aitex는 baseline/random을 이식하지 않으므로 `--condition all`이 세 조건 모두 학습 (aitex 1 ds × 3 seed × 3 조건). 8-B와 **출력 디렉토리(`$EXP4V2_CN`)는 동일**하되 seed JSON에 aitex 키만 추가된다.
+> ⚠️ aitex 파라미터는 `aitex_tiled_rerun_execute.md` §7-B와 정합 — **imgsz 256, `--rect` 미사용**(타일이 정사각 256). seed는 **1 2 42**(tiled 재실행의 1 2 43 오실행 정정). 이 값을 tiled baseline과 다르게 두면 tiled 재실행 결과와 교차 참조가 불가.
+> ⚠️ aitex의 tiled 재실행(`$EXP4V2_OUT/exp4v2`) 결과와는 **별개 출력**(`$EXP4V2_CN`)이다 — CN arm은 여기서 baseline/random까지 새로 학습하므로 tiled 재실행의 aitex 항목을 재사용/이식하지 않는다.
+
 ---
 
 ## STEP 9 — 결과 비교 (CPU)
@@ -387,6 +452,7 @@ import json, os
 cn  = json.load(open(f"{os.environ['EXP4V2_CN']}/exp4v2_results.json"))
 ref = json.load(open(f"{os.environ['EXP4V2_REF']}/exp4v2_results.json"))
 
+# ── GRAFT 3종: aroma-CP(copy-paste, ref) 대비까지 포함 ──
 print(f"{'dataset':<14} {'baseline':>9} {'random':>9} {'aroma-CP':>9} {'aroma-CN':>9} {'Δ(CN-R)':>9} {'Δ(CN-CP)':>9}")
 print("-" * 75)
 for ds in ["mvtec_leather", "mtd", "severstal"]:
@@ -402,9 +468,19 @@ for ds in ["mvtec_leather", "mtd", "severstal"]:
     a2 = cn[ds]["yolov8n"]["aroma"]["map50_95"]
     a1 = ref[ds]["yolov8n"]["aroma"]["map50_95"]
     print(f"{ds:<14} random={r:.4f}  aroma-CP={a1:.4f}  aroma-CN={a2:.4f}  Δ(CN-R)={a2-r:+.4f}")
+
+# ── aitex: aroma-CP 없음 → CP 열 제외 (baseline/random/aroma-CN/Δ(CN-R)만) ──
+if "aitex" in cn:
+    print(f"\n{'dataset':<14} {'baseline':>9} {'random':>9} {'aroma-CN':>9} {'Δ(CN-R)':>9}   (aroma-CP 없음)")
+    print("-" * 60)
+    for metric in ("map50", "map50_95"):
+        b  = cn["aitex"]["yolov8n"]["baseline"][metric]
+        r  = cn["aitex"]["yolov8n"]["random"][metric]
+        a2 = cn["aitex"]["yolov8n"]["aroma"][metric]
+        print(f"{'aitex('+metric+')':<14} {b:>9.4f} {r:>9.4f} {a2:>9.4f} {a2-r:>+9.4f}")
 ```
 
-per-seed paired delta(부호 일치)도 확인: `cn[ds]['yolov8n']['aroma']['per_seed']` vs `['random']['per_seed']` (동일 seed 42/1/2 키).
+per-seed paired delta(부호 일치)도 확인: `cn[ds]['yolov8n']['aroma']['per_seed']` vs `['random']['per_seed']` (GRAFT 3종=seed 42/1/2, aitex=seed 1/2/42 키).
 
 ---
 
@@ -415,4 +491,6 @@ per-seed paired delta(부호 일치)도 확인: `cn[ds]['yolov8n']['aroma']['per
 - **재현성**: diffusion seed = content-hash(image_id, bbox, cell_key, rep) — 재실행·재개 시 동일 latent, 동일 (image,bbox)가 복수 cell로 선택돼도 latent 분리. `--seed 42`는 배경 선택용(기존과 동일 규약).
 - **prompt/hint 학습 분포 일치**: defect_subtype·stability는 `roi_candidates.json` join(학습과 동일 소스: morph_label + MAX ctx_prior)에서 취한다 — `--roi_dir`에 `roi_candidates.json`이 함께 있어야 완전 일치(없으면 entry 필드 fallback + WARN).
 - **디스크**: `$SYN_CN` 이미지 + sidecar meta + `$CN_MODELS` 체크포인트 누적. 학습 완료 후 `checkpoint-*` 정리 가능 (`best_model/`만 유지).
+- **aitex tile-level mAP**: aitex는 256×256 타일 단위 평가라 50% overlap로 동일 결함이 인접 타일에 중복 계수된다. baseline/random/aroma-CN 3조건 동일 적용이라 상대 비교는 공정하나 절대값을 타 데이터셋과 직접 비교하지 말 것(논문 표기 시 "tile-level" 명시). 상세는 `aitex_tiled_rerun_execute.md` §8.
+- **aitex는 fresh 학습**: baseline/random을 이식하지 않고 8-C `--condition all`로 함께 학습하므로 GRAFT 3종보다 run 수가 많다(aitex 3조건 × 3 seed = 9 run). seed는 1 2 42.
 - 시간 실측·처리량 벤치는 수행하지 않는다 (load-test policy).
