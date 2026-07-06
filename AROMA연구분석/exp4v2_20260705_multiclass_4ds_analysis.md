@@ -31,8 +31,10 @@ per_class(aroma): break 0.951→0.974, crack 0.952→0.972, uneven 0.804→0.833
 | **severstal** (multi, crux) | 0.497 | +0.0002 | 0.14 | ❌ | **완전 평탄 (synth 자체 무효)** |
 | **mtd** (multi) | 0.920 | +0.0038 | 0.67 | ❌ | 천장 |
 | **mvtec_leather** (multi) | 0.834 | −0.0091 | −0.27 | ❌ | 천장 |
-| aitex (비타일, multi 11-cls) | 0.066 | +0.0075 | 0.42 | ❌ | 측정 붕괴(구버전) |
-| **aitex (tiled, single)** ※별도 run | 0.372 | **+0.097** | **4.51** | ✅ | **유일 positive** |
+| ~~aitex (비타일, multi 11-cls)~~ | ~~0.066~~ | — | — | — | **무효·제외**(종횡비 붕괴) |
+| **aitex (tiled, single)** = `aitex_single` ※유효 aitex | 0.372 | **+0.097** | **4.51** | ✅ | **유일 positive** |
+
+> ⚠️ **aitex 유효 결과 = `aitex_single`(tiled)만.** 이 20260705 파일의 aitex 행(비타일 0.066)은 종횡비 붕괴로 **무효 제외** — 파일엔 severstal/mtd/leather와 함께 있어 남지만 aitex 분석에는 쓰지 않는다.
 
 **중대 관찰 — 정직 보고 필수**:
 

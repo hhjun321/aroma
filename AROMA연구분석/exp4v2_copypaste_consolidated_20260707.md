@@ -9,16 +9,17 @@
 
 | 데이터셋 | run / config | baseline | random | aroma | **Δ(A−R)** | t(df=2) | aroma>random | Δ(synth−base) |
 |----------|--------------|----------|--------|-------|-----------|---------|--------------|----------------|
-| **aitex (tiled, single)** | 20260706_aitex | 0.372 | 0.388 | **0.485** | **+0.097** | **4.51** | ✅ **입증** | +0.113 (t 2.64) |
+| **aitex (tiled, single)** | **aitex_single** (20260706) | 0.372 | 0.388 | **0.485** | **+0.097** | **4.51** | ✅ **입증** | +0.113 (t 2.64) |
 | severstal (multi-4) | 20260705 | 0.498 | 0.497 | 0.497 | +0.000 | 0.14 | ❌ | **−0.001 (무효)** |
 | mtd (multi-5) | 20260705 | 0.920 | 0.931 | 0.935 | +0.004 | 0.67 | ❌ | +0.014 (t 3.24) |
 | mvtec_leather (multi-5) | 20260706_multi | 0.814 | 0.926 | 0.933 | +0.007 | 0.16 | ❌ | +0.065 (t 2.55) |
 | mvtec_leather (single) | 20260706_single | 0.836 | 0.888 | 0.895 | +0.008 | 0.12 | ❌ | +0.059 |
-| aitex (비타일, multi-11) | 20260705 | 0.066 | 0.071 | 0.079 | +0.008 | 0.42 | ❌ | +0.005 (측정붕괴) |
+
+> **aitex 유효 결과 = `aitex_single`(tiled 단일클래스) 단 하나.** 비타일 aitex(20260705 파일 내 multi-11, baseline 0.066)와 20260704 스모크 aitex는 **무효로 제외**(종횡비 붕괴·epochs=1). 비타일 aitex는 20260705 파일에 severstal/mtd/leather와 함께 들어있어 파일 삭제는 불가 — 본 분석에서 aitex 행으로 취급하지 않는다.
 
 부가 확인:
 - leather는 20260705(multi, 0.834)·20260706 multi(0.814)·single(0.836) **세 run 모두 aroma≈random**(config·run 무관) → 결과 견고.
-- 20260704 severstal/aitex/mtd는 **epochs=1 스모크(노이즈)** — 폐기, 위 표 미포함.
+- 20260704 스모크(severstal/aitex/mtd, epochs=1)는 노이즈 — 전량 폐기.
 
 ---
 
@@ -29,15 +30,15 @@
 - **무효**: **severstal(−0.001)** — synth=real(ratio 1.0) 규모에서 random·aroma 모두 baseline을 못 넘음.
 
 ### (2) AROMA 선택이 random 선택보다 나은가? (aroma vs random) — 연구 핵심
-- **positive 1건**: **tiled-aitex만** (Δ+0.097, t=4.51, 3/3 seed 일관).
-- **null 4건**: severstal(평탄)·mtd(천장)·leather(천장, single·multi)·비타일 aitex(측정붕괴).
+- **positive 1건**: **aitex_single(tiled)만** (Δ+0.097, t=4.51, 3/3 seed 일관).
+- **null 3건**: severstal(평탄)·mtd(천장)·leather(천장, single·multi). (비타일 aitex는 무효로 제외 — 카운트 안 함.)
 
 ---
 
 ## 패턴 해석 (과대주장 없이)
 
 1. **천장 효과가 지배적**: mtd(base 0.92)·leather(0.83)는 이미 쉬워 random 합성만으로 포화 → 선택 여지 소진. → aroma≈random. **AROMA 가치는 baseline이 낮아(어려워) 헤드룸이 큰 데이터셋에서만 발현.**
-2. **측정 병리가 신호를 가림**: aitex는 비타일(종횡비 16:1 붕괴, base 0.066)에선 null이었으나, **tiling으로 측정 복구(base 0.372)하자 aroma>random이 드러남**. → 측정이 정상이고 헤드룸이 있는 유일한 케이스가 유일한 positive.
+2. **측정이 정상이어야 신호가 보인다**: aitex 비타일(종횡비 16:1 붕괴, base 0.066)은 **측정 무효로 제외**. tiling으로 측정 복구한 `aitex_single`(base 0.372)에서만 **aroma>random이 드러남** → 측정 정상 + 헤드룸 큰 유일 케이스가 유일 positive.
 3. **severstal(crux)의 이중 null**: baseline 0.497로 낮은데도 synth 자체가 무효(random=baseline)이고 aroma도 평탄. per_class c2 0.327→0.323(회복 없음). ratio 0.4(과거 메모리 낙관)와 달리 **ratio 1.0에서 신호 소멸** — 별도 원인(희석/결함특성/측정) 규명 필요.
 
 ## 정직한 현 위치

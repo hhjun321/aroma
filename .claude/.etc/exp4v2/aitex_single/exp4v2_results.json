@@ -1,0 +1,169 @@
+{
+  "aitex": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.3719,
+        "map50_95": 0.1672,
+        "precision": 0.4739,
+        "recall": 0.3928,
+        "n_train": 246,
+        "n_real_train": 246,
+        "n_synth_train": 0,
+        "n_seeds": 3,
+        "per_seed": {
+          "42": {
+            "map50": 0.3757,
+            "map50_95": 0.1433,
+            "precision": 0.5065,
+            "recall": 0.339
+          },
+          "1": {
+            "map50": 0.3937,
+            "map50_95": 0.1773,
+            "precision": 0.4021,
+            "recall": 0.4397
+          },
+          "2": {
+            "map50": 0.3463,
+            "map50_95": 0.1811,
+            "precision": 0.5131,
+            "recall": 0.3997
+          }
+        },
+        "std": {
+          "map50": 0.0239,
+          "map50_95": 0.0208,
+          "precision": 0.0623,
+          "recall": 0.0507
+        },
+        "ci95": {
+          "map50": [
+            0.3125,
+            0.4313
+          ],
+          "map50_95": [
+            0.1155,
+            0.2189
+          ],
+          "precision": [
+            0.3192,
+            0.6286
+          ],
+          "recall": [
+            0.2668,
+            0.5188
+          ]
+        },
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/exp4v2/20260706_aitex/_seeds/seed42/aitex/yolov8n/baseline/weights/best.pt"
+      },
+      "random": {
+        "map50": 0.3881,
+        "map50_95": 0.1766,
+        "precision": 0.406,
+        "recall": 0.4327,
+        "n_train": 492,
+        "n_real_train": 246,
+        "n_synth_train": 246,
+        "n_seeds": 3,
+        "per_seed": {
+          "42": {
+            "map50": 0.3587,
+            "map50_95": 0.1625,
+            "precision": 0.4135,
+            "recall": 0.3585
+          },
+          "1": {
+            "map50": 0.401,
+            "map50_95": 0.1884,
+            "precision": 0.4595,
+            "recall": 0.4138
+          },
+          "2": {
+            "map50": 0.4047,
+            "map50_95": 0.1789,
+            "precision": 0.3449,
+            "recall": 0.5259
+          }
+        },
+        "std": {
+          "map50": 0.0256,
+          "map50_95": 0.0131,
+          "precision": 0.0577,
+          "recall": 0.0853
+        },
+        "ci95": {
+          "map50": [
+            0.3246,
+            0.4516
+          ],
+          "map50_95": [
+            0.1441,
+            0.2091
+          ],
+          "precision": [
+            0.2627,
+            0.5492
+          ],
+          "recall": [
+            0.2209,
+            0.6446
+          ]
+        }
+      },
+      "aroma": {
+        "map50": 0.4847,
+        "map50_95": 0.2181,
+        "precision": 0.6487,
+        "recall": 0.45,
+        "n_train": 492,
+        "n_real_train": 246,
+        "n_synth_train": 246,
+        "n_seeds": 3,
+        "per_seed": {
+          "42": {
+            "map50": 0.4373,
+            "map50_95": 0.1769,
+            "precision": 0.6409,
+            "recall": 0.3932
+          },
+          "1": {
+            "map50": 0.4729,
+            "map50_95": 0.2116,
+            "precision": 0.6682,
+            "recall": 0.4483
+          },
+          "2": {
+            "map50": 0.544,
+            "map50_95": 0.2659,
+            "precision": 0.637,
+            "recall": 0.5086
+          }
+        },
+        "std": {
+          "map50": 0.0543,
+          "map50_95": 0.0449,
+          "precision": 0.017,
+          "recall": 0.0577
+        },
+        "ci95": {
+          "map50": [
+            0.3498,
+            0.6197
+          ],
+          "map50_95": [
+            0.1067,
+            0.3296
+          ],
+          "precision": [
+            0.6065,
+            0.6909
+          ],
+          "recall": [
+            0.3067,
+            0.5934
+          ]
+        }
+      }
+    }
+  }
+}
