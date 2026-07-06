@@ -251,23 +251,12 @@
   },
   "aitex": {
     "domain": "aitex",
-    "class_mode": "multi",
-    "image_dir": "/content/drive/MyDrive/data/Aroma/aitex/train/good",
+    "class_mode": "single",
+    "image_dir": "/content/drive/MyDrive/data/Aroma/aitex_tiled/train/good",
     "seed_dirs": [
-      "/content/drive/MyDrive/data/Aroma/aitex/test/002",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/006",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/010",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/016",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/019",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/022",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/023",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/025",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/027",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/029",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/030",
-      "/content/drive/MyDrive/data/Aroma/aitex/test/036"
+      "/content/drive/MyDrive/data/Aroma/aitex_tiled/test/defect"
     ],
-    "notes": "Textile. 4096x256px (extreme 16:1 aspect). ~105 defect / 140 good across 7 fabrics; ~12 defect codes (ddd token of nnnn_ddd_ff.png -> defect_type). Run prepare_aitex.py first (normalizes 3-folder Kaggle layout to MVTec-style: NODefect->train/good, Defect->test/{ddd}, Mask->ground_truth/{ddd}/{stem}_mask.png). Some defect images have no mask -> skipped by prepare. seed_dirs list is a placeholder superset; confirm actual on-disk test/{ddd} folders after prepare and prune to match (aitex_manifest.json defect_codes lists the real ones). masks resolved via ground_truth/{ddd}/{stem}_mask.png (aitex branch reuses mvtec resolution)."
+    "notes": "Textile. Raw 4096x256px (16:1 aspect) TILED to 256x256/stride128 (50% overlap) by prepare_aitex.py --tile 256 --stride 128 --min_tile_area 50 (defaults): raw aspect collapsed to 256x16 under exp4v2 imgsz=256 letterbox -> baseline mAP50 0.066 (unlearnable). Single-class: all ~12 defect codes merged into test/defect (71 train imgs / 11 classes was ~6.5/class). Tile stems carry '__tile_r{r}_c{c}' so exp4v2 _split_defects groups all tiles of one source image into the same train/val side (50% overlap leak guard). Defect-image tiles with all-zero mask window -> train/good (bg pool); sub-min_area fragment tiles discarded. Masks re-encoded per tile as 0/255 under ground_truth/defect/{stem}_mask.png. Use a FRESH output dir (aitex_tiled) - do not mix with the legacy non-tiled aitex layout. aitex_manifest.json records tiled:true + per-tile origin/x0."
   },
   "mtd": {
     "domain": "mtd",
