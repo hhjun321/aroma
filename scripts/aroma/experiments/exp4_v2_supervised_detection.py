@@ -162,6 +162,20 @@ def _split_normal(
     return shuffled[n_test:], shuffled[:n_test]
 
 
+# Tile-stem delimiter written by prepare_aitex.py --tile: tiles of one source
+# image share the stem prefix before this marker. 50%-overlap tiles from the
+# same source MUST land in the same train/val split or they leak.
+_TILE_DELIM = "__tile_"
+
+
+def _defect_group_key(path: str) -> str:
+    """Group key for split purposes: the source-image stem for tiled datasets
+    (stem prefix before `__tile_`), the full stem otherwise (identity group)."""
+    stem = Path(path).stem
+    idx = stem.find(_TILE_DELIM)
+    return stem[:idx] if idx > 0 else stem
+
+
 def _split_defects(
     test_defect_paths: List[str],
     mask_map: Dict[str, str],
@@ -172,20 +186,71 @@ def _split_defects(
 
     Returns (train_defect_paths, val_defect_paths). Only mask-bearing images are
     eligible (need GT bbox for both train labels and val metrics).
+
+    Tiled datasets (aitex `__tile_` stems): the split is GROUP-aware — all tiles
+    of one source image go to the same side, because 50%-overlap tiles share
+    pixels and would leak train content into val. Non-tiled datasets take the
+    original path untouched (byte-identical shuffle → same splits as before).
     """
     eligible = sorted(p for p in test_defect_paths if mask_map.get(p))
     if not eligible:
         # No mask-bearing defect images: cannot form train or val labels.
         return [], []
     rng = random.Random(seed)
-    rng.shuffle(eligible)
-    # Reserve at least one image for val, but never consume the whole pool so
-    # train is also non-empty when >=2 images exist.
-    n_val = max(1, int(round(len(eligible) * val_frac)))
-    if len(eligible) >= 2:
-        n_val = min(n_val, len(eligible) - 1)
-    val = eligible[:n_val]
-    train = eligible[n_val:]
+
+    if not any(_TILE_DELIM in Path(p).stem for p in eligible):
+        # Legacy path — must stay byte-identical for existing datasets
+        # (severstal/mvtec/mtd reproducibility).
+        rng.shuffle(eligible)
+        # Reserve at least one image for val, but never consume the whole pool so
+        # train is also non-empty when >=2 images exist.
+        n_val = max(1, int(round(len(eligible) * val_frac)))
+        if len(eligible) >= 2:
+            n_val = min(n_val, len(eligible) - 1)
+        val = eligible[:n_val]
+        train = eligible[n_val:]
+        return train, val
+
+    # --- Group-aware split (tiled) ---
+    groups: Dict[str, List[str]] = {}
+    for p in eligible:
+        groups.setdefault(_defect_group_key(p), []).append(p)
+    keys = sorted(groups)
+    if len(keys) == 1:
+        # Single source image: group split impossible — fall back to tile-level
+        # split (leaky, but train+val non-empty beats an empty side).
+        logger.warning(
+            "_split_defects: only ONE tile group (%s) — falling back to "
+            "tile-level split; overlap leak unavoidable", keys[0],
+        )
+        rng.shuffle(eligible)
+        n_val = max(1, int(round(len(eligible) * val_frac)))
+        n_val = min(n_val, len(eligible) - 1) if len(eligible) >= 2 else n_val
+        return eligible[n_val:], eligible[:n_val]
+
+    rng.shuffle(keys)
+    # Greedy tile-count allocation: fill val until ~val_frac of TILES, keeping
+    # at least one group on each side.
+    target = max(1, int(round(len(eligible) * val_frac)))
+    val_keys: List[str] = []
+    n_val_tiles = 0
+    for k in keys:
+        if n_val_tiles >= target:
+            break
+        if len(val_keys) == len(keys) - 1:
+            break  # leave >=1 group for train
+        val_keys.append(k)
+        n_val_tiles += len(groups[k])
+    if not val_keys:
+        val_keys = [keys[0]]
+    val_set = set(val_keys)
+    val = [p for k in keys if k in val_set for p in sorted(groups[k])]
+    train = [p for k in keys if k not in val_set for p in sorted(groups[k])]
+    logger.info(
+        "_split_defects: group-aware split — %d source groups → train %d groups "
+        "(%d tiles) / val %d groups (%d tiles), target val tiles=%d",
+        len(keys), len(keys) - len(val_keys), len(train), len(val_keys), len(val), target,
+    )
     return train, val
 
 
@@ -1248,15 +1313,35 @@ def _local_cache_for_yolo(
     t0 = time.time()
 
     with ThreadPoolExecutor(max_workers=num_workers) as ex:
+        # Tiled stems (aitex `__tile_`) MUST keep their source-image group
+        # identity through staging: _split_defects runs AFTER this rename (see
+        # _run_detection_mode order) and derives the group from the stem prefix
+        # before `__tile_`. A flat tn_{i}/td_{i} rename would erase the marker
+        # and silently fall back to tile-level split -> 50%-overlap train/val
+        # leak. Tiled paths therefore stage as g{gid}__tile_{kind}{i} — the
+        # group prefix is SHARED between train_normal and test_defect (one
+        # _group_ids map) so the val-group background filter in
+        # _run_detection_mode can match bg tiles to val defect groups.
+        # Non-tiled paths keep the original tn_{i}/td_{i} names byte-identical.
+        _group_ids: Dict[str, int] = {}
+
+        def _staged_name(kind: str, i: int, p: str) -> str:
+            stem = Path(p).stem
+            idx = stem.find(_TILE_DELIM)
+            if idx > 0:
+                gid = _group_ids.setdefault(stem[:idx], len(_group_ids))
+                return f"g{gid:05d}{_TILE_DELIM}{kind}{i:05d}{Path(p).suffix}"
+            return f"{kind}{i:05d}{Path(p).suffix}"
+
         # real train_normal — keep dst Path alongside the future so the local
         # list is built from the KNOWN dst (deterministic per index), not the
         # helper return (which is now a status string).
-        tn_dsts = [real_imgs / f"tn_{i:05d}{Path(p).suffix}"
+        tn_dsts = [real_imgs / _staged_name("tn_", i, p)
                    for i, p in enumerate(lists["train_normal"])]
         tn_futs = [ex.submit(_stage_one, p, str(d))
                    for p, d in zip(lists["train_normal"], tn_dsts)]
         # real test_defect
-        td_dsts = [real_imgs / f"td_{i:05d}{Path(p).suffix}"
+        td_dsts = [real_imgs / _staged_name("td_", i, p)
                    for i, p in enumerate(lists["test_defect"])]
         td_futs = [ex.submit(_stage_one, p, str(d))
                    for p, d in zip(lists["test_defect"], td_dsts)]
@@ -2270,6 +2355,34 @@ def _run_detection_mode(
                     ds, len(train_defect), len(val_defect),
                 )
                 continue
+
+            # Tiled datasets: bg-leak guard for background negatives. prepare
+            # routes all-zero-mask tiles of DEFECT source images into
+            # train/good; with 50% overlap such a bg tile shares up to half its
+            # pixels with an adjacent defect tile of the same source — if that
+            # source lands in VAL, staging the bg tile as a train background
+            # negative leaks val background texture into train. Drop bg tiles
+            # whose source group is in val. Also replace the deterministic
+            # sorted-prefix [:n_real] bg pick (downstream) with a seeded
+            # shuffle: with ~31 tiles per source, a prefix slice would take
+            # near-duplicate tiles from the lexicographically-first sources
+            # only. Non-tiled datasets skip this block entirely (no behavior
+            # change: normal stems never collide with defect stems).
+            if any(_TILE_DELIM in Path(p).stem for p in val_defect):
+                _val_groups = {_defect_group_key(p) for p in val_defect}
+                _n_tn_before = len(train_normal)
+                train_normal = [
+                    p for p in train_normal
+                    if _defect_group_key(p) not in _val_groups
+                ]
+                _rng_bg = random.Random(seed)
+                train_normal = _rng_bg.sample(train_normal, len(train_normal))
+                logger.info(
+                    "%s: tiled bg-leak guard — train_normal %d -> %d "
+                    "(dropped %d val-group bg tiles), bg pick order seeded",
+                    ds, _n_tn_before, len(train_normal),
+                    _n_tn_before - len(train_normal),
+                )
 
             # --real_frac: label-efficiency 커브용 real train 축소 (val 은 불변 —
             # 전 frac 지점에서 동일 평가셋이어야 커브 비교 가능). seed 종속
