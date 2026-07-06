@@ -7,7 +7,10 @@ compositing a defect mask/crop onto a normal background image.
 
 Methods (--method):
     copy_paste    Alpha-composite paste (default, GPU-free)
-    controlnet    Interface stub — implement in Colab with diffusers
+    controlnet    Trained-ControlNet texture generation → paste at the AROMA-
+                  selected ROI (GT mask stays the real seed mask). Requires
+                  --controlnet_path/--morphology_csv/--context_features/--config
+                  and a GPU runtime (diffusers loads lazily).
     inpainting    Interface stub — implement in Colab with diffusers
 
 Copy-paste blending:
@@ -35,6 +38,7 @@ import logging
 import math
 import os
 import random
+import re
 import shutil
 import sys
 import time
@@ -570,6 +574,124 @@ def _foreground_paste_position(
     return None
 
 
+def _paste_and_finalize(
+    normal_img: "Image",
+    defect_crop: "Image",
+    mask: "Image",
+    output_path: str,
+    blend_mode: str = "alpha",
+    feather_px: int = 4,
+    rng: Optional[random.Random] = None,
+    mask_output_path: Optional[str] = None,
+    reject_clean_bg: bool = False,
+    min_bg_quality: float = 0.7,
+    blur_threshold: float = 100.0,
+    max_bg_tries: int = 20,
+    defect_path_for_log: str = "",
+) -> Dict[str, Any]:
+    """Shared placement + blending + GT-mask tail used by every synthesis method.
+
+    Extracted verbatim from copy_paste_synthesis so other generators (e.g.
+    ControlNet) reuse the exact same machinery: fit rescale, foreground-
+    constrained placement, clean-bg gate, seamless/alpha blend, full-frame GT
+    mask persistence, and the bbox return contract.
+    """
+    from PIL import Image as PILImage
+
+    if rng is None:
+        rng = random.Random(42)
+
+    crop_w, crop_h = defect_crop.size
+    bw_norm, bh_norm = normal_img.size  # (width, height) of background
+
+    # Defect crop must fit inside the background. When it is larger (common on
+    # size-heterogeneous sets like mtd/aitex), rescale it down — preserving the
+    # aspect ratio — instead of dropping the sample. The 0.95 factor leaves a
+    # placement margin so foreground/random sampling still has room to move.
+    if crop_w > bw_norm or crop_h > bh_norm:
+        scale = min(bw_norm / crop_w, bh_norm / crop_h) * 0.95
+        new_w = max(1, int(crop_w * scale))
+        new_h = max(1, int(crop_h * scale))
+        defect_crop = defect_crop.resize((new_w, new_h), PILImage.LANCZOS)
+        mask = mask.resize((new_w, new_h), PILImage.NEAREST)
+        logger.info(
+            "Defect crop (%dx%d) rescaled to (%dx%d) to fit normal (%dx%d): %s",
+            crop_w, crop_h, new_w, new_h, bw_norm, bh_norm, defect_path_for_log,
+        )
+        crop_w, crop_h = new_w, new_h
+
+    # Constrain placement to the object foreground when one can be estimated
+    # (object-centric datasets like visa_pcb). Falls back to fully random
+    # placement when no useful foreground is found (full-frame objects like
+    # mvtec_cable, detection failure, or cv2 unavailable) — preserving the
+    # legacy behavior exactly. Both the foreground sampling and the fallback
+    # draw from `rng`, so a fixed seed yields a deterministic result.
+    normal_rgb = np.asarray(normal_img.convert("RGB"))
+    fg_mask = _foreground_mask(normal_rgb)
+    position = None
+    if fg_mask is not None:
+        position = _foreground_paste_position(
+            fg_mask, normal_img.size, defect_crop.size, mask, rng
+        )
+    if position is None:
+        # Random-placement fallback. When reject_clean_bg is on, resample the
+        # position (same rng → deterministic) whenever the crop-sized local
+        # background patch is black/flat (void). All-fail → keep the last
+        # candidate so synthesis is still produced (never a silent drop).
+        position = _random_paste_position(normal_img.size, defect_crop.size, rng)
+        if reject_clean_bg:
+            for _ in range(max(1, max_bg_tries)):
+                px, py = position
+                patch = normal_rgb[py:py + crop_h, px:px + crop_w]
+                if _is_clean_background(patch, min_quality=min_bg_quality,
+                                        blur_threshold=blur_threshold):
+                    break
+                position = _random_paste_position(
+                    normal_img.size, defect_crop.size, rng
+                )
+    # Context-aware ('seamless') blending = Reinhard local-background colour/
+    # illumination transfer + cv2.seamlessClone, falling back to the alpha
+    # composite on any failure or when cv2 is unavailable. The position
+    # decision above (foreground / void / clean-bg gate) is unchanged — only
+    # HOW the chosen crop is composited at the chosen position differs.
+    if blend_mode == "seamless":
+        result = _context_aware_composite(
+            normal_img, defect_crop, mask, position, feather_px
+        )
+    else:
+        result = _alpha_composite(
+            normal_img, defect_crop, mask, position, feather_px
+        )
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    result.convert("RGB").save(output_path)
+
+    # bbox is reported in the COMPOSITE (background) coordinate system and
+    # describes only the pasted defect region — fixing the prior bug where
+    # the full image footprint [0,0,W,H] was returned.
+    x_paste, y_paste = int(position[0]), int(position[1])
+    bbox = [x_paste, y_paste, int(crop_w), int(crop_h)]
+
+    # Persist GT mask in the composite coordinate system. Mask saving is
+    # isolated so a write failure degrades to mask_path=None (legacy) rather
+    # than discarding the already-saved composite image.
+    saved_mask_path: Optional[str] = None
+    if mask_output_path is not None:
+        try:
+            full_mask = PILImage.new("L", (bw_norm, bh_norm), 0)
+            full_mask.paste(mask, (x_paste, y_paste))  # crisp pre-feather mask
+            Path(mask_output_path).parent.mkdir(parents=True, exist_ok=True)
+            full_mask.save(mask_output_path)  # PNG (lossless) — caller uses .png
+            saved_mask_path = mask_output_path
+        except Exception as mexc:
+            logger.warning(
+                "GT mask save failed for %s (composite kept, mask_path=None): %s",
+                output_path, mexc,
+            )
+
+    return {"bbox": bbox, "mask_path": saved_mask_path}
+
+
 def copy_paste_synthesis(
     roi_entry: Dict[str, Any],
     normal_image_path: str,
@@ -691,95 +813,18 @@ def copy_paste_synthesis(
             mask = PILImage.fromarray(mask_arr)
             defect_crop = defect_img.convert("RGBA")
 
-        crop_w, crop_h = defect_crop.size
-        bw_norm, bh_norm = normal_img.size  # (width, height) of background
-
-        # Defect crop must fit inside the background. When it is larger (common on
-        # size-heterogeneous sets like mtd/aitex), rescale it down — preserving the
-        # aspect ratio — instead of dropping the sample. The 0.95 factor leaves a
-        # placement margin so foreground/random sampling still has room to move.
-        if crop_w > bw_norm or crop_h > bh_norm:
-            scale = min(bw_norm / crop_w, bh_norm / crop_h) * 0.95
-            new_w = max(1, int(crop_w * scale))
-            new_h = max(1, int(crop_h * scale))
-            defect_crop = defect_crop.resize((new_w, new_h), PILImage.LANCZOS)
-            mask = mask.resize((new_w, new_h), PILImage.NEAREST)
-            logger.info(
-                "Defect crop (%dx%d) rescaled to (%dx%d) to fit normal (%dx%d): %s",
-                crop_w, crop_h, new_w, new_h, bw_norm, bh_norm, defect_path,
-            )
-            crop_w, crop_h = new_w, new_h
-
-        # Constrain placement to the object foreground when one can be estimated
-        # (object-centric datasets like visa_pcb). Falls back to fully random
-        # placement when no useful foreground is found (full-frame objects like
-        # mvtec_cable, detection failure, or cv2 unavailable) — preserving the
-        # legacy behavior exactly. Both the foreground sampling and the fallback
-        # draw from `rng`, so a fixed seed yields a deterministic result.
-        normal_rgb = np.asarray(normal_img.convert("RGB"))
-        fg_mask = _foreground_mask(normal_rgb)
-        position = None
-        if fg_mask is not None:
-            position = _foreground_paste_position(
-                fg_mask, normal_img.size, defect_crop.size, mask, rng
-            )
-        if position is None:
-            # Random-placement fallback. When reject_clean_bg is on, resample the
-            # position (same rng → deterministic) whenever the crop-sized local
-            # background patch is black/flat (void). All-fail → keep the last
-            # candidate so synthesis is still produced (never a silent drop).
-            position = _random_paste_position(normal_img.size, defect_crop.size, rng)
-            if reject_clean_bg:
-                for _ in range(max(1, max_bg_tries)):
-                    px, py = position
-                    patch = normal_rgb[py:py + crop_h, px:px + crop_w]
-                    if _is_clean_background(patch, min_quality=min_bg_quality,
-                                            blur_threshold=blur_threshold):
-                        break
-                    position = _random_paste_position(
-                        normal_img.size, defect_crop.size, rng
-                    )
-        # Context-aware ('seamless') blending = Reinhard local-background colour/
-        # illumination transfer + cv2.seamlessClone, falling back to the alpha
-        # composite on any failure or when cv2 is unavailable. The position
-        # decision above (foreground / void / clean-bg gate) is unchanged — only
-        # HOW the chosen crop is composited at the chosen position differs.
-        if blend_mode == "seamless":
-            result = _context_aware_composite(
-                normal_img, defect_crop, mask, position, feather_px
-            )
-        else:
-            result = _alpha_composite(
-                normal_img, defect_crop, mask, position, feather_px
-            )
-
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        result.convert("RGB").save(output_path)
-
-        # bbox is reported in the COMPOSITE (background) coordinate system and
-        # describes only the pasted defect region — fixing the prior bug where
-        # the full image footprint [0,0,W,H] was returned.
-        x_paste, y_paste = int(position[0]), int(position[1])
-        bbox = [x_paste, y_paste, int(crop_w), int(crop_h)]
-
-        # Persist GT mask in the composite coordinate system. Mask saving is
-        # isolated so a write failure degrades to mask_path=None (legacy) rather
-        # than discarding the already-saved composite image.
-        saved_mask_path: Optional[str] = None
-        if mask_output_path is not None:
-            try:
-                full_mask = PILImage.new("L", (bw_norm, bh_norm), 0)
-                full_mask.paste(mask, (x_paste, y_paste))  # crisp pre-feather mask
-                Path(mask_output_path).parent.mkdir(parents=True, exist_ok=True)
-                full_mask.save(mask_output_path)  # PNG (lossless) — caller uses .png
-                saved_mask_path = mask_output_path
-            except Exception as mexc:
-                logger.warning(
-                    "GT mask save failed for %s (composite kept, mask_path=None): %s",
-                    output_path, mexc,
-                )
-
-        return {"bbox": bbox, "mask_path": saved_mask_path}
+        return _paste_and_finalize(
+            normal_img, defect_crop, mask, output_path,
+            blend_mode=blend_mode,
+            feather_px=feather_px,
+            rng=rng,
+            mask_output_path=mask_output_path,
+            reject_clean_bg=reject_clean_bg,
+            min_bg_quality=min_bg_quality,
+            blur_threshold=blur_threshold,
+            max_bg_tries=max_bg_tries,
+            defect_path_for_log=defect_path,
+        )
 
     except Exception as exc:
         logger.error("copy_paste_synthesis failed for %s: %s", defect_path, exc)
@@ -787,8 +832,303 @@ def copy_paste_synthesis(
 
 
 # ---------------------------------------------------------------------------
-# Method stubs
+# ControlNet synthesis (generate defect texture → paste at AROMA-selected ROI)
 # ---------------------------------------------------------------------------
+# Design: the trained ControlNet renders only the defect-crop PIXELS (texture);
+# the paste mask / GT mask stay the real seed mask, and placement + blending +
+# recording go through _paste_and_finalize — the exact copy_paste machinery.
+# The seed-shape GT mask keeps every accepted synthetic labelable (bbox from a
+# real mask), structurally avoiding the dev_note ⑧ empty-mask parity collapse.
+# Hint + prompt are rebuilt with the SAME generators/joins build_train_jsonl.py
+# used for training, so inference stays in the training distribution.
+
+_CN_BLANK_STD = 6.0      # masked-region std below this → blank (no defect drawn)
+_CN_BLANK_RANGE = 12.0   # masked-region max-min below this → low-contrast collapse
+_CN_MEAN_LO = 3.0        # near-all-black output
+_CN_MEAN_HI = 252.0      # near-all-white output
+_CN_MAX_ATTEMPTS = 3     # initial try + 2 seed-shifted retries
+
+_CN_CTX: Optional[Dict[str, Any]] = None
+
+
+def _cn_model_sig(controlnet_path: str) -> str:
+    """Weights-file signature (size+mtime) so a retrained model at the SAME
+    path invalidates the generation cache (fingerprint mismatch)."""
+    for name in ("diffusion_pytorch_model.safetensors",
+                 "diffusion_pytorch_model.bin"):
+        p = Path(controlnet_path) / name
+        if p.exists():
+            st = p.stat()
+            return f"{name}:{st.st_size}:{int(st.st_mtime)}"
+    return controlnet_path  # remote hub id etc. — path-only fallback
+
+
+def _configure_controlnet_context(
+    controlnet_path: str,
+    sd_base: str,
+    morphology_csv: str,
+    context_features: str,
+    config_yaml: str,
+    roi_candidates: Optional[str] = None,
+    steps: int = 30,
+    cond_scale: float = 0.7,
+    resolution: int = 512,
+    grayscale: bool = True,
+    default_bg: str = "complex_pattern",
+    use_cache: bool = True,
+) -> Dict[str, Any]:
+    """Build the ControlNet inference context ONCE (join tables + generators).
+
+    Loads the same morphology/context/config/candidate inputs
+    build_train_jsonl.py used for training so per-call work is dict lookups
+    only. torch/diffusers load later, on the first generation
+    (_get_cn_pipeline). Raises on missing inputs so a misconfigured run fails
+    fast before the ROI loop.
+    """
+    global _CN_CTX
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+
+    import aroma_to_casda_roi as _adapter  # noqa: PLC0415 — sibling, lazy
+    import build_train_jsonl as _btj       # noqa: PLC0415 — sibling, lazy
+    from utils.hint_generator import HintImageGenerator    # noqa: PLC0415
+    from utils.prompt_generator import PromptGenerator     # noqa: PLC0415
+
+    features, bin_edges = _btj._load_bin_edges(config_yaml)
+    context_means = _btj._load_context_means(context_features, features)
+    by_mask, by_img_bbox = _adapter._load_morphology(morphology_csv)
+
+    # Training-side defect_subtype (morph_label) + stability (MAX ctx_prior)
+    # come from roi_candidates.json (build_train_jsonl._load_candidate_join).
+    # Optional: on a miss we fall back to the roi_selected entry fields.
+    candidate_join: Dict[Any, Dict[str, Any]] = {}
+    if roi_candidates and Path(roi_candidates).exists():
+        candidate_join = _btj._load_candidate_join(roi_candidates)
+    elif roi_candidates:
+        logger.warning("roi_candidates not found: %s — prompt subtype/stability "
+                       "fall back to roi_selected entry fields", roi_candidates)
+
+    prompt_gen = PromptGenerator(style="technical")
+    fingerprint = (
+        f"{_cn_model_sig(controlnet_path)}|{sd_base}|{int(steps)}|"
+        f"{float(cond_scale)}|{int(resolution)}|{bool(grayscale)}"
+    )
+    _CN_CTX = {
+        "controlnet_path": controlnet_path,
+        "sd_base": sd_base,
+        "steps": int(steps),
+        "cond_scale": float(cond_scale),
+        "resolution": int(resolution),
+        "grayscale": bool(grayscale),
+        "default_bg": default_bg,
+        "use_cache": bool(use_cache),
+        "fingerprint": fingerprint,
+        "features": features,
+        "bin_edges": bin_edges,
+        "context_means": context_means,
+        "by_mask": by_mask,
+        "by_img_bbox": by_img_bbox,
+        "candidate_join": candidate_join,
+        "adapter": _adapter,
+        "btj": _btj,
+        "hint_gen": HintImageGenerator(),
+        "prompt_gen": prompt_gen,
+        "negative_prompt": prompt_gen.generate_negative_prompt(),
+        "pipe": None,
+        "torch": None,
+        "device": None,
+        "stats": {
+            "calls": 0, "gen_ok": 0, "cache_hit": 0, "blank_retry": 0,
+            "skip_blank": 0, "oom_retry": 0, "skip_oom": 0, "skip_no_mask": 0,
+            "skip_error": 0, "join_miss": 0, "bg_fallback": 0,
+        },
+    }
+    logger.info(
+        "ControlNet context ready: model=%s base=%s steps=%d scale=%.2f res=%d "
+        "(morph rows=%d, context ids=%d, candidate keys=%d)",
+        controlnet_path, sd_base, steps, cond_scale, resolution,
+        len(by_mask), len(context_means), len(candidate_join),
+    )
+    return _CN_CTX
+
+
+def _get_cn_pipeline(ctx: Dict[str, Any]):
+    """Lazy-singleton diffusers pipeline — loaded once on the first generation."""
+    if ctx["pipe"] is not None:
+        return ctx["pipe"]
+    import torch  # noqa: PLC0415 — GPU-only dependency, never at module top
+    from diffusers import (  # noqa: PLC0415
+        ControlNetModel,
+        StableDiffusionControlNetPipeline,
+        UniPCMultistepScheduler,
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    controlnet = ControlNetModel.from_pretrained(
+        ctx["controlnet_path"], torch_dtype=dtype
+    )
+    pipe = StableDiffusionControlNetPipeline.from_pretrained(
+        ctx["sd_base"], controlnet=controlnet, safety_checker=None,
+        torch_dtype=dtype,
+    )
+    pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+    pipe = pipe.to(device)
+    pipe.set_progress_bar_config(disable=True)
+    pipe.enable_attention_slicing()
+    pipe.enable_vae_slicing()
+    try:
+        pipe.enable_xformers_memory_efficient_attention()
+    except Exception:
+        pass  # recent torch falls back to SDPA
+    ctx["pipe"] = pipe
+    ctx["torch"] = torch
+    ctx["device"] = device
+    logger.info("ControlNet pipeline loaded on %s (%s)", device, dtype)
+    return pipe
+
+
+def _cn_rep_idx(output_path: str) -> int:
+    """rep_idx from run()'s output naming ``syn_{roi:05d}_{rep:02d}``."""
+    m = re.search(r"_(\d+)_(\d+)$", Path(output_path).stem)
+    return int(m.group(2)) if m else 0
+
+
+def _cn_content_seed(
+    image_id: str, defect_bbox: Any, cell_key: str, rep_idx: int
+) -> int:
+    """Content-addressed diffusion seed: (defect identity, cell, repetition).
+
+    Independent of ROI iteration order and normal-pool draws, so a resumed or
+    partial rerun regenerates identical latents. cell_key disambiguates the
+    same (image_id, bbox) selected into multiple context cells — without it
+    those duplicates would collapse to identical latents AND identical
+    placement rng.
+    """
+    import hashlib  # noqa: PLC0415
+    key = f"{image_id}|{list(defect_bbox or [])}|{cell_key}|{rep_idx}"
+    return int(hashlib.sha1(key.encode("utf-8")).hexdigest()[:15], 16)
+
+
+def _cn_sidecar_path(output_path: str) -> Path:
+    return Path(str(output_path) + ".meta.json")
+
+
+def _cn_load_cached(
+    output_path: str, mask_output_path: Optional[str], expected_fp: str
+) -> Optional[Dict[str, Any]]:
+    """Session-resume cache: reuse an already-generated composite without GPU.
+
+    Valid only when the composite, its sidecar meta, and (if a mask was saved)
+    the GT mask all exist AND the sidecar fingerprint matches the current
+    sample identity + generation parameters + model weights signature — a
+    retrained model or changed steps/scale/roi_selected invalidates stale
+    outputs instead of silently reusing them.
+
+    Returns the copy_paste-shaped meta dict (plus ``normal_image`` — the
+    background actually used at generation time), else None.
+    """
+    out = Path(output_path)
+    side = _cn_sidecar_path(output_path)
+    if not (out.exists() and out.stat().st_size > 0 and side.exists()):
+        return None
+    try:
+        cached = json.loads(side.read_text(encoding="utf-8"))
+        if cached.get("fp") != expected_fp:
+            return None
+        bbox = cached.get("bbox")
+        if not (isinstance(bbox, list) and len(bbox) == 4):
+            return None
+        meta = {"bbox": bbox, "mask_path": None,
+                "normal_image": cached.get("normal_image")}
+        if cached.get("mask_path"):
+            if not (mask_output_path and Path(mask_output_path).exists()):
+                return None
+            meta["mask_path"] = mask_output_path
+        return meta
+    except Exception:
+        return None
+
+
+def _cn_is_blank(gen_img: "Image", mask_img: Optional["Image"]) -> bool:
+    """True when the generated patch carries no defect signal in the seed region."""
+    from PIL import Image as PILImage  # noqa: PLC0415
+
+    arr = np.asarray(gen_img.convert("L"), dtype=np.float32)
+    if not np.isfinite(arr).all():
+        return True
+    region = arr
+    if mask_img is not None:
+        m = np.asarray(mask_img.convert("L").resize(gen_img.size, PILImage.NEAREST))
+        if int((m > 0).sum()) >= 16:
+            region = arr[m > 0]
+    mean = float(region.mean())
+    if mean < _CN_MEAN_LO or mean > _CN_MEAN_HI:
+        return True
+    if float(region.std()) < _CN_BLANK_STD:
+        return True
+    if float(region.max() - region.min()) < _CN_BLANK_RANGE:
+        return True
+    return False
+
+
+def _cn_generate(
+    ctx: Dict[str, Any],
+    prompt: str,
+    hint_img: "Image",
+    seed0: int,
+    blank_mask: Optional["Image"],
+    sample_label: str = "?",
+) -> Optional["Image"]:
+    """Diffusion call with blank/OOM handling: seed-shifted retries, then skip."""
+    pipe = _get_cn_pipeline(ctx)
+    torch = ctx["torch"]
+    stats = ctx["stats"]
+    oom_cls = getattr(getattr(torch, "cuda", None), "OutOfMemoryError", ())
+    oom_seen = False
+    last_fail = "blank"
+    for attempt in range(_CN_MAX_ATTEMPTS):
+        generator = torch.Generator(device=ctx["device"]).manual_seed(seed0 + attempt)
+        try:
+            with torch.inference_mode():
+                image = pipe(
+                    prompt=prompt,
+                    negative_prompt=ctx["negative_prompt"],
+                    image=hint_img,
+                    num_inference_steps=ctx["steps"],
+                    generator=generator,
+                    height=ctx["resolution"],
+                    width=ctx["resolution"],
+                    controlnet_conditioning_scale=ctx["cond_scale"],
+                ).images[0]
+        except Exception as exc:
+            is_oom = (isinstance(exc, oom_cls)
+                      or "out of memory" in str(exc).lower())
+            if is_oom:
+                stats["oom_retry"] += 1
+                last_fail = "oom"
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                if oom_seen:  # second OOM → give up on this sample
+                    stats["skip_oom"] += 1
+                    logger.warning("controlnet OOM twice — skip %s", sample_label)
+                    return None
+                oom_seen = True
+                continue
+            raise
+        if _cn_is_blank(image, blank_mask):
+            stats["blank_retry"] += 1
+            last_fail = "blank"
+            continue
+        return image
+    stats["skip_oom" if last_fail == "oom" else "skip_blank"] += 1
+    logger.warning("controlnet %s after %d attempts — skip %s",
+                   last_fail, _CN_MAX_ATTEMPTS, sample_label)
+    return None
+
 
 def controlnet_synthesis(
     roi_entry: Dict[str, Any],
@@ -796,14 +1136,222 @@ def controlnet_synthesis(
     output_path: str,
     **kwargs: Any,
 ) -> Optional[Dict[str, Any]]:
+    """ControlNet defect generation → paste at the AROMA-selected ROI.
+
+    Requires _configure_controlnet_context() to have run — run() wires it when
+    ``--method controlnet`` is used. A direct unconfigured call keeps the
+    legacy stub behavior (NotImplementedError).
+
+    Returns the copy_paste contract: ``{"bbox": [x,y,w,h], "mask_path": ...}``
+    or None (skip → run() counts n_skip). No copy-paste fallback by design —
+    the arm stays pure; shortfalls surface in the stats counters instead.
     """
-    ControlNet-based defect generation stub.
-    Implement in Colab using the diffusers library with a GPU runtime.
-    """
-    raise NotImplementedError(
-        "controlnet_synthesis is not implemented. "
-        "Install diffusers and implement in a Colab GPU cell."
+    ctx = _CN_CTX
+    if ctx is None:
+        raise NotImplementedError(
+            "controlnet_synthesis requires _configure_controlnet_context(); "
+            "use run(--method controlnet) with --controlnet_path/--morphology_csv/"
+            "--context_features/--config."
+        )
+    if not HAS_PIL:
+        logger.error("Pillow required for controlnet synthesis")
+        return None
+
+    from PIL import Image as PILImage
+
+    stats = ctx["stats"]
+    stats["calls"] += 1
+    if stats["calls"] % 100 == 0:  # heartbeat for multi-hour Colab runs
+        logger.info(
+            "controlnet progress: %d calls (gen_ok=%d cache_hit=%d "
+            "skip_blank=%d skip_oom=%d)",
+            stats["calls"], stats["gen_ok"], stats["cache_hit"],
+            stats["skip_blank"], stats["skip_oom"],
+        )
+    mask_output_path = kwargs.get("mask_output_path")
+
+    try:
+        # ---- 1) Resolve seed crop geometry (real GT mask REQUIRED) ----------
+        # Unlike copy_paste there is no ellipse fallback: the hint R channel and
+        # the GT mask both need the real seed shape.
+        defect_path = roi_entry.get("image_path", "")
+        defect_mask_path = roi_entry.get("defect_mask_path") or ""
+        adapter = ctx["adapter"]
+        bbox = adapter._as_xywh(roi_entry.get("defect_bbox"))
+        if (not defect_path or not Path(defect_path).exists()
+                or not defect_mask_path or not Path(defect_mask_path).exists()
+                or bbox is None):
+            stats["skip_no_mask"] += 1
+            logger.warning("controlnet: missing defect image/mask/bbox for %s — skip",
+                           roi_entry.get("image_id", "?"))
+            return None
+
+        defect_img = PILImage.open(defect_path).convert("RGB")
+        dw, dh = defect_img.size
+        bx, by, bw_box, bh_box = bbox
+        if not (bw_box > 0 and bh_box > 0 and bx >= 0 and by >= 0
+                and bx + bw_box <= dw and by + bh_box <= dh):
+            stats["skip_no_mask"] += 1
+            logger.warning("controlnet: defect_bbox %s out of bounds (%dx%d) — skip",
+                           bbox, dw, dh)
+            return None
+        box = (bx, by, bx + bw_box, by + bh_box)
+        mask = PILImage.open(defect_mask_path).convert("L").crop(box)
+
+        image_id = str(roi_entry.get("image_id", ""))
+        cell_key = str(roi_entry.get("cell_key", ""))
+        seed0 = _cn_content_seed(image_id, bbox, cell_key, _cn_rep_idx(output_path))
+        sample_fp = f"{ctx['fingerprint']}|{image_id}|{bbox}|{seed0}"
+
+        # ---- 1b) Session-resume cache: skip the GPU on a fingerprint match --
+        if ctx["use_cache"]:
+            cached = _cn_load_cached(output_path, mask_output_path, sample_fp)
+            if cached is not None:
+                stats["cache_hit"] += 1
+                return cached
+
+        # ---- 2) Rebuild hint + prompt with the training-side generators -----
+        btj = ctx["btj"]
+        morph_row, matched = adapter._join_metrics(
+            roi_entry, ctx["by_mask"], ctx["by_img_bbox"]
+        )
+        if not matched:
+            stats["join_miss"] += 1
+        metrics = btj._metrics_from_row(morph_row) if morph_row else {}
+
+        # Training parity: build_train_jsonl sourced defect_subtype from the
+        # candidate join's morph_label and stability from the defect's MAX
+        # ctx_prior across cells — prefer those; entry fields are fallbacks.
+        cand = ctx["candidate_join"].get((image_id, defect_mask_path))
+        defect_subtype = ((cand or {}).get("morph_label")
+                          or roi_entry.get("morph_label")
+                          or roi_entry.get("defect_subtype") or "general")
+        stability_raw = (cand or {}).get("ctx_prior")
+        if stability_raw is None:
+            stability_raw = roi_entry.get("ctx_prior")
+        try:
+            stability = float(stability_raw)
+        except (TypeError, ValueError):
+            stability = 0.5
+
+        background_type = btj._derive_background_type(
+            image_id, ctx["context_means"], ctx["features"], ctx["bin_edges"]
+        )
+        if background_type is None:
+            stats["bg_fallback"] += 1
+            background_type = ctx["default_bg"]
+
+        roi_image_arr = adapter._read_gray_or_color(defect_path, gray=False)
+        roi_mask_arr = adapter._read_gray_or_color(defect_mask_path, gray=True)
+        if roi_image_arr is None or roi_mask_arr is None:
+            stats["skip_error"] += 1
+            logger.warning("controlnet: failed to reload image/mask for hint "
+                           "(image_id=%s) — skip", image_id or "?")
+            return None
+        img_crop = adapter._crop_xywh(roi_image_arr, bbox)
+        mask_crop = adapter._crop_xywh(roi_mask_arr, bbox)
+        if img_crop is None or mask_crop is None:
+            stats["skip_error"] += 1
+            logger.warning("controlnet: degenerate hint crop (image_id=%s) — skip",
+                           image_id or "?")
+            return None
+
+        hint_arr = ctx["hint_gen"].generate_hint_image(
+            img_crop, mask_crop, metrics, background_type, stability
+        )
+        # Geometry: the FULL bbox is squashed to a resolution² square (and the
+        # generation is un-squashed back to bbox size below) so hint ↔ output ↔
+        # GT mask stay exactly aligned. Training used Resize+CenterCrop — for
+        # near-square crops the two nearly coincide; for elongated crops no
+        # square-generation scheme matches training exactly, and the full-bbox
+        # square keeps the alignment invariant (center-crop inference would
+        # paste fabricated texture outside the generated window). Pilot-gate
+        # elongated defects visually (guide STEP 5).
+        res = ctx["resolution"]
+        hint_img = PILImage.fromarray(hint_arr).resize((res, res), PILImage.BILINEAR)
+        blank_mask = mask.resize((res, res), PILImage.NEAREST)
+
+        # NOTE: roi_entry["prompt"] (Stage 2 free-form) is deliberately NOT used
+        # — it is out-of-distribution for the trained model. The technical
+        # prompt below matches build_train_jsonl exactly.
+        prompt = ctx["prompt_gen"].generate_prompt(
+            defect_subtype=defect_subtype,
+            background_type=background_type,
+            stability_score=stability,
+            defect_metrics=metrics,
+            suitability_score=stability,
+        )
+
+        # ---- 3) Generate (content-addressed seed; blank/OOM retry) ----------
+        gen_img = _cn_generate(ctx, prompt, hint_img, seed0, blank_mask,
+                               sample_label=f"{image_id} rep{_cn_rep_idx(output_path)}")
+        if gen_img is None:
+            return None
+        if ctx["grayscale"]:
+            g = gen_img.convert("L")  # match force_grayscale_target training
+            gen_img = PILImage.merge("RGB", (g, g, g))
+
+        # ---- 4) Paste with the shared copy_paste machinery ------------------
+        defect_crop = gen_img.resize((bw_box, bh_box), PILImage.LANCZOS).convert("RGBA")
+        normal_img = PILImage.open(normal_image_path).convert("RGBA")
+        place_rng = random.Random(seed0)  # placement content-addressed too
+        meta = _paste_and_finalize(
+            normal_img, defect_crop, mask, output_path,
+            blend_mode=kwargs.get("blend_mode", "alpha"),
+            feather_px=kwargs.get("feather_px", 4),
+            rng=place_rng,
+            mask_output_path=mask_output_path,
+            reject_clean_bg=kwargs.get("reject_clean_bg", False),
+            min_bg_quality=kwargs.get("min_bg_quality", 0.7),
+            blur_threshold=kwargs.get("blur_threshold", 100.0),
+            defect_path_for_log=defect_path,
+        )
+        if meta:
+            stats["gen_ok"] += 1
+            # The background actually used — run() records it in annotations
+            # even on a later cache hit (when its own rng draw may differ).
+            meta["normal_image"] = normal_image_path
+            if ctx["use_cache"]:
+                try:
+                    _cn_sidecar_path(output_path).write_text(
+                        json.dumps({"fp": sample_fp,
+                                    "bbox": meta["bbox"],
+                                    "mask_path": meta.get("mask_path"),
+                                    "normal_image": normal_image_path}),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass  # cache is best-effort; composite is already saved
+        return meta
+
+    except Exception as exc:
+        stats["skip_error"] += 1
+        logger.error("controlnet_synthesis failed for %s: %s",
+                     roi_entry.get("image_id", "?"), exc, exc_info=True)
+        return None
+
+
+def _log_cn_stats() -> Optional[Dict[str, int]]:
+    """One-line summary of the ControlNet counters (parity/quality evidence)."""
+    if _CN_CTX is None:
+        return None
+    s = _CN_CTX["stats"]
+    denom = max(1, s["gen_ok"] + s["skip_blank"])
+    blank_rate = s["skip_blank"] / denom
+    logger.info(
+        "controlnet stats: gen_ok=%d cache_hit=%d blank_retry=%d skip_blank=%d "
+        "oom_retry=%d skip_oom=%d skip_no_mask=%d skip_error=%d join_miss=%d "
+        "bg_fallback=%d (blank_rate=%.3f)",
+        s["gen_ok"], s["cache_hit"], s["blank_retry"], s["skip_blank"],
+        s["oom_retry"], s["skip_oom"], s["skip_no_mask"], s["skip_error"],
+        s["join_miss"], s["bg_fallback"], blank_rate,
     )
+    if blank_rate > 0.2:
+        logger.warning(
+            "controlnet blank_rate=%.3f > 0.2 — undertrained model or "
+            "hint/prompt distribution drift suspected", blank_rate,
+        )
+    return dict(s)
 
 
 def inpainting_synthesis(
@@ -1117,6 +1665,17 @@ def run(
     reject_clean_bg: bool = False,
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
+    controlnet_path: Optional[str] = None,
+    sd_base: str = "runwayml/stable-diffusion-v1-5",
+    cn_steps: int = 30,
+    cn_cond_scale: float = 0.7,
+    cn_resolution: int = 512,
+    cn_grayscale: bool = True,
+    cn_default_bg: str = "complex_pattern",
+    cn_cache: bool = True,
+    morphology_csv: Optional[str] = None,
+    context_features: Optional[str] = None,
+    config_yaml: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Full Step 4 pipeline: load ROIs → synthesize → save annotations.
@@ -1141,9 +1700,16 @@ def run(
         min_bg_quality:   Minimum background quality (0..1). CASDA default 0.7.
         bg_blur_threshold: Laplacian-variance blur gate threshold. CASDA
                            default 100.0.
+        controlnet_path / sd_base / cn_*: ControlNet generation settings, used
+                          only with method='controlnet'. controlnet_path plus
+                          morphology_csv/context_features/config_yaml are
+                          REQUIRED there (hint/prompt parity with
+                          build_train_jsonl.py); missing ones fail fast with
+                          status 'controlnet_missing_args:...'.
 
     Returns:
-        dict with status, n_generated, annotations list
+        dict with status, n_generated, annotations list (+ cn_stats for
+        method='controlnet')
     """
     roi_path = Path(roi_dir) / "roi_selected.json"
     if not roi_path.exists():
@@ -1166,6 +1732,42 @@ def run(
 
     if method not in _SYNTHESIS_METHODS:
         return {"status": f"unknown_method:{method}", "n_generated": 0, "annotations": []}
+
+    # ControlNet: fail fast on missing inputs, then build the inference context
+    # (join tables + generators) ONCE before the ROI loop. The diffusers
+    # pipeline itself loads lazily on the first generation call.
+    if method == "controlnet":
+        missing = [name for name, val in (
+            ("--controlnet_path", controlnet_path),
+            ("--morphology_csv", morphology_csv),
+            ("--context_features", context_features),
+            ("--config", config_yaml),
+        ) if not val]
+        if missing:
+            logger.error("controlnet method requires: %s", ", ".join(missing))
+            return {"status": f"controlnet_missing_args:{','.join(missing)}",
+                    "n_generated": 0, "annotations": []}
+        if local_staging and cn_cache:
+            logger.warning(
+                "--local_staging discards the ControlNet generation cache across "
+                "sessions — for controlnet runs prefer a Drive output_dir "
+                "WITHOUT --local_staging (session-resume then skips the GPU for "
+                "already-generated images)."
+            )
+        _configure_controlnet_context(
+            controlnet_path=controlnet_path,
+            sd_base=sd_base,
+            morphology_csv=morphology_csv,
+            context_features=context_features,
+            config_yaml=config_yaml,
+            roi_candidates=str(Path(roi_dir) / "roi_candidates.json"),
+            steps=cn_steps,
+            cond_scale=cn_cond_scale,
+            resolution=cn_resolution,
+            grayscale=cn_grayscale,
+            default_bg=cn_default_bg,
+            use_cache=cn_cache,
+        )
 
     # Save original Drive paths before staging overwrites them
     orig_source_roi = [e.get("image_path", "") for e in selected]
@@ -1246,11 +1848,16 @@ def run(
                 n_ok += 1
                 # Record the durable Drive mask path only when a mask was saved.
                 ann_mask_path = final_mask_path if meta.get("mask_path") else None
+                # ControlNet cache hits return the background actually used at
+                # generation time — prefer it over this loop's rng draw so the
+                # annotation never points at a background the composite wasn't
+                # made from. copy_paste meta carries no normal_image (no-op).
+                ann_normal = meta.get("normal_image") or normal_path
                 annotations.append({
                     "image_path":    final_out_path,
                     "source_roi":    orig_source_roi[roi_idx],
                     "image_id":      roi_entry.get("image_id", ""),
-                    "normal_image":  staged_to_drive.get(normal_path, normal_path),
+                    "normal_image":  staged_to_drive.get(ann_normal, ann_normal),
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),
@@ -1278,13 +1885,18 @@ def run(
     save_json(annotations, str(drive_out / "annotations.json"))
     logger.info("Generated %d images (%d skipped) → %s", n_ok, n_skip, drive_out)
 
-    return {
+    result: Dict[str, Any] = {
         "status":       "ok",
         "n_generated":  n_ok,
         "n_skipped":    n_skip,
         "annotations":  annotations,
         "method":       method,
     }
+    if method == "controlnet":
+        cn_stats = _log_cn_stats()
+        if cn_stats is not None:
+            result["cn_stats"] = cn_stats
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1330,6 +1942,41 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    type=float, default=100.0,
                    help="Laplacian-variance blur threshold for the clean-bg gate "
                         "(default 100.0, CASDA value)")
+    # --- ControlNet (--method controlnet) ---------------------------------
+    p.add_argument("--controlnet_path", default=None,
+                   help="Trained ControlNet dir (train_controlnet.py best_model/). "
+                        "REQUIRED for --method controlnet")
+    p.add_argument("--sd_base", default="runwayml/stable-diffusion-v1-5",
+                   help="Stable Diffusion base model id/path "
+                        "(default: runwayml/stable-diffusion-v1-5)")
+    p.add_argument("--cn_steps", type=int, default=30,
+                   help="Diffusion inference steps (default: 30)")
+    p.add_argument("--cn_cond_scale", type=float, default=0.7,
+                   help="controlnet_conditioning_scale (default: 0.7)")
+    p.add_argument("--cn_resolution", type=int, default=512,
+                   help="Generation resolution — must match training "
+                        "(default: 512)")
+    p.add_argument("--cn_no_grayscale", dest="cn_grayscale",
+                   action="store_false", default=True,
+                   help="Keep generated color. Default forces R==G==B to match "
+                        "--force_grayscale_target training (use this flag when "
+                        "the model was trained with --no_force_grayscale_target)")
+    p.add_argument("--cn_default_bg", default="complex_pattern",
+                   help="background_type fallback when the context join misses "
+                        "(default: complex_pattern)")
+    p.add_argument("--cn_no_cache", dest="cn_cache",
+                   action="store_false", default=True,
+                   help="Disable the session-resume generation cache "
+                        "(sidecar .meta.json next to each composite)")
+    p.add_argument("--morphology_csv", default=None,
+                   help="morphology_features.csv — metrics join for hint/prompt "
+                        "(REQUIRED for --method controlnet)")
+    p.add_argument("--context_features", default=None,
+                   help="context_features.csv — background_type derivation "
+                        "(REQUIRED for --method controlnet)")
+    p.add_argument("--config", dest="config_yaml", default=None,
+                   help="recommended_config.yaml — context bin_edges "
+                        "(REQUIRED for --method controlnet)")
     return p.parse_args(argv)
 
 
@@ -1348,6 +1995,17 @@ def main(argv=None) -> None:
         reject_clean_bg=args.reject_clean_bg,
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
+        controlnet_path=args.controlnet_path,
+        sd_base=args.sd_base,
+        cn_steps=args.cn_steps,
+        cn_cond_scale=args.cn_cond_scale,
+        cn_resolution=args.cn_resolution,
+        cn_grayscale=args.cn_grayscale,
+        cn_default_bg=args.cn_default_bg,
+        cn_cache=args.cn_cache,
+        morphology_csv=args.morphology_csv,
+        context_features=args.context_features,
+        config_yaml=args.config_yaml,
     )
     if result.get("status") != "ok":
         sys.exit(1)
