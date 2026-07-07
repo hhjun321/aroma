@@ -6,7 +6,7 @@
 > **aitex 특수 처리**: aitex는 tiled(256×256/stride128)+단일클래스 전환으로 baseline이 정상화되어 편입한다. 단 **20260705 결과에 aitex가 없어 이식 불가**하고, 이번 실험에서 **aroma-CP(copy-paste) 비교를 하지 않으므로** 이식할 이점이 없다. 따라서 aitex만 **이식 스킵 + `--condition all` fresh 학습**(baseline/random/aroma-CN 한 run), **seed 1 2 42**, **imgsz 256**(rect 미사용), grayscale target ON, single class. 나머지 3종은 기존 이식(seed 42 1 2, imgsz 640 rect) 그대로.
 **런타임**: 학습·생성·벤치마크 GPU 필수 (Colab Pro A100 권장)
 
-> **parity 설계 노트**: GT mask는 항상 실물 seed mask이므로 생성물이 흐릿해도 bbox는 유효 — dev_note ⑧의 empty-mask parity 붕괴(casda 771/1013)를 구조적으로 회피한다. blank 생성물은 seed-shift 재시도(2회) 후 skip되며 `cn_stats`로 관측된다. copy-paste 폴백 없음(arm 순수성).
+> **parity 설계 노트**: GT mask는 항상 실물 seed mask이므로 생성물이 흐릿해도 bbox는 유효 — dev_note ⑧의 empty-mask parity 붕괴(casda 771/1013)를 구조적으로 회피한다. blank 생성물은 seed-shift 재시도(2회) 후 skip되며 `cn_stats`로 관측된다. **AR 게이트 elongated ROI는 copy_paste로 폴백**(개수·클래스·bbox parity 유지, 2026-07-07 Option 3) — blank/oom skip을 제외하면 출력이 `n_rois × n_per_roi`에 근접하게 유지된다.
 
 ---
 
@@ -271,7 +271,7 @@ for ds in DATASETS:
 ```
 
 > **신규 필터 2종** (severstal pilot 분석에서 도입 — dev_note `aroma_controlnet-arm_quality-filters.md`):
-> - `--cn_ar_threshold 2.5` — bbox 종횡비 max(w,h)/min(w,h) > 2.5 ROI를 생성 전 스킵. 세장형 bbox는 512² squash-unsquash 과정에서 수평 스미어/평탄 패치가 생김(pilot: 아티팩트 3장 전부 AR≥3.1, AR≤2.1 전부 양호). 스킵 수는 `controlnet stats`의 `skip_ar`로 확인. `0`이면 게이트 OFF.
+> - `--cn_ar_threshold 2.5` — bbox 종횡비 max(w,h)/min(w,h) > 2.5 ROI를 AR 게이트. 세장형 bbox는 512² squash-unsquash 과정에서 수평 스미어/평탄 패치가 생김(pilot: 아티팩트 3장 전부 AR≥3.1, AR≤2.1 전부 양호). **기본 동작 = copy_paste 폴백**(2026-07-07, dev_note Option 3): AR 게이트 ROI를 스킵하지 않고 copy_paste로 채워 출력 개수·클래스·bbox를 random/aroma-CP와 **완전 parity** 유지. 폴백 샘플은 annotations `method="copy_paste_arfallback"`로 태깅되고 `controlnet stats`의 `ar_fallback`으로 카운트. → aroma-CN vs aroma-CP는 elongated에서 양쪽 동일 copy_paste, delta는 ControlNet이 실제 생성한 non-elongated에서만 발생(통제된 비교). `--cn_no_ar_fallback`으로 순수-arm 스킵 복원 시 `skip_ar` 카운트. `0`이면 게이트 OFF.
 > - `--texture-dist-threshold 0.25` — 소스 결함 주변 배경과 paste 위치 배경의 텍스처 descriptor 거리(0..1)가 임계 초과 시 위치 재샘플 → normal 재추첨(상한 5장). checkerplate(무늬강판) 같은 구조 반복 패턴 배경으로의 오배치를 차단. 로그의 `texture-gate stats`(active/repick_draws/fallback)로 동작 확인. `0`이면 OFF. **튜닝 밴드 0.15–0.35**: fallback이 자주 찍히면(전 normal 거부) 임계를 올리고, checkerplate 오배치가 남으면 내린다.
 
 ```python
@@ -286,7 +286,7 @@ for ds in DATASETS:
     plt.show()
 ```
 
-**gate 기준**: (a) 로그의 `controlnet stats`에서 `blank_rate < 0.2`, (b) 결함 텍스처가 배경과 이질적이지 않은가, (c) `skip_ar` 비율 — 세장형 결함은 이제 `--cn_ar_threshold`가 **자동 스킵**한다(수동 육안 게이트 불필요). 단 `skip_ar / (호출 수)`가 과도하면(예: >30%, severstal class3처럼 elongated 위주 클래스가 통째로 빠지는 경우) 임계 상향(2.5→3.0) 또는 해당 클래스 커버리지 손실을 기록하고 진행. 실패 시 → 해당 데이터셋 학습 하이퍼 조정(augment/epoch) 또는 `--cn_cond_scale`(0.7→0.9) 조정 후 재-pilot. leather가 끝내 비현실적이면 **"controlnet arm 부적합"으로 정직 보고**하고 leather 제외.
+**gate 기준**: (a) 로그의 `controlnet stats`에서 `blank_rate < 0.2`, (b) 결함 텍스처가 배경과 이질적이지 않은가, (c) `ar_fallback` 비율 — 세장형 결함은 `--cn_ar_threshold`가 **자동으로 copy_paste 폴백** 처리(수동 육안 게이트 불필요, 개수 parity 유지). `ar_fallback / (호출 수)`가 과도하면(예: >30%, severstal class3처럼 elongated 위주) 논문에 "elongated 결함은 양 arm copy_paste 처리, delta는 non-elongated 기여"로 명시하면 됨 — 커버리지 손실이 아니라 비교 통제. 임계 상향(2.5→3.0)으로 ControlNet 생성 비중을 늘릴지는 pilot 품질로 판단. 실패 시 → 해당 데이터셋 학습 하이퍼 조정(augment/epoch) 또는 `--cn_cond_scale`(0.7→0.9) 조정 후 재-pilot. leather가 끝내 비현실적이면 **"controlnet arm 부적합"으로 정직 보고**하고 leather 제외.
 
 > pilot 재실행은 안전: 캐시가 모델 가중치 서명(size+mtime)·steps·cond_scale을 fingerprint로 검증하므로, 재학습·파라미터 변경 후 재실행하면 구산출물은 자동 무효화되고 새로 생성된다.
 
@@ -355,17 +355,19 @@ def _live_labelable(path):
 for ds in DATASETS:
     live = _live_labelable(f"{os.environ['SYN_CN']}/{ds}/annotations.json")
     with_mask = sum(1 for a in live if a.get("mask_path"))
+    n_arfb = sum(1 for a in live if a.get("method") == "copy_paste_arfallback")
     if ds in RANDOM_N:
         need = RANDOM_N[ds]
     else:  # aitex: random pool 실측에서 동적 산출
         need = len(_live_labelable(f"{os.environ['AROMA_OUT']}/synthetic_random/{ds}/annotations.json"))
     ok = len(live) >= need
     print(f"{'✓' if ok else '✗ PARITY FAIL'} {ds:14s} labelable={len(live)} "
-          f"(mask={with_mask})  needed>={need}")
+          f"(mask={with_mask}, ar_fallback={n_arfb})  needed>={need}")
 ```
 
-> ✗이 뜨면 STEP 6 재실행 전에 `N_PER_ROI[ds] += 1` 후 동일 셀 재실행 — 캐시 덕에 기존 생성분은 skip되고 부족분만 추가 생성된다.
-> STEP 6 로그의 `controlnet stats` 라인(gen_ok / skip_blank / blank_rate / join_miss)을 여기 기록해 둔다 — 논문 부록·재현성 증빙.
+> AR 폴백(Option 3) 덕에 elongated ROI가 스킵되지 않으므로 labelable은 대개 첫 실행에서 need를 충족한다. `method="copy_paste_arfallback"` 비중(`n_arfb / len(live)`)을 기록 — 논문에 "aroma-CN 중 X%는 elongated이라 copy_paste 처리, delta는 나머지 ControlNet 생성분 기여"로 명시.
+> 그럼에도 ✗이면(blank/oom skip 과다) `N_PER_ROI[ds] += 1` 후 STEP 6 재실행 — 캐시 덕에 기존 생성분은 skip되고 부족분만 추가 생성된다.
+> STEP 6 로그의 `controlnet stats` 라인(gen_ok / ar_fallback / skip_blank / blank_rate / join_miss)을 여기 기록해 둔다 — 논문 부록·재현성 증빙.
 
 ---
 

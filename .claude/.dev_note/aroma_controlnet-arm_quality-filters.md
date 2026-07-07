@@ -108,6 +108,25 @@ ControlNet arm 파일럿에서 확인된 품질 결함 2종에 대한 생성 필
 5. **로컬 검증 결과** (스크래치 fixture, HEAD 대비): OFF 경로 byte-identical ✓ / ON에서 checkerplate normal 완전 회피(repick 2회) ✓ / ON 결정론 ✓ / annotations 누수 없음 ✓ / descriptor 분리도: 동질 텍스처 거리 0.01~0.06, checkerplate 교차 0.46.
 6. **플래그 확정**: `--cn_ar_threshold`(언더스코어 — cn_ 계열 관례), `--texture-dist-threshold`(하이픈 — clean-bg 계열 관례). 가이드 반영: `controlnet_aroma_arm_execute.md`(STEP 5/6, 임계 0.25 시작값), `step4_execute.md`(재현성 경고 포함).
 
+## 후속 결정 — AR gate: skip → copy_paste 폴백 (2026-07-07, Option 3)
+
+**문제**: AR gate가 elongated ROI를 `return None`(skip)하면 controlnet arm 출력이 `n_rois × n_per_roi`보다 적어진다. exp4v2 cap(`synth_ratio 1.0` → `n_real_train`)이 pool ≥ cap이면 개수 parity를 자동 보정하지만, AR gate는 **elongated 클래스(severstal class3 등)를 aroma-CN에서만 통째로 제거** → random/aroma-CP 대비 **구성(클래스·형상) 편향** confound. 개수만 채워도 편향은 잔존.
+
+**결정 (Option 3)**: AR gate 발동 시 skip 대신 **해당 ROI를 `copy_paste_synthesis`로 폴백**한다. 근거:
+- 개수·클래스·bbox 전부 random/aroma-CP와 완전 parity.
+- **해석이 오히려 깨끗**: aroma-CN vs aroma-CP(둘 다 aroma ROI, 생성법만 차이)에서 elongated는 양쪽 동일 copy_paste → delta는 ControlNet이 실제 생성한 non-elongated(AR≤임계) 결함에서만 발생. "ControlNet이 합성 가능한 결함에서 copy_paste 재조합을 이기는가"라는 통제된 질문.
+- H1 정합([[aroma_step4_h1-recombination-no-info]]): severstal elongated 거대 bbox는 정보량 최소 구간 — 타일 생성(Option 4) 과투자 불필요, 폴백으로 parity만 확보하고 GPU는 정보 있는 소형·희소 결함에 집중.
+- 대가: "순수 ControlNet arm" 주장 포기 → 논문에 "aroma-CN = ControlNet on AR≤threshold, copy_paste on elongated (양 arm 동일 처리)" 명시.
+
+**구현**:
+- `ar_fallback: bool = True`(기본 폴백) — `_configure_controlnet_context` 파라미터 + ctx 저장. CLI `--cn_no_ar_fallback`(store_false)로 기존 skip 동작 복원 가능.
+- AR gate 발동 시: 폴백이면 `copy_paste_synthesis`를 controlnet_synthesis가 받은 kwargs(blend/feather/rng/mask/clean-bg/texture 게이트 전부 forward)로 호출, 반환 meta에 `method="copy_paste_arfallback"` 태그, `stats["ar_fallback"]++`. 폴백 off면 기존 `stats["skip_ar"]++` + `return None`.
+- 폴백 copy_paste도 **동일 텍스처 게이트** 적용(normal_pool/texture_dist_threshold forward) — arm 내 배경 분포 일관.
+- `run()` annotation `"method"`: `meta.get("method", method)` — 폴백 샘플만 `copy_paste_arfallback`로 기록(관측성), 나머지 controlnet/copy_paste 경로 무영향.
+- `_log_cn_stats`에 `ar_fallback=%d` 추가.
+
+**검증**: OFF(`--cn_no_ar_fallback`) → 기존 skip 동작·byte 동일. ON(기본) → AR>임계 ROI가 copy_paste로 채워져 출력 개수 = n_rois×n_per_roi − (blank/oom/no_mask skip), annotations의 `method`에 `copy_paste_arfallback` 혼재 확인.
+
 ## TODO / 미확정
 
 - **텍스처 거리 임계 기본 권장값**: Colab 시나리오 3에서 튜닝 후 가이드에 기록 (코드 default는 0=OFF 유지).

@@ -1189,6 +1189,7 @@ def _configure_controlnet_context(
     default_bg: str = "complex_pattern",
     use_cache: bool = True,
     ar_threshold: float = 2.5,
+    ar_fallback: bool = True,
 ) -> Dict[str, Any]:
     """Build the ControlNet inference context ONCE (join tables + generators).
 
@@ -1237,6 +1238,7 @@ def _configure_controlnet_context(
         "default_bg": default_bg,
         "use_cache": bool(use_cache),
         "ar_threshold": float(ar_threshold),
+        "ar_fallback": bool(ar_fallback),
         "fingerprint": fingerprint,
         "features": features,
         "bin_edges": bin_edges,
@@ -1255,7 +1257,8 @@ def _configure_controlnet_context(
         "stats": {
             "calls": 0, "gen_ok": 0, "cache_hit": 0, "blank_retry": 0,
             "skip_blank": 0, "oom_retry": 0, "skip_oom": 0, "skip_no_mask": 0,
-            "skip_ar": 0, "skip_error": 0, "join_miss": 0, "bg_fallback": 0,
+            "skip_ar": 0, "ar_fallback": 0, "skip_error": 0, "join_miss": 0,
+            "bg_fallback": 0,
         },
     }
     logger.info(
@@ -1457,8 +1460,10 @@ def controlnet_synthesis(
     legacy stub behavior (NotImplementedError).
 
     Returns the copy_paste contract: ``{"bbox": [x,y,w,h], "mask_path": ...}``
-    or None (skip → run() counts n_skip). No copy-paste fallback by design —
-    the arm stays pure; shortfalls surface in the stats counters instead.
+    or None (skip → run() counts n_skip). Blank/OOM shortfalls surface in the
+    stats counters. AR-gated elongated ROIs fall back to copy_paste by default
+    (count/class/bbox parity vs random/aroma-CP; meta tagged
+    method=copy_paste_arfallback) — set ar_fallback=False for a pure arm.
     """
     ctx = _CN_CTX
     if ctx is None:
@@ -1521,6 +1526,38 @@ def controlnet_synthesis(
         ar_threshold = float(ctx.get("ar_threshold", 2.5))
         aspect = max(bw_box, bh_box) / min(bw_box, bh_box)
         if ar_threshold > 0 and aspect > ar_threshold:
+            # Elongated bbox: ControlNet squash-unsquash smears it. Rather than
+            # drop the ROI (which would strip elongated classes from THIS arm
+            # only → composition confound vs random/aroma-CP), fall back to
+            # copy_paste for this ROI so count + class + bbox stay at full
+            # parity. aroma-CN vs aroma-CP then differ ONLY on the non-elongated
+            # defects ControlNet actually synthesizes. Set ar_fallback=False to
+            # restore the pure-arm skip. copy_paste inherits the SAME texture
+            # gate so background distribution stays arm-consistent.
+            if ctx.get("ar_fallback", True):
+                stats["ar_fallback"] += 1
+                logger.warning(
+                    "controlnet: bbox AR %.2f > %.2f (%dx%d) — copy_paste "
+                    "fallback %s", aspect, ar_threshold, bw_box, bh_box,
+                    roi_entry.get("image_id", "?"),
+                )
+                fb = copy_paste_synthesis(
+                    roi_entry=roi_entry,
+                    normal_image_path=normal_image_path,
+                    output_path=output_path,
+                    blend_mode=kwargs.get("blend_mode", "alpha"),
+                    feather_px=kwargs.get("feather_px", 4),
+                    rng=kwargs.get("rng"),
+                    mask_output_path=mask_output_path,
+                    reject_clean_bg=kwargs.get("reject_clean_bg", False),
+                    min_bg_quality=kwargs.get("min_bg_quality", 0.7),
+                    blur_threshold=kwargs.get("blur_threshold", 100.0),
+                    normal_pool=kwargs.get("normal_pool"),
+                    texture_dist_threshold=kwargs.get("texture_dist_threshold", 0.0),
+                )
+                if fb is not None:
+                    fb["method"] = "copy_paste_arfallback"
+                return fb
             stats["skip_ar"] += 1
             logger.warning(
                 "controlnet: bbox AR %.2f > %.2f (%dx%d) — skip %s",
@@ -1686,11 +1723,12 @@ def _log_cn_stats() -> Optional[Dict[str, int]]:
     blank_rate = s["skip_blank"] / denom
     logger.info(
         "controlnet stats: gen_ok=%d cache_hit=%d blank_retry=%d skip_blank=%d "
-        "oom_retry=%d skip_oom=%d skip_no_mask=%d skip_ar=%d skip_error=%d "
-        "join_miss=%d bg_fallback=%d (blank_rate=%.3f)",
+        "oom_retry=%d skip_oom=%d skip_no_mask=%d skip_ar=%d ar_fallback=%d "
+        "skip_error=%d join_miss=%d bg_fallback=%d (blank_rate=%.3f)",
         s["gen_ok"], s["cache_hit"], s["blank_retry"], s["skip_blank"],
         s["oom_retry"], s["skip_oom"], s["skip_no_mask"], s.get("skip_ar", 0),
-        s["skip_error"], s["join_miss"], s["bg_fallback"], blank_rate,
+        s.get("ar_fallback", 0), s["skip_error"], s["join_miss"],
+        s["bg_fallback"], blank_rate,
     )
     if blank_rate > 0.2:
         logger.warning(
@@ -2021,6 +2059,7 @@ def run(
     cn_default_bg: str = "complex_pattern",
     cn_cache: bool = True,
     cn_ar_threshold: float = 2.5,
+    cn_ar_fallback: bool = True,
     morphology_csv: Optional[str] = None,
     context_features: Optional[str] = None,
     config_yaml: Optional[str] = None,
@@ -2126,6 +2165,7 @@ def run(
             default_bg=cn_default_bg,
             use_cache=cn_cache,
             ar_threshold=cn_ar_threshold,
+            ar_fallback=cn_ar_fallback,
         )
 
     # Save original Drive paths before staging overwrites them
@@ -2231,7 +2271,10 @@ def run(
                     "cluster_id":    roi_entry.get("cluster_id"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),
-                    "method":        method,
+                    # AR-fallback controlnet samples carry method="copy_paste_
+                    # arfallback"; every other path leaves method unset → run
+                    # param. Distinguishes fallback samples in annotations.
+                    "method":        meta.get("method", method),
                     "blend_mode":    blend_mode,
                     "roi_score":     roi_entry.get("roi_score", 0.0),
                     "deficit":       roi_entry.get("deficit", 0.0),
@@ -2355,10 +2398,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Disable the session-resume generation cache "
                         "(sidecar .meta.json next to each composite)")
     p.add_argument("--cn_ar_threshold", type=float, default=2.5,
-                   help="Skip ROIs whose bbox aspect ratio max(w,h)/min(w,h) "
+                   help="Gate ROIs whose bbox aspect ratio max(w,h)/min(w,h) "
                         "exceeds this — elongated crops smear under the "
                         "square squash-unsquash generation geometry "
                         "(default 2.5; 0 disables the gate)")
+    p.add_argument("--cn_no_ar_fallback", dest="cn_ar_fallback",
+                   action="store_false", default=True,
+                   help="On an AR-gated ROI, skip it (pure ControlNet arm) "
+                        "instead of the default copy_paste fallback. Default "
+                        "falls back so output count + class + bbox stay at full "
+                        "parity with the random/aroma-CP arms; the fallback "
+                        "samples are tagged method=copy_paste_arfallback")
     p.add_argument("--morphology_csv", default=None,
                    help="morphology_features.csv — metrics join for hint/prompt "
                         "(REQUIRED for --method controlnet)")
@@ -2396,6 +2446,7 @@ def main(argv=None) -> None:
         cn_default_bg=args.cn_default_bg,
         cn_cache=args.cn_cache,
         cn_ar_threshold=args.cn_ar_threshold,
+        cn_ar_fallback=args.cn_ar_fallback,
         morphology_csv=args.morphology_csv,
         context_features=args.context_features,
         config_yaml=args.config_yaml,
