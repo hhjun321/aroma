@@ -60,6 +60,8 @@ print(f"NORMAL_DIR = {os.environ['NORMAL_DIR']}")
     --bg-blur-threshold 100.0
 ```
 
+> **선택 필터** `--texture-dist-threshold 0.25` — paste 위치 배경과 소스 결함 주변 배경의 텍스처 거리(0..1) 게이트. 초과 시 위치 재샘플 → normal 재추첨(상한 5장). checkerplate류 구조 반복 배경 오배치 차단 (dev_note `aroma_controlnet-arm_quality-filters.md`). 기본 `0`(OFF) — **기존 실험 재현 시에는 켜지 말 것**(normal 배정 rng 스트림이 이동함). 신규 run에서 controlnet arm과 조건을 맞출 때만 동일 값으로 적용. 동작 로그: `texture-gate stats: active/repick_draws/fallback`.
+
 `--local_staging` 동작:
 1. defect 이미지 + normal 이미지 → `/content/tmp/aroma_step4_{dataset}/` 복사
 2. 합성 전 과정 로컬 디스크에서 실행 (Drive I/O 없음)

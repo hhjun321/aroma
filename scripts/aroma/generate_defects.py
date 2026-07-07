@@ -521,6 +521,179 @@ def _is_clean_background(
         return True
 
 
+# ---------------------------------------------------------------------------
+# Pair-level texture gate (see .claude/.dev_note/aroma_controlnet-arm_quality-filters.md)
+# ---------------------------------------------------------------------------
+# Motivation (severstal ControlNet pilot): the normal background is drawn
+# uniformly at random, so a defect whose source surroundings are flat steel can
+# land on a structurally periodic surface (checkerplate). seamlessClone only
+# adapts colour/illumination — it cannot hide the phase break of a repeating
+# pattern. The gate compares a texture descriptor of the source defect's
+# surroundings (background strips around the bbox) against the candidate
+# paste patch and resamples position → normal until compatible. Thresholds are
+# Colab-tunable module constants; texture_dist_threshold=0.0 keeps the gate
+# OFF and the rng stream byte-identical to legacy.
+
+_TEXTURE_STRIP_PX = 24         # thickness of the background strips around the bbox
+_TEXTURE_MIN_PIX = 64          # fewer selected pixels ⇒ descriptor None (gate passes)
+_TEXTURE_MAX_NORMAL_REPICK = 5 # stage-2 budget: different-normal redraws
+_TEXTURE_W = np.array([0.20, 0.20, 0.35, 0.25], dtype=np.float32)
+                               # weights: std, lap-var, periodicity, orient-anisotropy
+
+
+def _texture_descriptor(
+    patch: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+) -> Optional[np.ndarray]:
+    """
+    Rotation-invariant, scale-normalized texture vector in [0,1]^4:
+    [contrast std, Laplacian variance, autocorrelation periodicity peak,
+    gradient-orientation anisotropy].
+
+    ``mask`` (bool, same HxW) optionally restricts the AGGREGATION of the
+    per-pixel statistics to an irregular selection — the per-pixel operators
+    themselves need the full rectangle, and the periodicity term always uses
+    the full rectangle (callers therefore pass rectangular, defect-free
+    patches; see _source_bg_descriptor).
+
+    Returns None when cv2 is unavailable, the patch is degenerate, or the
+    selection is too small — callers treat None as "cannot judge ⇒ gate
+    passes" (same convention as ``_is_clean_background``).
+    """
+    if not HAS_CV2:
+        return None
+    try:
+        arr = np.asarray(patch)
+        if arr.ndim == 3:
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = arr
+        g = gray.astype(np.float32)
+        h, w = g.shape[:2]
+        if h < 8 or w < 8:
+            return None
+        sel = np.asarray(mask, dtype=bool) if mask is not None else None
+        n_sel = int(sel.sum()) if sel is not None else g.size
+        if n_sel < _TEXTURE_MIN_PIX:
+            return None
+
+        def _pick(a: np.ndarray) -> np.ndarray:
+            return a[sel] if sel is not None else a.ravel()
+
+        # 1) contrast: std normalized by 128 (same scale as
+        #    _background_quality_score's contrast term)
+        c_std = min(float(_pick(g).std()) / 128.0, 1.0)
+
+        # 2) edge energy: Laplacian variance squashed to [0,1)
+        # (CV_32F: float32→CV_64F is not supported by every cv2 build)
+        lap = cv2.Laplacian(g, cv2.CV_32F)
+        c_lap = float(np.tanh(_pick(lap).var() / 500.0))
+
+        # 3) periodicity: variance-normalized 2-D autocorrelation, height of
+        #    the strongest non-central peak. Scale/illumination-invariant, so
+        #    the resulting distance threshold ports across datasets — the
+        #    reason this was chosen over a raw FFT power profile.
+        gz = g - float(g.mean())
+        F = np.fft.rfft2(gz)
+        ac = np.fft.irfft2(F * np.conj(F), s=g.shape)
+        zero_lag = float(ac[0, 0])
+        if zero_lag <= 1e-6:
+            return None  # perfectly flat patch — no texture to compare
+        ac = ac / zero_lag
+        # Autocorr peaks near lag 0 wrap to the four array corners — blank a
+        # central-lobe radius around each corner before taking the max.
+        r = max(2, min(h, w) // 8)
+        ac[:r, :r] = 0.0
+        ac[:r, -r:] = 0.0
+        ac[-r:, :r] = 0.0
+        ac[-r:, -r:] = 0.0
+        c_per = float(np.clip(ac.max(), 0.0, 1.0))
+
+        # 4) orientation anisotropy: magnitude-weighted gradient-orientation
+        #    histogram entropy, flipped so periodic/ridged surfaces score high
+        gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+        ang = np.arctan2(gy, gx) % np.pi
+        magw = np.hypot(gx, gy)
+        hist, _ = np.histogram(_pick(ang), bins=8, range=(0.0, float(np.pi)),
+                               weights=_pick(magw))
+        total = float(hist.sum())
+        if total <= 1e-6:
+            p_hist = np.full(8, 1.0 / 8.0)
+        else:
+            p_hist = hist / total
+        ent = float(-(p_hist * np.log(p_hist + 1e-12)).sum() / np.log(8))
+        c_ani = 1.0 - min(max(ent, 0.0), 1.0)
+
+        return np.array([c_std, c_lap, c_per, c_ani], dtype=np.float32)
+    except Exception:
+        # Descriptor failure must never reject an otherwise-usable pairing.
+        return None
+
+
+def _texture_distance(
+    desc_a: Optional[np.ndarray],
+    desc_b: Optional[np.ndarray],
+) -> float:
+    """Weighted L1 distance in [0,1]. Either side None ⇒ 0.0 (gate passes)."""
+    if desc_a is None or desc_b is None:
+        return 0.0
+    return float((_TEXTURE_W * np.abs(desc_a - desc_b)).sum())
+
+
+def _source_bg_descriptor(
+    img_arr: np.ndarray,
+    mask_arr: np.ndarray,
+    bbox: Tuple[int, int, int, int],
+) -> Optional[np.ndarray]:
+    """
+    Texture descriptor of the SOURCE defect's surroundings: the average
+    descriptor of the rectangular background strips (thickness
+    ``_TEXTURE_STRIP_PX``) directly above / below / left / right of the
+    defect bbox.
+
+    Rectangular strips — not a mask-dilation ring — on purpose: the
+    periodicity term needs a filled rectangle, and a thin ring around a
+    defect that dominates its own bbox leaves the autocorrelation dominated
+    by the defect shape (measured: a noise background scored c_per=0.67
+    through the ring approximation). Strips sit fully OUTSIDE the bbox, and
+    ``defect_bbox`` is the bbox OF the mask, so they contain no defect
+    pixels by construction.
+
+    img_arr:  full defect image, (H,W) or (H,W,3) ndarray.
+    mask_arr: full-frame defect mask, (H,W) ndarray (kept for signature
+              stability; strips are defect-free by construction).
+    bbox:     (x, y, w, h) of the defect.
+
+    Returns None (gate passes) when cv2 is missing or no strip is usable —
+    e.g. a bbox that fills the whole frame.
+    """
+    if not HAS_CV2:
+        return None
+    try:
+        bx, by, bw, bh = (int(v) for v in bbox)
+        ih, iw = np.asarray(mask_arr).shape[:2]
+        img = np.asarray(img_arr)
+        t = _TEXTURE_STRIP_PX
+        strips = [
+            img[max(0, by - t):by, bx:bx + bw],            # above
+            img[by + bh:min(ih, by + bh + t), bx:bx + bw],  # below
+            img[by:by + bh, max(0, bx - t):bx],             # left
+            img[by:by + bh, bx + bw:min(iw, bx + bw + t)],  # right
+        ]
+        descs = []
+        for s in strips:
+            if s.shape[0] >= 8 and s.shape[1] >= 8:
+                d = _texture_descriptor(s)
+                if d is not None:
+                    descs.append(d)
+        if not descs:
+            return None
+        return np.mean(np.stack(descs), axis=0).astype(np.float32)
+    except Exception:
+        return None
+
+
 def _foreground_paste_position(
     fg_mask: np.ndarray,
     bg_size: Tuple[int, int],
@@ -588,6 +761,9 @@ def _paste_and_finalize(
     blur_threshold: float = 100.0,
     max_bg_tries: int = 20,
     defect_path_for_log: str = "",
+    source_bg_desc: Optional[np.ndarray] = None,
+    normal_pool: Optional[List[str]] = None,
+    texture_dist_threshold: float = 0.0,
 ) -> Dict[str, Any]:
     """Shared placement + blending + GT-mask tail used by every synthesis method.
 
@@ -595,6 +771,18 @@ def _paste_and_finalize(
     ControlNet) reuse the exact same machinery: fit rescale, foreground-
     constrained placement, clean-bg gate, seamless/alpha blend, full-frame GT
     mask persistence, and the bbox return contract.
+
+    Texture gate (texture_dist_threshold > 0, opt-in): candidate patches must
+    be within ``texture_dist_threshold`` of ``source_bg_desc``. Applied on
+    BOTH placement paths — foreground-constrained and random fallback —
+    because checkerplate-like normals produce a valid foreground mask and
+    would bypass a fallback-only gate (the clean-bg gate, by contrast, stays
+    fallback-only: legacy contract). Two stages: position resamples within
+    the given normal (``max_bg_tries``), then up to
+    ``_TEXTURE_MAX_NORMAL_REPICK`` re-picks from ``normal_pool``. Exhaustion
+    pastes the last candidate (never a silent drop). When a re-pick happens
+    the returned meta carries ``normal_image`` (the path actually used) and
+    every meta carries a ``gate_stats`` dict the caller may pop/aggregate.
     """
     from PIL import Image as PILImage
 
@@ -620,35 +808,131 @@ def _paste_and_finalize(
         )
         crop_w, crop_h = new_w, new_h
 
-    # Constrain placement to the object foreground when one can be estimated
-    # (object-centric datasets like visa_pcb). Falls back to fully random
-    # placement when no useful foreground is found (full-frame objects like
-    # mvtec_cable, detection failure, or cv2 unavailable) — preserving the
-    # legacy behavior exactly. Both the foreground sampling and the fallback
-    # draw from `rng`, so a fixed seed yields a deterministic result.
-    normal_rgb = np.asarray(normal_img.convert("RGB"))
-    fg_mask = _foreground_mask(normal_rgb)
-    position = None
-    if fg_mask is not None:
-        position = _foreground_paste_position(
-            fg_mask, normal_img.size, defect_crop.size, mask, rng
-        )
-    if position is None:
-        # Random-placement fallback. When reject_clean_bg is on, resample the
-        # position (same rng → deterministic) whenever the crop-sized local
-        # background patch is black/flat (void). All-fail → keep the last
-        # candidate so synthesis is still produced (never a silent drop).
-        position = _random_paste_position(normal_img.size, defect_crop.size, rng)
-        if reject_clean_bg:
+    # Texture gate is active only when everything it needs is available; the
+    # guard doubles as the rng-discipline switch — when False, NO new rng draw
+    # happens anywhere below and the stream is byte-identical to legacy.
+    texture_on = (
+        texture_dist_threshold > 0.0
+        and source_bg_desc is not None
+        and HAS_CV2
+    )
+
+    def _place_on(nrm: "Image") -> Tuple[np.ndarray, Tuple[int, int], bool]:
+        """Placement decision for ONE normal — verbatim lift of the legacy
+        foreground → random-fallback → clean-bg-resample block, with the
+        texture check added. Returns (normal_rgb, position, gate_ok);
+        gate_ok is False only when a gate loop exhausted max_bg_tries.
+
+        Gate scopes differ BY DESIGN: the clean-bg gate stays confined to the
+        random fallback (legacy contract — the foreground path is an object
+        surface, not a void). The TEXTURE gate applies to BOTH paths:
+        checkerplate-like normals yield a valid _foreground_mask (severstal
+        pilot images: 24-34% foreground), so a fallback-only texture gate
+        would silently bypass exactly the mismatch it exists to catch."""
+        nrgb = np.asarray(nrm.convert("RGB"))
+
+        def _tex_ok(pos_xy: Tuple[int, int]) -> bool:
+            px, py = pos_xy
+            patch = nrgb[py:py + crop_h, px:px + crop_w]
+            return (_texture_distance(source_bg_desc,
+                                      _texture_descriptor(patch))
+                    <= texture_dist_threshold)
+
+        # Constrain placement to the object foreground when one can be
+        # estimated (object-centric datasets like visa_pcb). Falls back to
+        # fully random placement when no useful foreground is found
+        # (full-frame objects like mvtec_cable, detection failure, or cv2
+        # unavailable) — preserving the legacy behavior exactly. Both draw
+        # from `rng`, so a fixed seed yields a deterministic result.
+        fgm = _foreground_mask(nrgb)
+        pos = None
+        if fgm is not None:
+            pos = _foreground_paste_position(
+                fgm, nrm.size, defect_crop.size, mask, rng
+            )
+        gate_ok = True
+        if pos is not None and texture_on:
+            # Foreground-path texture check: resample the foreground position
+            # while the local patch is texture-incompatible. All-fail → keep
+            # the last candidate with gate_ok=False so stage 2 can escape to
+            # another normal. texture_on=False consumes zero extra draws.
+            gate_ok = _tex_ok(pos)
             for _ in range(max(1, max_bg_tries)):
-                px, py = position
-                patch = normal_rgb[py:py + crop_h, px:px + crop_w]
-                if _is_clean_background(patch, min_quality=min_bg_quality,
-                                        blur_threshold=blur_threshold):
+                if gate_ok:
                     break
-                position = _random_paste_position(
-                    normal_img.size, defect_crop.size, rng
+                cand = _foreground_paste_position(
+                    fgm, nrm.size, defect_crop.size, mask, rng
                 )
+                if cand is None:
+                    break
+                pos = cand
+                gate_ok = _tex_ok(pos)
+        if pos is None:
+            # Random-placement fallback. When a gate is on, resample the
+            # position (same rng → deterministic) whenever the crop-sized
+            # local background patch is black/flat (void) or texture-
+            # incompatible with the source surroundings. All-fail → keep the
+            # last candidate so synthesis is still produced (never a silent
+            # drop); the caller may then re-pick another normal (stage 2).
+            pos = _random_paste_position(nrm.size, defect_crop.size, rng)
+            if reject_clean_bg or texture_on:
+                gate_ok = False
+                for _ in range(max(1, max_bg_tries)):
+                    px, py = pos
+                    patch = nrgb[py:py + crop_h, px:px + crop_w]
+                    clean = (not reject_clean_bg) or _is_clean_background(
+                        patch, min_quality=min_bg_quality,
+                        blur_threshold=blur_threshold)
+                    close = (not texture_on) or _tex_ok(pos)
+                    if clean and close:
+                        gate_ok = True
+                        break
+                    pos = _random_paste_position(
+                        nrm.size, defect_crop.size, rng
+                    )
+        return nrgb, pos, gate_ok
+
+    used_normal_path: Optional[str] = None
+    normal_rgb, position, gate_ok = _place_on(normal_img)
+
+    # Stage 2 — different-normal re-pick. checkerplate-like mismatches are
+    # position-invariant within one normal, so escaping to another normal is
+    # the rescue path that actually works. Only ever loops when the texture
+    # gate is on AND a pool was supplied; draws come from the same `rng`
+    # (controlnet passes place_rng=Random(seed0) → content-addressed).
+    n_repick = 0
+    if texture_on and not gate_ok and normal_pool:
+        from PIL import Image as _PILImage
+        for _ in range(_TEXTURE_MAX_NORMAL_REPICK):
+            n_repick += 1
+            cand_path = normal_pool[rng.randrange(len(normal_pool))]
+            try:
+                cand_img = _PILImage.open(cand_path).convert("RGBA")
+            except Exception:
+                continue
+            # The fit-rescale above ran against the FIRST normal only; skip
+            # re-picked candidates the crop no longer fits (rare — pools are
+            # size-homogeneous on the texture datasets that reach this path).
+            if crop_w > cand_img.size[0] or crop_h > cand_img.size[1]:
+                continue
+            normal_img = cand_img
+            normal_rgb, position, gate_ok = _place_on(cand_img)
+            # Record EVERY switch (not just accepted ones): on exhaustion the
+            # paste lands on the LAST candidate, and the annotation must point
+            # at the background the composite was actually made from.
+            used_normal_path = cand_path
+            if gate_ok:
+                break
+        if used_normal_path is not None:
+            # Used normal changed → refresh the GT-mask canvas size below.
+            bw_norm, bh_norm = normal_img.size
+
+    if texture_on and not gate_ok:
+        logger.warning(
+            "texture gate exhausted (%d positions x %d normal re-picks, "
+            "dist>%.3f) — pasting last candidate: %s",
+            max_bg_tries, n_repick, texture_dist_threshold, defect_path_for_log,
+        )
     # Context-aware ('seamless') blending = Reinhard local-background colour/
     # illumination transfer + cv2.seamlessClone, falling back to the alpha
     # composite on any failure or when cv2 is unavailable. The position
@@ -689,7 +973,17 @@ def _paste_and_finalize(
                 output_path, mexc,
             )
 
-    return {"bbox": bbox, "mask_path": saved_mask_path}
+    meta: Dict[str, Any] = {"bbox": bbox, "mask_path": saved_mask_path}
+    if used_normal_path is not None:
+        meta["normal_image"] = used_normal_path
+    # Per-call gate telemetry — run() pops and aggregates this (it must never
+    # leak into annotations.json).
+    meta["gate_stats"] = {
+        "active": texture_on,
+        "repick": n_repick,
+        "fallback": bool(texture_on and not gate_ok),
+    }
+    return meta
 
 
 def copy_paste_synthesis(
@@ -704,6 +998,8 @@ def copy_paste_synthesis(
     min_bg_quality: float = 0.7,
     blur_threshold: float = 100.0,
     max_bg_tries: int = 20,
+    normal_pool: Optional[List[str]] = None,
+    texture_dist_threshold: float = 0.0,
 ) -> Optional[Dict[str, Any]]:
     """
     Paste the defect region from roi_entry onto the normal image.
@@ -730,6 +1026,10 @@ def copy_paste_synthesis(
                             position to be accepted when reject_clean_bg=True.
         max_bg_tries:       Max position resamples before giving up and pasting
                             on the last candidate (synthesis is preserved).
+        normal_pool:        Optional list of alternative normal paths for the
+                            texture gate's stage-2 re-pick.
+        texture_dist_threshold: Pair-level texture gate threshold (0..1);
+                            0.0 = OFF (default, legacy rng stream preserved).
 
     Returns:
         On success, a dict ``{"bbox": [x, y, w, h], "mask_path": <str|None>}``
@@ -796,11 +1096,20 @@ def copy_paste_synthesis(
                     )
                     use_real_mask = False
 
+        source_bg_desc = None
         if use_real_mask:
             mask_full = PILImage.open(defect_mask_path).convert("L")
             box = (bx, by, bx + bw_box, by + bh_box)
             defect_crop = defect_img.crop(box).convert("RGBA")
             mask = mask_full.crop(box)
+            # Texture gate source side: descriptor of the background band
+            # around the real defect mask. Ellipse-fallback entries have no
+            # real surroundings → descriptor stays None → gate auto-passes.
+            if texture_dist_threshold > 0.0:
+                source_bg_desc = _source_bg_descriptor(
+                    np.asarray(defect_img), np.asarray(mask_full),
+                    (bx, by, bw_box, bh_box),
+                )
         else:
             # Legacy: use full defect image as crop with a simple elliptical mask
             cw, ch = defect_img.size
@@ -824,6 +1133,9 @@ def copy_paste_synthesis(
             blur_threshold=blur_threshold,
             max_bg_tries=max_bg_tries,
             defect_path_for_log=defect_path,
+            source_bg_desc=source_bg_desc,
+            normal_pool=normal_pool,
+            texture_dist_threshold=texture_dist_threshold,
         )
 
     except Exception as exc:
@@ -876,6 +1188,7 @@ def _configure_controlnet_context(
     grayscale: bool = True,
     default_bg: str = "complex_pattern",
     use_cache: bool = True,
+    ar_threshold: float = 2.5,
 ) -> Dict[str, Any]:
     """Build the ControlNet inference context ONCE (join tables + generators).
 
@@ -923,6 +1236,7 @@ def _configure_controlnet_context(
         "grayscale": bool(grayscale),
         "default_bg": default_bg,
         "use_cache": bool(use_cache),
+        "ar_threshold": float(ar_threshold),
         "fingerprint": fingerprint,
         "features": features,
         "bin_edges": bin_edges,
@@ -941,7 +1255,7 @@ def _configure_controlnet_context(
         "stats": {
             "calls": 0, "gen_ok": 0, "cache_hit": 0, "blank_retry": 0,
             "skip_blank": 0, "oom_retry": 0, "skip_oom": 0, "skip_no_mask": 0,
-            "skip_error": 0, "join_miss": 0, "bg_fallback": 0,
+            "skip_ar": 0, "skip_error": 0, "join_miss": 0, "bg_fallback": 0,
         },
     }
     logger.info(
@@ -1195,6 +1509,25 @@ def controlnet_synthesis(
             logger.warning("controlnet: defect_bbox %s out of bounds (%dx%d) — skip",
                            bbox, dw, dh)
             return None
+        # ---- 1a) Aspect-ratio gate (elongated bbox → squash-unsquash smear) --
+        # The full bbox is squashed to a resolution² square for generation and
+        # un-squashed back (see the Geometry note below). severstal pilot: every
+        # visual artifact had AR >= 3.1 (horizontal smear / flat patch), while
+        # near-square bboxes were clean — so elongated ROIs are skipped instead
+        # of visually gated by hand. Placed AFTER the bounds check (min >= 1,
+        # no div-by-zero) and BEFORE the cache probe (no sidecar is written, so
+        # a stale elongated composite can never be served from cache). '>' —
+        # an AR exactly at the threshold passes. 0 disables the gate.
+        ar_threshold = float(ctx.get("ar_threshold", 2.5))
+        aspect = max(bw_box, bh_box) / min(bw_box, bh_box)
+        if ar_threshold > 0 and aspect > ar_threshold:
+            stats["skip_ar"] += 1
+            logger.warning(
+                "controlnet: bbox AR %.2f > %.2f (%dx%d) — skip %s",
+                aspect, ar_threshold, bw_box, bh_box,
+                roi_entry.get("image_id", "?"),
+            )
+            return None
         box = (bx, by, bx + bw_box, by + bh_box)
         mask = PILImage.open(defect_mask_path).convert("L").crop(box)
 
@@ -1294,6 +1627,14 @@ def controlnet_synthesis(
         # ---- 4) Paste with the shared copy_paste machinery ------------------
         defect_crop = gen_img.resize((bw_box, bh_box), PILImage.LANCZOS).convert("RGBA")
         normal_img = PILImage.open(normal_image_path).convert("RGBA")
+        # Texture gate source side: the band around the SEED defect mask in
+        # the seed image — the surroundings the generated texture must match.
+        texture_dist_threshold = float(kwargs.get("texture_dist_threshold", 0.0))
+        source_bg_desc = None
+        if texture_dist_threshold > 0.0:
+            source_bg_desc = _source_bg_descriptor(
+                roi_image_arr, roi_mask_arr, (bx, by, bw_box, bh_box)
+            )
         place_rng = random.Random(seed0)  # placement content-addressed too
         meta = _paste_and_finalize(
             normal_img, defect_crop, mask, output_path,
@@ -1305,19 +1646,24 @@ def controlnet_synthesis(
             min_bg_quality=kwargs.get("min_bg_quality", 0.7),
             blur_threshold=kwargs.get("blur_threshold", 100.0),
             defect_path_for_log=defect_path,
+            source_bg_desc=source_bg_desc,
+            normal_pool=kwargs.get("normal_pool"),
+            texture_dist_threshold=texture_dist_threshold,
         )
         if meta:
             stats["gen_ok"] += 1
             # The background actually used — run() records it in annotations
             # even on a later cache hit (when its own rng draw may differ).
-            meta["normal_image"] = normal_image_path
+            # setdefault: a stage-2 texture re-pick already recorded the path
+            # it actually pasted on — never clobber it.
+            meta.setdefault("normal_image", normal_image_path)
             if ctx["use_cache"]:
                 try:
                     _cn_sidecar_path(output_path).write_text(
                         json.dumps({"fp": sample_fp,
                                     "bbox": meta["bbox"],
                                     "mask_path": meta.get("mask_path"),
-                                    "normal_image": normal_image_path}),
+                                    "normal_image": meta["normal_image"]}),
                         encoding="utf-8",
                     )
                 except Exception:
@@ -1340,11 +1686,11 @@ def _log_cn_stats() -> Optional[Dict[str, int]]:
     blank_rate = s["skip_blank"] / denom
     logger.info(
         "controlnet stats: gen_ok=%d cache_hit=%d blank_retry=%d skip_blank=%d "
-        "oom_retry=%d skip_oom=%d skip_no_mask=%d skip_error=%d join_miss=%d "
-        "bg_fallback=%d (blank_rate=%.3f)",
+        "oom_retry=%d skip_oom=%d skip_no_mask=%d skip_ar=%d skip_error=%d "
+        "join_miss=%d bg_fallback=%d (blank_rate=%.3f)",
         s["gen_ok"], s["cache_hit"], s["blank_retry"], s["skip_blank"],
-        s["oom_retry"], s["skip_oom"], s["skip_no_mask"], s["skip_error"],
-        s["join_miss"], s["bg_fallback"], blank_rate,
+        s["oom_retry"], s["skip_oom"], s["skip_no_mask"], s.get("skip_ar", 0),
+        s["skip_error"], s["join_miss"], s["bg_fallback"], blank_rate,
     )
     if blank_rate > 0.2:
         logger.warning(
@@ -1665,6 +2011,7 @@ def run(
     reject_clean_bg: bool = False,
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
+    texture_dist_threshold: float = 0.0,
     controlnet_path: Optional[str] = None,
     sd_base: str = "runwayml/stable-diffusion-v1-5",
     cn_steps: int = 30,
@@ -1673,6 +2020,7 @@ def run(
     cn_grayscale: bool = True,
     cn_default_bg: str = "complex_pattern",
     cn_cache: bool = True,
+    cn_ar_threshold: float = 2.5,
     morphology_csv: Optional[str] = None,
     context_features: Optional[str] = None,
     config_yaml: Optional[str] = None,
@@ -1700,6 +2048,16 @@ def run(
         min_bg_quality:   Minimum background quality (0..1). CASDA default 0.7.
         bg_blur_threshold: Laplacian-variance blur gate threshold. CASDA
                            default 100.0.
+        texture_dist_threshold: Pair-level texture gate (0..1 distance
+                          between the source defect's surroundings and the
+                          candidate paste patch). Random-fallback placement
+                          only, both copy_paste and controlnet. 0.0 = OFF
+                          (default, legacy rng stream preserved). Tuning band
+                          ~0.15-0.35; cv2 missing → gate auto-disabled.
+        cn_ar_threshold:  Skip ControlNet ROIs whose bbox aspect ratio
+                          max(w,h)/min(w,h) exceeds this (squash-unsquash
+                          smear on elongated crops; severstal pilot artifact
+                          boundary AR>=3.1). Default 2.5; 0 disables.
         controlnet_path / sd_base / cn_*: ControlNet generation settings, used
                           only with method='controlnet'. controlnet_path plus
                           morphology_csv/context_features/config_yaml are
@@ -1767,6 +2125,7 @@ def run(
             grayscale=cn_grayscale,
             default_bg=cn_default_bg,
             use_cache=cn_cache,
+            ar_threshold=cn_ar_threshold,
         )
 
     # Save original Drive paths before staging overwrites them
@@ -1798,6 +2157,7 @@ def run(
     annotations: List[Dict[str, Any]] = []
     n_ok = 0
     n_skip = 0
+    gate_agg = {"active": 0, "repick": 0, "fallback": 0}
 
     drive_img_dir = Path(output_dir) / "images"
     drive_mask_dir = Path(output_dir) / "masks"
@@ -1843,15 +2203,25 @@ def run(
                 reject_clean_bg=reject_clean_bg,
                 min_bg_quality=min_bg_quality,
                 blur_threshold=bg_blur_threshold,
+                normal_pool=normal_images,
+                texture_dist_threshold=texture_dist_threshold,
             )
             if meta:
                 n_ok += 1
+                # Pop per-call gate telemetry so it never leaks into
+                # annotations.json (cache-hit metas simply don't carry it).
+                gs = meta.pop("gate_stats", None)
+                if gs and gs.get("active"):
+                    gate_agg["active"] += 1
+                    gate_agg["repick"] += int(gs.get("repick", 0))
+                    gate_agg["fallback"] += int(bool(gs.get("fallback")))
                 # Record the durable Drive mask path only when a mask was saved.
                 ann_mask_path = final_mask_path if meta.get("mask_path") else None
-                # ControlNet cache hits return the background actually used at
-                # generation time — prefer it over this loop's rng draw so the
-                # annotation never points at a background the composite wasn't
-                # made from. copy_paste meta carries no normal_image (no-op).
+                # ControlNet cache hits and texture-gate stage-2 re-picks
+                # return the background actually used — prefer it over this
+                # loop's rng draw so the annotation never points at a
+                # background the composite wasn't made from. copy_paste meta
+                # carries normal_image only after a re-pick (else fallback).
                 ann_normal = meta.get("normal_image") or normal_path
                 annotations.append({
                     "image_path":    final_out_path,
@@ -1896,6 +2266,14 @@ def run(
         cn_stats = _log_cn_stats()
         if cn_stats is not None:
             result["cn_stats"] = cn_stats
+    if texture_dist_threshold > 0.0:
+        logger.info(
+            "texture-gate stats: active=%d repick_draws=%d fallback=%d "
+            "(threshold=%.3f)",
+            gate_agg["active"], gate_agg["repick"], gate_agg["fallback"],
+            texture_dist_threshold,
+        )
+        result["gate_stats"] = gate_agg
     return result
 
 
@@ -1942,6 +2320,14 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    type=float, default=100.0,
                    help="Laplacian-variance blur threshold for the clean-bg gate "
                         "(default 100.0, CASDA value)")
+    p.add_argument("--texture-dist-threshold", dest="texture_dist_threshold",
+                   type=float, default=0.0,
+                   help="Pair-level texture gate: max descriptor distance (0..1) "
+                        "between the source defect's surroundings and the paste "
+                        "patch; resamples position then re-picks the normal on "
+                        "mismatch (random-fallback placement only, both "
+                        "copy_paste and controlnet). 0 = OFF (default). "
+                        "Tuning band ~0.15-0.35.")
     # --- ControlNet (--method controlnet) ---------------------------------
     p.add_argument("--controlnet_path", default=None,
                    help="Trained ControlNet dir (train_controlnet.py best_model/). "
@@ -1968,6 +2354,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    action="store_false", default=True,
                    help="Disable the session-resume generation cache "
                         "(sidecar .meta.json next to each composite)")
+    p.add_argument("--cn_ar_threshold", type=float, default=2.5,
+                   help="Skip ROIs whose bbox aspect ratio max(w,h)/min(w,h) "
+                        "exceeds this — elongated crops smear under the "
+                        "square squash-unsquash generation geometry "
+                        "(default 2.5; 0 disables the gate)")
     p.add_argument("--morphology_csv", default=None,
                    help="morphology_features.csv — metrics join for hint/prompt "
                         "(REQUIRED for --method controlnet)")
@@ -1995,6 +2386,7 @@ def main(argv=None) -> None:
         reject_clean_bg=args.reject_clean_bg,
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
+        texture_dist_threshold=args.texture_dist_threshold,
         controlnet_path=args.controlnet_path,
         sd_base=args.sd_base,
         cn_steps=args.cn_steps,
@@ -2003,6 +2395,7 @@ def main(argv=None) -> None:
         cn_grayscale=args.cn_grayscale,
         cn_default_bg=args.cn_default_bg,
         cn_cache=args.cn_cache,
+        cn_ar_threshold=args.cn_ar_threshold,
         morphology_csv=args.morphology_csv,
         context_features=args.context_features,
         config_yaml=args.config_yaml,

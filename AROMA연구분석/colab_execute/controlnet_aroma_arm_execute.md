@@ -265,8 +265,14 @@ for ds in DATASETS:
         --n_per_roi 2 --seed 42 \
         --blend_mode seamless \
         --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
+        --cn_ar_threshold 2.5 \
+        --texture-dist-threshold 0.25 \
         $GRAY_FLAG
 ```
+
+> **신규 필터 2종** (severstal pilot 분석에서 도입 — dev_note `aroma_controlnet-arm_quality-filters.md`):
+> - `--cn_ar_threshold 2.5` — bbox 종횡비 max(w,h)/min(w,h) > 2.5 ROI를 생성 전 스킵. 세장형 bbox는 512² squash-unsquash 과정에서 수평 스미어/평탄 패치가 생김(pilot: 아티팩트 3장 전부 AR≥3.1, AR≤2.1 전부 양호). 스킵 수는 `controlnet stats`의 `skip_ar`로 확인. `0`이면 게이트 OFF.
+> - `--texture-dist-threshold 0.25` — 소스 결함 주변 배경과 paste 위치 배경의 텍스처 descriptor 거리(0..1)가 임계 초과 시 위치 재샘플 → normal 재추첨(상한 5장). checkerplate(무늬강판) 같은 구조 반복 패턴 배경으로의 오배치를 차단. 로그의 `texture-gate stats`(active/repick_draws/fallback)로 동작 확인. `0`이면 OFF. **튜닝 밴드 0.15–0.35**: fallback이 자주 찍히면(전 normal 거부) 임계를 올리고, checkerplate 오배치가 남으면 내린다.
 
 ```python
 # 육안 확인: 결함이 그럴듯한가 (특히 leather)
@@ -280,7 +286,7 @@ for ds in DATASETS:
     plt.show()
 ```
 
-**gate 기준**: (a) 로그의 `controlnet stats`에서 `blank_rate < 0.2`, (b) 결함 텍스처가 배경과 이질적이지 않은가, (c) **세장형 결함**(severstal 스크래치 등 aspect ratio 큰 bbox)의 텍스처가 자연스러운가 — 생성은 full-bbox를 512² 정사각으로 눌러 수행 후 원비율로 복원하므로(hint↔출력↔mask 정렬 보장) 극단적 세장형에서 텍스처 왜곡 가능. 실패 시 → 해당 데이터셋 학습 하이퍼 조정(augment/epoch) 또는 `--cn_cond_scale`(0.7→0.9) 조정 후 재-pilot. leather가 끝내 비현실적이면 **"controlnet arm 부적합"으로 정직 보고**하고 leather 제외.
+**gate 기준**: (a) 로그의 `controlnet stats`에서 `blank_rate < 0.2`, (b) 결함 텍스처가 배경과 이질적이지 않은가, (c) `skip_ar` 비율 — 세장형 결함은 이제 `--cn_ar_threshold`가 **자동 스킵**한다(수동 육안 게이트 불필요). 단 `skip_ar / (호출 수)`가 과도하면(예: >30%, severstal class3처럼 elongated 위주 클래스가 통째로 빠지는 경우) 임계 상향(2.5→3.0) 또는 해당 클래스 커버리지 손실을 기록하고 진행. 실패 시 → 해당 데이터셋 학습 하이퍼 조정(augment/epoch) 또는 `--cn_cond_scale`(0.7→0.9) 조정 후 재-pilot. leather가 끝내 비현실적이면 **"controlnet arm 부적합"으로 정직 보고**하고 leather 제외.
 
 > pilot 재실행은 안전: 캐시가 모델 가중치 서명(size+mtime)·steps·cond_scale을 fingerprint로 검증하므로, 재학습·파라미터 변경 후 재실행하면 구산출물은 자동 무효화되고 새로 생성된다.
 
@@ -324,10 +330,13 @@ for ds in DATASETS:
         --n_per_roi $NPR --seed 42 \
         --blend_mode seamless \
         --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
+        --cn_ar_threshold 2.5 \
+        --texture-dist-threshold 0.25 \
         $GRAY_FLAG
 ```
 
-> blend/gate 설정(seamless + clean-bg gate)은 20260705 copy-paste aroma arm과 동일 — 생성 방식 외 전 변수 고정.
+> blend/gate 설정(seamless + clean-bg gate)은 20260705 copy-paste aroma arm과 동일 — 생성 방식 외 전 변수 고정. AR/텍스처 필터 임계는 STEP 5 pilot에서 확정한 값을 그대로 사용.
+> ⚠️ **캐시와 텍스처 필터**: fingerprint는 텍스처 임계를 포함하지 않으므로, **기존 캐시 위에서 `--texture-dist-threshold`만 바꿔 재실행하면 캐시 히트 샘플은 이전 normal 배정이 유지**된다. 필터 설정을 바꿨으면 새 `--output_dir`를 쓰거나 `--cn_no_cache`로 1회 재생성할 것. (AR 게이트는 생성 전 스킵이라 캐시와 무충돌.)
 > 소요: A100 기준 이미지당 약 2–4초(30 steps) → severstal 수천 장 = 수 시간. 캐시 재개 가능.
 
 ---
@@ -401,7 +410,7 @@ for s in (42, 1, 2):
     --imgsz 640 \
     --val_frac 0.3 \
     --synth_ratio 1.0 \
-    --baseline_epochs 300 \
+    --baseline_epochs 100 \
     --patience 50 \
     --batch 64 \
     --cache ram \
@@ -412,6 +421,7 @@ for s in (42, 1, 2):
 
 > `--resume` + 이식된 per-seed JSON → baseline/random은 skip, **aroma(ControlNet)만 학습** (3 ds × 3 seed = 9 run).
 > ⚠️ 위 파라미터(imgsz/val_frac/synth_ratio/epochs/batch/rect)를 하나라도 바꾸면 이식된 baseline/random과 비교 불가.
+> ⚠️ **epochs=100** — 가이드 구버전 표기는 300이었으나 20260705 실측 results.csv(severstal seed42, 3조건 모두)가 **정확히 100 epochs**로 확인됨(2026-07-07 조사). 이식 정합을 위해 100 고정. (aitex 8-C는 이식이 없어 tiled 재실행 규약 300/50을 따름 — 별개.)
 
 ### 8-C. aitex 실행 — 이식 없음, `--condition all` fresh (seeds 1 2 42, imgsz 256, rect 미사용)
 
