@@ -580,6 +580,27 @@ def _texture_descriptor(
         def _pick(a: np.ndarray) -> np.ndarray:
             return a[sel] if sel is not None else a.ravel()
 
+        # Remove a fitted linear illumination plane FIRST so shading does not
+        # masquerade as texture: a smooth ramp inflates std, dominates the
+        # autocorrelation (measured: a texture-free 40-gray-level ramp scored
+        # c_per=0.97 without detrending — indistinguishable from real
+        # periodicity), and biases the orientation histogram with a constant
+        # gradient vector. The Laplacian term is inherently plane-invariant.
+        # This also matters because the gate inspects the RAW pre-blend patch
+        # while Reinhard/seamlessClone would remove such lighting downstream.
+        yy_c, xx_c = np.mgrid[0:h, 0:w]
+        A = np.stack([xx_c.ravel(), yy_c.ravel(),
+                      np.ones(h * w, dtype=np.float32)], axis=1).astype(np.float32)
+        coef, *_ = np.linalg.lstsq(A, g.ravel(), rcond=None)
+        g = g - (A @ coef).reshape(h, w)
+
+        # Near-flat after detrending ⇒ nothing but quantization staircase
+        # left — its autocorrelation is perfectly periodic (measured c_per=1.0
+        # on a texture-free ramp) and would poison the comparison. Under one
+        # gray level of residual std there is no texture to compare: None.
+        if float(g.std()) < 1.0:
+            return None
+
         # 1) contrast: std normalized by 128 (same scale as
         #    _background_quality_score's contrast term)
         c_std = min(float(_pick(g).std()) / 128.0, 1.0)
@@ -590,9 +611,13 @@ def _texture_descriptor(
         c_lap = float(np.tanh(_pick(lap).var() / 500.0))
 
         # 3) periodicity: variance-normalized 2-D autocorrelation, height of
-        #    the strongest non-central peak. Scale/illumination-invariant, so
-        #    the resulting distance threshold ports across datasets — the
-        #    reason this was chosen over a raw FFT power profile.
+        #    the strongest non-central peak. Amplitude-invariant (chosen over
+        #    a raw FFT power profile for that reason), but NOT size-invariant:
+        #    a structureless patch of N pixels has a noise floor of roughly
+        #    sqrt(2*ln N)/sqrt(N) (~0.02 at 256², ~0.15 for a 24px strip), so
+        #    comparing very small windows inflates this term. Genuine periodic
+        #    surfaces peak at 0.5-0.8 and stay well above the floor; treat
+        #    sub-thousand-pixel comparisons as low-confidence when tuning.
         gz = g - float(g.mean())
         F = np.fft.rfft2(gz)
         ac = np.fft.irfft2(F * np.conj(F), s=g.shape)

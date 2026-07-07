@@ -127,6 +127,19 @@ ControlNet arm 파일럿에서 확인된 품질 결함 2종에 대한 생성 필
 
 **검증**: OFF(`--cn_no_ar_fallback`) → 기존 skip 동작·byte 동일. ON(기본) → AR>임계 ROI가 copy_paste로 채워져 출력 개수 = n_rois×n_per_roi − (blank/oom/no_mask skip), annotations의 `method`에 `copy_paste_arfallback` 혼재 확인.
 
+## 리뷰 결과 — workflow 3관점 + 적대적 검증 (2026-07-07, opus 15 에이전트)
+
+발견 11건 → 적대적 반증 후 **확정 2건** (9건 기각: 설계 의도 오독·방법론 코멘터리·이미 안전한 엣지).
+
+1. **[수정 완료] 조명 구배 오인 (MEDIUM)**: c_std·c_per가 평탄+음영 램프에 반응 (텍스처 無 40-level 램프가 c_per=0.97), 게이트가 blend(Reinhard 조명 전이) 이전 raw patch를 검사하므로 blend가 지울 조명 차이로 false-reject/match. → **descriptor 계산 전 선형 조명 평면 detrend + near-flat(잔차 std<1) 가드** 추가. 검증: d(noise, noise+ramp)=0.0, d(checker, checker+ramp)=0.002, 판별력 유지 d(checker,noise)=0.45, 순수 램프→None(통과), OFF byte-identical·ON 결정론 유지.
+2. **[문서화] c_per 크기 의존 노이즈 바닥 (LOW)**: source strip(24px 두께)과 candidate patch(crop 크기)를 다른 크기 창으로 비교 — 무텍스처 patch의 c_per 바닥 ≈ sqrt(2·lnN)/sqrt(N) (256²≈0.02, 24px strip≈0.15). 통상 가중 편향 ~0.013, 극소 crop에서 ~0.045. 실제 주기 표면은 0.5~0.8로 바닥 위에서 지배적. → 코드 주석에 한계 명시, 소형(수백 px 이하) 비교는 저신뢰로 취급하고 Colab 튜닝 시 참고.
+
+## H1-E2 후속: bbox 면적 상한 게이트 설계 (workflow Design 산출 — 미구현)
+
+- **기준**: `bbox_frac = bbox_area / (dw·dh)` (상대비 — 절대 px는 데이터셋 이식 불가). 튜닝 후보 **0.4**(severstal p75≈41%, H1 §4.2 "40%+" 표적 정합). **기본 OFF**.
+- **삽입**: AR gate 직후(bounds check 뒤·cache probe 앞), 동일 패턴 — `--cn_max_bbox_frac`(0=off), `--cn_no_max_bbox_fallback`, stats `skip_max_bbox`/`max_bbox_fallback`, 폴백 태그 `method="copy_paste_maxbboxfallback"`. 폴백 호출은 AR gate와 공용 헬퍼로 추출 권장(인자 drift 방지).
+- **핵심 판단 (설계 정직성)**: 이 게이트는 **novelty 레버가 아니라 GPU/품질 레버** — near-square 대형은 squash 왜곡이 미미해 AR 대비 생성-아티팩트 근거 약함. 폴백은 대형 저novelty 샘플을 생성→복붙으로 옮길 뿐 H1 §4.2를 해결 못 함. novelty 이득은 §4.3(소형·희소 클래스 per-class 예산 집중, 별도 구현)과 결합해야 발생하며 면적 게이트는 그 전제 조건. 실효 추가 발동률은 AR 중첩 때문에 [0, 25%) — dry-run 실측 후 임계 확정.
+
 ## TODO / 미확정
 
 - **텍스처 거리 임계 기본 권장값**: Colab 시나리오 3에서 튜닝 후 가이드에 기록 (코드 default는 0=OFF 유지).
