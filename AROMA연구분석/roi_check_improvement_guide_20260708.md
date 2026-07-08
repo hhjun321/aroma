@@ -11,20 +11,37 @@
 
 ### 비판에서 나온 두 개의 하드 제약 (이 가이드 전체를 지배함)
 
+**제약 0 (최우선) — 20260704_1은 "ROI 선택 단일효과"가 아니라 "프레임워크 전체 vs 단순 증강" 비교다.**
+저자 확인 + newpipe 실측(`D:/project/aroma/AROMA연구분석/newpipe_asis_tobe_reanalysis_20260708.md`): AROMA arm은 **총동원**(realism 선택 + ControlNet 합성 + seamless 블렌드), random arm은 **단순 copy_paste(+alpha)**. 따라서 이 run은 두 질문 중 **Q1**에 답한다.
+- **Q1 (프레임워크 우월성):** "full-stack AROMA vs naive 증강". 이 run의 의도. 세 요소 동시 차이는 정당.
+- **Q2 (ROI 선택 단일효과):** 논문 Table 13이 표방하는 single-factor swap. **이 run을 Q2 증거로 쓰면 안 됨.**
+roi_check의 scoring/집중 아이디어(ITEM 1–3)는 Q2 성격이므로, 20260704_1 결과로 직접 정당화·반증되지 않는다.
+
 **제약 1 — MTD는 잘못된 검증 대상이다 (ceiling effect).**
-MTD baseline map50 ≈ 0.92 (`D:/project/aroma/AROMA연구분석/exp4v2_copypaste_consolidated_20260707.md:40`). 소스 가용성 제약을 제거한 ControlNet arm(`D:/project/aroma/.claude/.etc/20260704_1/exp4v2_results_{1,2,42}.json`, yolov8n, 3 seeds)조차 A−R = −0.006 (t=−1.56, 0/3), 클래스 synth 개수를 리밸런싱(crack 22→59, fray 31→44)했음에도 per-class map50는 오히려 하락(crack −0.009, fray −0.028). **더 강한 생성 엔진이 아무것도 못 움직였으므로, 그보다 약한 개입인 점수 재가중(ITEMS 1–3)은 near-ceiling MTD에서 2차적(second-order)이다.** 실제 headroom이 있는 데이터셋에서 검증해야 한다.
+MTD baseline map50 ≈ 0.92 (`exp4v2_copypaste_consolidated_20260707.md:40`). 위 full-stack AROMA arm(`.claude/.etc/20260704_1/exp4v2_results_{1,2,42}.json`, yolov8n, 3 seeds)조차 naive random에 A−R = −0.006 (t=−1.56, 0/3, 근소 열세), 클래스 synth 개수를 리밸런싱(crack 22→59, fray 31→44)했음에도 per-class map50는 오히려 하락(crack −0.009, fray −0.028). ⚠️ 단 이 CN arm의 **47%(188/400)는 실제로 copy_paste AR-폴백**(§측정불가 참조)이라 "순수 생성"이 아니다. **프레임워크를 총동원해도 near-ceiling MTD에선 naive와 우열이 안 드러난다** → 점수 재가중(ITEM 1–3)은 여기서 2차적. 실제 headroom 있는 데이터셋에서 검증해야 한다.
 
 **제약 2 — 집중/중복은 metric-rigging에 취약하다.**
 소수 고득점 좌표로 배치를 몰아 metric을 부풀리는 것은 메커니즘 없는 지표 조작(INTEGRITY 규칙의 SUSPECT 패턴)이다. **동일 필터를 Random arm에도 대칭 적용한 대조군(random-concentrate) 없이는 어떤 AROMA 우위도 보고 금지.** vanilla `random`(distinct row, without replacement)은 concentrate arm의 대칭 대조가 아니다.
 
-### 코드에서 확인된, MEMORY와 상충하는 사실 (ITEM 0의 가치를 높임)
-읽을 수 있는 유일한 후보-인접 아티팩트 `D:/project/aroma/.claude/.etc/exp4v2/casda_aroma/roi_selected.json`(1690 recs) 실측:
-- `morph_prior` = **4** distinct (MEMORY의 5 아님)
-- `ctx_prior` = **108** distinct (MEMORY의 33 아님)
-- `deficit` = **142 distinct, min 0.0 / max 0.071 — dead 아님** (범위는 ctx의 ~1/2.4로 좁으나 변별함)
-- `roi_score` = 232 distinct / 1690, 최빈 bin = 85/1690 (5%, monoculture 아님)
+### ★ newpipe 실측 — MTD as-is/to-be 선택 (ITEM 0-a가 MTD에 대해 이미 완료됨)
+`D:/project/aroma/.claude/.etc/newpipe/roi_selected_{asis,tobe}.json`(각 200 recs, MTD) 실측:
 
-⚠️ 즉 ITEM 0이 "확인해줄" 예정이던 사전 가정(morph=5, ctx=33, deficit dead)은 **이미 읽을 수 있는 파일에서 반증됨.** 이 때문에 ITEM 0(측정)을 가장 먼저 실행하는 것이 더욱 정당하다. 단, `roi_selected.json`은 **선택 후(post-selection)** 분포이며 후보 풀(`roi_candidates.json`은 디스크에 존재하지 않음)의 cand→sel shift·정확한 tie 구조는 새 dump 없이는 재현 불가.
+| term | ASIS (=legacy) | TOBE (=realism) |
+|------|----------------|-----------------|
+| roi_score | distinct 50, mean 0.107, [0.048,0.169] | distinct 36, mean 0.229, [0.135,0.311] |
+| morph_prior | 5 distinct, mean 0.237 | 5 distinct, mean 0.230 |
+| ctx_prior | 24 distinct, mean 0.026 | 24 distinct, mean 0.027 |
+| deficit | 34 distinct, max 0.051, **deficit>0 73%** | 동일 |
+| quality_score | 3 distinct, mean 0.678 | 3 distinct, mean 0.733 |
+| 소스 다양성 | 200 distinct, **max reuse 1** | 200 distinct, **max reuse 1** |
+
+**핵심 결론 (roi_check 전제 대비):**
+1. **as-is=legacy(`0.4·morph+0.4·ctx+0.2·deficit`), to-be=realism(`0.5·ctx+0.3·morph+0.2·quality`)** — roi_score 검산으로 확정. 즉 "sharpen the score"의 한 형태(realism)는 **이미 to-be로 적용**됐고, **20260704_1 aroma는 이 to-be였다.**
+2. **realism 전환의 실질 = 33/200(16.5%) 교체, 순수 quality 스왑**(버린 33개 quality 0.50 → 추가 33개 0.84, morph/ctx/deficit 불변). 작은 섭동이라 downstream 무변화가 당연.
+3. **scoring은 flat-collapse 아님**: roi_score 36–50 distinct, deficit 73% nonzero. **monoculture 아님**(선택 max reuse 1). → roi_check 시나리오 A(scorer-blind flat)는 **MTD에서 데이터로 약화됨**. 남는 후보는 시나리오 B(ceiling/geometry).
+4. ⚠️ 이전 가이드가 인용했던 severstal `casda_aroma/roi_selected.json`(morph 4, deficit max 0.071) 수치는 **다른 데이터셋**이므로 MTD 판단에 쓰지 말 것 — 위 표가 MTD 정본.
+
+> 즉 ITEM 0-a(선택 후 분포 진단)는 MTD에 대해 newpipe로 **사실상 이미 수행**됐다. 남은 진단은 ITEM 0-b(pre-selection 후보 풀 dump: cand→sel shift·tie 구조)뿐이며, 이는 다른 headroom 데이터셋(AITeX) 대상으로 수행하는 것이 유효.
 
 ---
 
@@ -38,7 +55,7 @@ MTD baseline map50 ≈ 0.92 (`D:/project/aroma/AROMA연구분석/exp4v2_copypast
 - 신규 함수 `profile_score_distribution(candidates_or_selected, out_path)` — `roi_selection.py`의 `_diversity_stats`(~line 1495) 인근에 배치.
 - 출력(JSON, per-dataset · per-class): 각 term(`morph_prior`/`ctx_prior`/`deficit`/`quality_score`/`roi_score`)의 **distinct-value 수, Shannon 엔트로피, Gini, 최빈 bin 비율(tie-mass)**, 그리고 (후보 풀이 있을 때) cand→sel 중앙값 shift.
 - **두 갈래로 분리(측정 비용이 다름):**
-  - **ITEM 0-a (즉시, 비용 0):** `roi_selected.json`만 읽는 오프라인 스크립트. `np.random` import 금지. GPU 불필요, <5초. 위 실측치(morph=4, ctx=108, deficit 142/nonzero, roi_score=232, 최빈 85/1690) 재현이 수용 기준.
+  - **ITEM 0-a (즉시, 비용 0):** `roi_selected.json`만 읽는 오프라인 스크립트. `np.random` import 금지. GPU 불필요, <5초. **MTD는 newpipe(`roi_selected_{asis,tobe}.json`)로 이미 수행됨** — 위 §newpipe 실측 표(asis roi_score 50-distinct/mean0.107, tobe 36/0.229, deficit>0 73%, max reuse 1) 재현이 수용 기준. 다른 데이터셋(특히 AITeX)에 동일 스크립트 적용이 남은 작업.
   - **ITEM 0-b (CPU 1-pass, 학습 아님):** `select_rois()`(line 1364)의 `build_candidates()` 직후·strategy dispatch 직전에 `score_report_path: str|None = None`(기본 no-op) 게이트로 호출. 별도로 `--dump_candidates` 경로를 추가해 **pre-selection** 후보 풀 JSON을 덤프해야 cand→sel shift·정확한 tie(image-blind 여부, `roi_selection.py:484–490`) 확인 가능.
 
 **기존 코드 충돌:** 없음 (순수 observer). ⚠️ 단 매핑이 "no new runs"로 과장했던 부분 정정 — ITEM 0-b는 CPU 1-pass 덤프가 필요(학습 실행은 아님).
@@ -154,18 +171,19 @@ MTD baseline map50 ≈ 0.92 (`D:/project/aroma/AROMA연구분석/exp4v2_copypast
 
 | # | Dataset | Arms | Seeds | 목적 | Kill/advance |
 |---|---|---|---|---|---|
-| **T0** | MTD + AITeX | ITEM 0 프로파일러 (진단만) | n/a | term별 distinct/entropy/tie-mass per class; ControlNet run의 blank_rate/ar_fallback 복구 | ctx만 live·morph/deficit dead면 → ITEM 1 moot |
-| **T1** | **tiled AITeX** | AROMA-cp vs Random-cp | **≥3** | 유일 positive 복제 (n=1→n≥3) | A−R CI가 0 포함 → 신호는 잡음, **중단** |
+| **T0** | **AITeX** (MTD는 newpipe로 완료) | ITEM 0 프로파일러 (진단만) | n/a | AITeX term별 distinct/entropy/tie-mass per class. (MTD: newpipe 실측 완료 — deficit not-dead(73%), morph 5-distinct, monoculture 아님, ar_fallback 47% 확정) | AITeX에서 ctx만 live면 → ITEM 1 moot |
+| **T1-Q1** | **tiled AITeX** | **full-stack AROMA vs naive random** (20260704_1 설계와 동일) | **≥3** | **프레임워크 우월성(Q1) 핵심 검정** — headroom에서 총동원이 naive를 이기는가 | A−R CI가 0 포함 → 프레임워크 우월성 미입증 |
+| **T1-Q2** | **tiled AITeX** | AROMA-cp vs Random-cp (동일 엔진·blend, 선택만 차이) | **≥3** | ROI 선택 단일효과(Q2, Table 13) 복제 (n=1→n≥3) | A−R CI가 0 포함 → 선택 효과는 잡음, **중단** |
 | **T2** | leather | AROMA-cp vs Random-cp | ≥3 | 두 번째 headroom 데이터셋의 AROMA 효과 유무 | AITeX 넘어선 일반성 확인/부정 |
-| **T3** | tiled AITeX (T1 positive일 때만) | AROMA-sharpened vs AROMA-baseline vs Random | ≥3 | live term(T0 기준) sharpening이 vanilla AROMA 대비 추가되는가 | roi_check thesis의 실제 검정 |
-| **T4** | tiled AITeX (T1 positive일 때만) | AROMA-concentrate vs **Random-concentrate** | ≥3 | ITEM 2, 대칭 대조 필수 | vanilla-random 대비 우위는 inadmissible |
+| **T3** | tiled AITeX (T1-Q2 positive일 때만) | AROMA-sharpened vs AROMA-baseline vs Random | ≥3 | live term(T0 기준) sharpening이 vanilla AROMA 대비 추가되는가 | roi_check thesis의 실제 검정 |
+| **T4** | tiled AITeX (T1-Q2 positive일 때만) | AROMA-concentrate vs **Random-concentrate** | ≥3 | ITEM 2, 대칭 대조 필수 | vanilla-random 대비 우위는 inadmissible |
 | **T5** | MTD | 2×2 placement×selection (ITEM 4) | ≥3 | Scenario A(scorer) vs B(ceiling/geometry) 판정 | B 확인 예상; 그러면 MTD scorer 작업 공식 종료 |
 
 **메트릭:** 모든 arm에서 **per-seed paired map50**, seed 간 paired t 및 CI. point delta 단독 보고 금지.
 
 ### 현재 측정 불가 (명시 TBD)
 1. per-class 배치 기하(roi_check §2 핵심) — commit된 아티팩트에 없음; 2×2 harness 미실행.
-2. MTD ControlNet arm의 blank_rate / ar_fallback — `exp4v2_results_{1,2,42}.json`에 없음(`_log_cn_stats`가 stderr로만 출력, `generate_defects.py:1825`). **TBD.**
+2. MTD ControlNet arm의 ar_fallback — **확정: 47%(controlnet 212 / copy_paste_arfallback 188 of 400)**, `newpipe/annotations_synth_aroma.json` 실측. 세장형(crack/break/fray) 결함이 AR 게이트로 copy_paste 폴백 → "ControlNet 총동원"이라 해도 절반은 copy_paste. (blank_rate는 여전히 stderr-only, TBD.)
 3. AITeX positive의 대칭 대조 확인 — `aitex_positive_reverification_20260708.md:44`가 요구하는 Random arm 동일 필터 미실행. 현재 A−R은 selection-strategy-vs-candidate-pool confounded.
 4. leather/severstal placement coverage — profiling 미commit(`placement_aware_score_redesign_20260708.md:132`).
 
