@@ -79,7 +79,7 @@ where TextureEntropy quantifies local texture disorder, ClusterDiversity measure
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.85\textwidth]{figure/fig_complexity_landscape.png}
-\caption{Complexity landscape of the evaluated datasets in the Morphology Complexity Index (MCI) versus Context Complexity Index (CCI) plane. Values are computed in Phase~0 from the real per-dataset \texttt{complexity\_report.json} statistics (24 reports). The four benchmark datasets occupy clearly separated positions, demonstrating that the evaluation spans a wide morphological and contextual difficulty range rather than a single visual regime. By grounding the complexity indices in measured statistics and showing their spread, this figure addresses the reviewer request to justify and make transparent the data-driven inputs that replace CASDA's handcrafted compatibility matrix.}
+\caption{Complexity landscape of the evaluated datasets in the Morphology Complexity Index (MCI) versus Context Complexity Index (CCI) plane. Values are computed in Phase~0 from the committed per-dataset \texttt{complexity\_report.json} statistics for the four canonical datasets (MCI 0.40--0.65, CCI 0.24--0.43; Table~1). The four benchmark datasets occupy clearly separated positions, demonstrating that the evaluation spans a wide morphological and contextual difficulty range rather than a single visual regime. By grounding the complexity indices in measured statistics and showing their spread, this figure addresses the reviewer request to justify and make transparent the data-driven inputs that replace CASDA's handcrafted compatibility matrix.}
 \label{fig:complexity_landscape}
 \end{figure}
 
@@ -136,8 +136,8 @@ Downstream utility was assessed with supervised defect detection: a YOLOv8 detec
 ###3.3.3 ROI Coverage Evaluation
 The capacity of the ROI selection policy to span the space of defect placements was assessed through a coverage analysis comparing the AROMA policy against random selection. Five metrics were reported: morphology_coverage and context_coverage, which measure the proportion of distinct morphology and context categories represented; rare_pair_coverage, which quantifies representation of infrequent (morphology, context) combinations; entropy, which measures the uniformity of the selection distribution; and the Gini coefficient, which measures its inequality. Higher coverage and entropy and lower Gini values indicate a more balanced and comprehensive exploration of the placement space.
 
-###3.3.4 Augmentation Statistics
-For each dataset and each augmentation condition, 600 synthetic images were generated to ensure a consistent augmentation budget across experimental settings. The quality-gate pass rate—the fraction of generated candidates retained after the Stage 5 filtering described in Section 3.2.8—was recorded for each dataset to characterize the fidelity of the synthesis process under differing complexity regimes.
+###3.3.4 Augmentation Budget
+For each dataset, both augmented conditions (Random and AROMA) add synthetic defect images to the real training partition at an identical synth:real budget, so that the two conditions differ only in the ROI-selection strategy and not in the amount of synthetic data. The quality-gate pass rate—the fraction of generated candidates retained after the Stage 5 filtering described in Section 3.2.8—was recorded per dataset to characterize synthesis fidelity under differing complexity regimes. `[The exact per-dataset synth:real ratio and quality-gate pass rates are to be reported from the committed run configuration; no fixed count is asserted here.]`
 
 #4. Experimental Results and Analysis
 This section reports the empirical evaluation of AROMA across the industrial datasets of §3.1 (Severstal, MVTec Leather, AITeX, MTD) along three complementary axes. Experiment 0 (Section 4.1) evaluates the quality of the ROI selection policy through coverage and distributional statistics, isolating the contribution of the data-driven placement mechanism. Experiment 1 (Section 4.2) assesses the perceptual quality of the synthesized images. Experiment 2 (Section 4.4) measures the downstream impact of the augmented data on supervised detection performance (mAP@0.5), which constitutes the primary empirical evidence and is reported honestly and conditionally. Throughout, AROMA is compared against a random ROI placement baseline (Random) and a real-only baseline (Baseline) to disentangle the effect of context-aware placement from that of synthetic data volume alone.
@@ -278,17 +278,21 @@ On Severstal, the four conditions share a single trained ControlNet + Poisson ge
 %      sample of {real, random, AROMA} defect crops plus the matching
 %      {normal} background per dataset into
 %      .../qualitative_samples/<dataset>/.
-%   2. Target a complexity spectrum to make Figure A informative:
-%      mvtec_cable (MCI 0.66), isp_LSM_1 (MCI 0.44), visa_cashew (MCI 0.38).
+%   2. Target a complexity spectrum across the canonical roster to make
+%      Figure A informative: MVTec Leather (MCI 0.645, high morphology),
+%      Severstal (MCI 0.455), AITeX (MCI 0.398, high context CCI 0.434),
+%      MTD (MCI 0.561). Values from Table 1.
 %   3. Per project rule (no new .ipynb), write the matplotlib grid builder
 %      as a .md Colab execution guide under colab_execute/.
 %
-% CAUTION (data integrity): exp4v2_results.json shows mvtec_cable AROMA
-%   with n_train = 0 and all YOLOv8 metrics at 0.0 (see Table 12 / §4.4).
-%   AROMA output for cable may be EMPTY/DEGENERATE. Verify AROMA crops
-%   actually exist on Drive before using mvtec_cable in the side-by-side
-%   grid (Figure A); if the AROMA set is empty, reuse mvtec_cable instead
-%   as a Figure D failure case rather than presenting an empty panel.
+% CAUTION (data integrity): before building the side-by-side grid,
+%   verify that non-empty AROMA and Random synthetic crops actually exist
+%   on Drive for each canonical dataset (Severstal, MVTec Leather, AITeX,
+%   MTD). Note Severstal copy-paste was doubly null (synthesis inert at the
+%   reported budget; Table 12), so a Severstal panel may be uninformative —
+%   prefer AITeX (the only positive) for the context-matched-placement
+%   contrast, and use any empty/degenerate output as a Figure D failure
+%   case rather than presenting an empty panel.
 %
 % Once qualitative_samples/ are exported and the grid figures are rendered:
 %   - Insert a new subsection "##4.5. Qualitative Results" here (before §5).
