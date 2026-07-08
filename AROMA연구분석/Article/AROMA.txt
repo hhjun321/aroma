@@ -46,10 +46,10 @@ AROMA was evaluated on publicly available industrial anomaly detection datasets 
 | Dataset | Surface / domain | MCI | CCI | Morphology policy | Context policy | Morph. clusters | Defect instances |
 |---------|------------------|------|------|-------------------|----------------|-----------------|------------------|
 | Severstal     | Steel (full-frame, multi-class)        | 0.455 | 0.306 | otsu | percentile | 5 | 3620 |
-| MVTec Leather | Leather (organic texture)              | 0.645 | 0.236 | otsu | gmm        | 3 | 19   |
+| MVTec Leather | Leather (organic texture)              | 0.645 | 0.236 | otsu | gmm        | 3 | 92   |
 | AITeX         | Textile (directional/periodic, tiled)  | 0.398 | 0.434 | otsu | gmm        | 5 | 311  |
 | MTD           | Magnetic tile (machined ceramic)       | 0.561 | 0.246 | otsu | percentile | 5 | 388  |
-<!-- committed: .claude/.etc/complexity/{severstal,mvtec_leather,aitex,mtd}/complexity_report.json (mci,cci,morphology_policy,context_policy) + .claude/.etc/profiling/{ds}/morphology_clusters.json (n_clusters, len(cluster_assignments)). Per-split image counts are NOT in these artifacts. -->
+<!-- committed: .claude/.etc/complexity/{ds}/complexity_report.json (mci,cci,morphology_policy,context_policy) + .claude/.etc/profiling/{ds}/morphology_clusters.json (n_clusters) + .claude/.etc/profiling/{ds}/analysis_report.md ("Defect instances" header = sum of per-cluster N samples: severstal 3620, leather 92, aitex 311, mtd 388). Per-split image counts are NOT in these artifacts. -->
 
 The complexity indices span a broad range (MCI 0.40–0.65, CCI 0.24–0.43), confirming that the roster exercises the policy-selection mechanism across distinct complexity regimes: AITeX has the highest contextual complexity (directional/periodic texture), MVTec Leather the highest morphological complexity, and the number of morphology clusters and profiled defect instances differ by an order of magnitude across datasets. The morphology axis consistently selects the Otsu policy, whereas the context axis selects GMM or percentile partitioning depending on the dataset—an illustration of the per-dataset, data-driven policy selection that the framework performs without manual tuning.
 
@@ -334,3 +334,27 @@ We presented AROMA, a framework that automatically selects ROI modeling and plac
 19. Zhang, R.; Isola, P.; Efros, A. A.; Shechtman, E.; Wang, O. The Unreasonable Effectiveness of Deep Features as a Perceptual Metric (LPIPS). Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). 2018, pp. 586–595. DOI: 10.1109/CVPR.2018.00068.
 20. Han, H. J.; Moon, I. Y. Research on Object Detection Model-Based Equipment Defect Detection Method. Journal of Advanced Navigation Technology. 2025, 29(6), 859–866. DOI: 10.12673/JANT.2025.29.6.859.
 21. Han, H. J.; Moon, I. Y. CASDA: Context-Aware Steel Defect Augmentation via ControlNet-Based Conditional Synthesis. Applied Sciences (MDPI). 2025, under review.
+
+#Appendix A. Dataset Volume and Per-Split Statistics
+
+Table A1 reports the data-volume statistics that the profiling stage records for each dataset, together with the conventional per-split image counts. The defect-instance and context-patch columns are taken from the committed profiling reports; the per-split image counts (train-normal / test-good / test-defect) are a property of the raw on-disk dataset layout and are **not** recorded in the profiling artifacts, so they are marked TBD and must be filled from the source dataset directories rather than fabricated.
+
+**Table A1.** Dataset volume statistics. Defect instances and context patches are from the committed `analysis_report.md` per dataset; per-split image counts are TBD (source: raw dataset directories, not in profiling artifacts).
+
+| Dataset | Defect instances | Context patches | Train (normal) | Test (good) | Test (defect) |
+|---------|------------------|-----------------|----------------|-------------|---------------|
+| Severstal     | 3620 | 936769 | TBD | TBD | TBD |
+| MVTec Leather | 92   | 86106  | TBD | TBD | TBD |
+| AITeX         | 311  | 114174 | TBD | TBD | TBD |
+| MTD           | 388  | 27512  | TBD | TBD | TBD |
+<!-- committed: .claude/.etc/profiling/{severstal,mvtec_leather,aitex,mtd}/analysis_report.md ("Defect instances" / "Context patches" header). Per-split image counts NOT in profiling — fill from raw dataset dirs only; do not fabricate. -->
+
+#Appendix B. Profiling Figures
+
+For each dataset, the profiling stage emits three diagnostic figures under `profiling/<dataset>/figures/`: a morphology-feature histogram grid (`morphology_histograms.png`), a defect–background compatibility heatmap (`compatibility_heatmap.png`), and a per-cell deficit bar chart (`deficit_bars.png`). These visualize, respectively, the morphology distributions from which the Morphology Complexity Index and clustering policy are derived, the context compatibility structure underlying context partitioning, and the (morphology, context) deficit profile discussed in §3.2.6. They are available for all four canonical datasets (Severstal, MVTec Leather, AITeX, MTD) and may be included as supplementary figures.
+
+**Figure B1.** Morphology-feature histograms per dataset (`figures/morphology_histograms.png`). \label{fig:appendix_morph_hist}
+
+**Figure B2.** Defect–background compatibility heatmaps per dataset (`figures/compatibility_heatmap.png`). \label{fig:appendix_compat}
+
+**Figure B3.** Per-cell deficit bar charts per dataset (`figures/deficit_bars.png`); note (§3.2.6) that high-deficit cells are precisely those lacking source crops under copy-paste. \label{fig:appendix_deficit}
