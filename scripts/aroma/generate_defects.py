@@ -719,6 +719,32 @@ def _source_bg_descriptor(
         return None
 
 
+_CTX_CELL_HELPERS: Optional[tuple] = None
+
+
+def _load_context_cell_helpers() -> tuple:
+    """Lazy-load (extract_context_features, context_cell_key) from the sibling
+    distribution_profiling module, reused by the placement compat gate so the
+    paste-patch cell_key is derived IDENTICALLY to how the compatibility matrix
+    was built. Cached; returns (None, None) if the import fails (gate auto-off)."""
+    global _CTX_CELL_HELPERS
+    if _CTX_CELL_HELPERS is not None:
+        return _CTX_CELL_HELPERS
+    try:
+        here = str(Path(__file__).resolve().parent)
+        parent = str(Path(__file__).resolve().parent.parent)
+        for pth in (here, parent):
+            if pth not in sys.path:
+                sys.path.insert(0, pth)
+        import distribution_profiling as _dp  # noqa: PLC0415 — sibling, lazy
+        _CTX_CELL_HELPERS = (_dp._extract_context_features, _dp._context_cell_key)
+    except Exception as exc:
+        logger.warning("compat gate: distribution_profiling import failed "
+                       "(%s) — gate disabled", exc)
+        _CTX_CELL_HELPERS = (None, None)
+    return _CTX_CELL_HELPERS
+
+
 def _foreground_paste_position(
     fg_mask: np.ndarray,
     bg_size: Tuple[int, int],
@@ -789,6 +815,9 @@ def _paste_and_finalize(
     source_bg_desc: Optional[np.ndarray] = None,
     normal_pool: Optional[List[str]] = None,
     texture_dist_threshold: float = 0.0,
+    compat_row: Optional[Dict[str, float]] = None,
+    bin_edges: Optional[Dict[str, List[float]]] = None,
+    compat_threshold: float = 0.0,
 ) -> Dict[str, Any]:
     """Shared placement + blending + GT-mask tail used by every synthesis method.
 
@@ -841,6 +870,22 @@ def _paste_and_finalize(
         and source_bg_desc is not None
         and HAS_CV2
     )
+    # Placement-aware compat gate (--compat_threshold, opt-in): the candidate
+    # paste patch's context cell must have compatibility >= threshold with this
+    # defect cluster (compat_row from the compatibility_matrix). Makes placement
+    # honor the background↔defect compatibility the selection score only
+    # promised. Same rng-discipline as texture_on — off ⇒ no new rng draw.
+    compat_on = (
+        compat_threshold > 0.0
+        and compat_row is not None
+        and bin_edges is not None
+        and HAS_CV2
+    )
+    _ctx_feat_fn = _cell_key_fn = None
+    if compat_on:
+        _ctx_feat_fn, _cell_key_fn = _load_context_cell_helpers()
+        if _ctx_feat_fn is None or _cell_key_fn is None:
+            compat_on = False  # profiling helpers unavailable → gate auto-off
 
     def _place_on(nrm: "Image") -> Tuple[np.ndarray, Tuple[int, int], bool]:
         """Placement decision for ONE normal — verbatim lift of the legacy
@@ -863,6 +908,33 @@ def _paste_and_finalize(
                                       _texture_descriptor(patch))
                     <= texture_dist_threshold)
 
+        def _compat_ok(pos_xy: Tuple[int, int]) -> bool:
+            # Compatibility of the paste patch's context cell with this defect
+            # cluster. compat_row.get(cell, 0.5): an unobserved cell is neutral
+            # (0.5) so soft `>= threshold` accepts any row cell — the exact-match
+            # form fails on sets whose defect context is rare in clean patches
+            # (leather 4.7% coverage → ~95% fallback). Returns True on any
+            # failure so a descriptor error never rejects a usable placement.
+            px, py = pos_xy
+            patch = nrgb[py:py + crop_h, px:px + crop_w]
+            try:
+                gray = cv2.cvtColor(patch, cv2.COLOR_RGB2GRAY) if patch.ndim == 3 else patch
+                cell = _cell_key_fn(_ctx_feat_fn(gray), bin_edges)
+                return float(compat_row.get(cell, 0.5)) >= compat_threshold
+            except Exception:
+                return True
+
+        def _gate_pass(pos_xy: Tuple[int, int]) -> bool:
+            """Combined placement gate: texture AND compat (each skipped when
+            its own gate is off)."""
+            if texture_on and not _tex_ok(pos_xy):
+                return False
+            if compat_on and not _compat_ok(pos_xy):
+                return False
+            return True
+
+        gate_active = texture_on or compat_on
+
         # Constrain placement to the object foreground when one can be
         # estimated (object-centric datasets like visa_pcb). Falls back to
         # fully random placement when no useful foreground is found
@@ -876,12 +948,12 @@ def _paste_and_finalize(
                 fgm, nrm.size, defect_crop.size, mask, rng
             )
         gate_ok = True
-        if pos is not None and texture_on:
-            # Foreground-path texture check: resample the foreground position
-            # while the local patch is texture-incompatible. All-fail → keep
-            # the last candidate with gate_ok=False so stage 2 can escape to
-            # another normal. texture_on=False consumes zero extra draws.
-            gate_ok = _tex_ok(pos)
+        if pos is not None and gate_active:
+            # Foreground-path gate: resample the foreground position while the
+            # local patch fails the texture/compat gate. All-fail → keep the
+            # last candidate with gate_ok=False so stage 2 can escape to
+            # another normal. gate_active=False consumes zero extra draws.
+            gate_ok = _gate_pass(pos)
             for _ in range(max(1, max_bg_tries)):
                 if gate_ok:
                     break
@@ -891,16 +963,16 @@ def _paste_and_finalize(
                 if cand is None:
                     break
                 pos = cand
-                gate_ok = _tex_ok(pos)
+                gate_ok = _gate_pass(pos)
         if pos is None:
             # Random-placement fallback. When a gate is on, resample the
             # position (same rng → deterministic) whenever the crop-sized
-            # local background patch is black/flat (void) or texture-
-            # incompatible with the source surroundings. All-fail → keep the
-            # last candidate so synthesis is still produced (never a silent
-            # drop); the caller may then re-pick another normal (stage 2).
+            # local background patch is black/flat (void), texture-incompatible
+            # with the source surroundings, or a low-compat context cell.
+            # All-fail → keep the last candidate so synthesis is still produced
+            # (never a silent drop); the caller may then re-pick (stage 2).
             pos = _random_paste_position(nrm.size, defect_crop.size, rng)
-            if reject_clean_bg or texture_on:
+            if reject_clean_bg or gate_active:
                 gate_ok = False
                 for _ in range(max(1, max_bg_tries)):
                     px, py = pos
@@ -908,8 +980,7 @@ def _paste_and_finalize(
                     clean = (not reject_clean_bg) or _is_clean_background(
                         patch, min_quality=min_bg_quality,
                         blur_threshold=blur_threshold)
-                    close = (not texture_on) or _tex_ok(pos)
-                    if clean and close:
+                    if clean and _gate_pass(pos):
                         gate_ok = True
                         break
                     pos = _random_paste_position(
@@ -926,7 +997,7 @@ def _paste_and_finalize(
     # gate is on AND a pool was supplied; draws come from the same `rng`
     # (controlnet passes place_rng=Random(seed0) → content-addressed).
     n_repick = 0
-    if texture_on and not gate_ok and normal_pool:
+    if (texture_on or compat_on) and not gate_ok and normal_pool:
         from PIL import Image as _PILImage
         for _ in range(_TEXTURE_MAX_NORMAL_REPICK):
             n_repick += 1
@@ -952,11 +1023,12 @@ def _paste_and_finalize(
             # Used normal changed → refresh the GT-mask canvas size below.
             bw_norm, bh_norm = normal_img.size
 
-    if texture_on and not gate_ok:
+    if (texture_on or compat_on) and not gate_ok:
         logger.warning(
-            "texture gate exhausted (%d positions x %d normal re-picks, "
-            "dist>%.3f) — pasting last candidate: %s",
-            max_bg_tries, n_repick, texture_dist_threshold, defect_path_for_log,
+            "placement gate exhausted (%d positions x %d normal re-picks; "
+            "tex>%.3f compat<%.2f) — pasting last candidate: %s",
+            max_bg_tries, n_repick, texture_dist_threshold, compat_threshold,
+            defect_path_for_log,
         )
     # Context-aware ('seamless') blending = Reinhard local-background colour/
     # illumination transfer + cv2.seamlessClone, falling back to the alpha
@@ -1004,9 +1076,11 @@ def _paste_and_finalize(
     # Per-call gate telemetry — run() pops and aggregates this (it must never
     # leak into annotations.json).
     meta["gate_stats"] = {
-        "active": texture_on,
+        "active": texture_on or compat_on,
+        "texture_active": texture_on,
+        "compat_active": compat_on,
         "repick": n_repick,
-        "fallback": bool(texture_on and not gate_ok),
+        "fallback": bool((texture_on or compat_on) and not gate_ok),
     }
     return meta
 
@@ -1025,6 +1099,9 @@ def copy_paste_synthesis(
     max_bg_tries: int = 20,
     normal_pool: Optional[List[str]] = None,
     texture_dist_threshold: float = 0.0,
+    compat_row: Optional[Dict[str, float]] = None,
+    bin_edges: Optional[Dict[str, List[float]]] = None,
+    compat_threshold: float = 0.0,
 ) -> Optional[Dict[str, Any]]:
     """
     Paste the defect region from roi_entry onto the normal image.
@@ -1161,6 +1238,9 @@ def copy_paste_synthesis(
             source_bg_desc=source_bg_desc,
             normal_pool=normal_pool,
             texture_dist_threshold=texture_dist_threshold,
+            compat_row=compat_row,
+            bin_edges=bin_edges,
+            compat_threshold=compat_threshold,
         )
 
     except Exception as exc:
@@ -1711,6 +1791,9 @@ def controlnet_synthesis(
             source_bg_desc=source_bg_desc,
             normal_pool=kwargs.get("normal_pool"),
             texture_dist_threshold=texture_dist_threshold,
+            compat_row=kwargs.get("compat_row"),
+            bin_edges=kwargs.get("bin_edges"),
+            compat_threshold=kwargs.get("compat_threshold", 0.0),
         )
         if meta:
             stats["gen_ok"] += 1
@@ -2075,6 +2158,8 @@ def run(
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
     texture_dist_threshold: float = 0.0,
+    compat_threshold: float = 0.0,
+    compat_matrix_json: Optional[str] = None,
     controlnet_path: Optional[str] = None,
     sd_base: str = "runwayml/stable-diffusion-v1-5",
     cn_steps: int = 30,
@@ -2218,11 +2303,36 @@ def run(
     mask_dir = out / "masks"
     mask_dir.mkdir(parents=True, exist_ok=True)
 
+    # Placement-aware compat gate: load the compatibility matrix + context
+    # bin_edges ONCE (copy_paste path). Both required; missing either → gate
+    # stays off (warned). controlnet passes the same kwargs uniformly.
+    compat_matrix: Optional[Dict[str, Dict[str, float]]] = None
+    compat_bin_edges: Optional[Dict[str, List[float]]] = None
+    if compat_threshold > 0.0:
+        if compat_matrix_json and Path(compat_matrix_json).exists() and config_yaml:
+            try:
+                _here = str(Path(__file__).resolve().parent)
+                if _here not in sys.path:
+                    sys.path.insert(0, _here)
+                import build_train_jsonl as _btj_cfg  # noqa: PLC0415
+                compat_matrix = load_json(compat_matrix_json).get("matrix", {})
+                _, compat_bin_edges = _btj_cfg._load_bin_edges(config_yaml)
+                logger.info("compat gate ON: threshold=%.2f, %d clusters in matrix",
+                            compat_threshold, len(compat_matrix))
+            except Exception as exc:
+                logger.warning("compat gate: failed to load matrix/bin_edges "
+                               "(%s) — gate disabled", exc)
+                compat_matrix = compat_bin_edges = None
+        else:
+            logger.warning("compat gate: --compat_threshold>0 requires "
+                           "--compat_matrix_json AND --config — gate disabled")
+
     rng = random.Random(seed)
     annotations: List[Dict[str, Any]] = []
     n_ok = 0
     n_skip = 0
-    gate_agg = {"active": 0, "repick": 0, "fallback": 0}
+    gate_agg = {"active": 0, "repick": 0, "fallback": 0,
+                "texture_active": 0, "compat_active": 0}
 
     drive_img_dir = Path(output_dir) / "images"
     drive_mask_dir = Path(output_dir) / "masks"
@@ -2257,6 +2367,8 @@ def run(
                 continue
 
             normal_path = rng.choice(normal_images)
+            compat_row = (compat_matrix.get(str(roi_entry.get("cluster_id")), {})
+                          if compat_matrix is not None else None)
             meta = synthesis_fn(
                 roi_entry=roi_entry,
                 normal_image_path=normal_path,
@@ -2270,6 +2382,9 @@ def run(
                 blur_threshold=bg_blur_threshold,
                 normal_pool=normal_images,
                 texture_dist_threshold=texture_dist_threshold,
+                compat_row=compat_row,
+                bin_edges=compat_bin_edges,
+                compat_threshold=compat_threshold,
             )
             if meta:
                 n_ok += 1
@@ -2280,6 +2395,8 @@ def run(
                     gate_agg["active"] += 1
                     gate_agg["repick"] += int(gs.get("repick", 0))
                     gate_agg["fallback"] += int(bool(gs.get("fallback")))
+                    gate_agg["texture_active"] += int(bool(gs.get("texture_active")))
+                    gate_agg["compat_active"] += int(bool(gs.get("compat_active")))
                 # Record the durable Drive mask path only when a mask was saved.
                 ann_mask_path = final_mask_path if meta.get("mask_path") else None
                 # ControlNet cache hits and texture-gate stage-2 re-picks
@@ -2334,13 +2451,23 @@ def run(
         cn_stats = _log_cn_stats()
         if cn_stats is not None:
             result["cn_stats"] = cn_stats
-    if texture_dist_threshold > 0.0:
+    if texture_dist_threshold > 0.0 or compat_threshold > 0.0:
+        act = max(1, gate_agg["active"])
+        fb_rate = gate_agg["fallback"] / act
         logger.info(
-            "texture-gate stats: active=%d repick_draws=%d fallback=%d "
-            "(threshold=%.3f)",
-            gate_agg["active"], gate_agg["repick"], gate_agg["fallback"],
-            texture_dist_threshold,
+            "placement-gate stats: active=%d (texture=%d compat=%d) "
+            "repick_draws=%d fallback=%d (%.0f%%) [tex_thr=%.3f compat_thr=%.2f]",
+            gate_agg["active"], gate_agg["texture_active"],
+            gate_agg["compat_active"], gate_agg["repick"], gate_agg["fallback"],
+            100 * fb_rate, texture_dist_threshold, compat_threshold,
         )
+        if compat_threshold > 0.0 and fb_rate > 0.5:
+            logger.warning(
+                "compat gate fallback rate %.0f%% > 50%% — placement-aware is "
+                "near-no-op on this dataset (most positions rejected → last "
+                "candidate pasted). Report this; do NOT claim placement uplift.",
+                100 * fb_rate,
+            )
         result["gate_stats"] = gate_agg
     return result
 
@@ -2396,6 +2523,16 @@ def _parse_args(argv=None) -> argparse.Namespace:
                         "mismatch (random-fallback placement only, both "
                         "copy_paste and controlnet). 0 = OFF (default). "
                         "Tuning band ~0.15-0.35.")
+    p.add_argument("--compat_threshold", type=float, default=0.0,
+                   help="Placement-aware compat gate: accept a paste position "
+                        "only when its context cell has compatibility "
+                        ">= threshold with the defect cluster "
+                        "(compatibility_matrix). Both placement paths; soft "
+                        "match (unobserved cell=0.5 neutral). 0 = OFF (default). "
+                        "Requires --compat_matrix_json AND --config.")
+    p.add_argument("--compat_matrix_json", default=None,
+                   help="Path to compatibility_matrix.json (profiling output) "
+                        "for --compat_threshold. bin_edges come from --config.")
     # --- ControlNet (--method controlnet) ---------------------------------
     p.add_argument("--controlnet_path", default=None,
                    help="Trained ControlNet dir (train_controlnet.py best_model/). "
@@ -2462,6 +2599,8 @@ def main(argv=None) -> None:
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
         texture_dist_threshold=args.texture_dist_threshold,
+        compat_threshold=args.compat_threshold,
+        compat_matrix_json=args.compat_matrix_json,
         controlnet_path=args.controlnet_path,
         sd_base=args.sd_base,
         cn_steps=args.cn_steps,

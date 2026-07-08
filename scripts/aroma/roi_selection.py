@@ -174,6 +174,16 @@ _W_DEFICIT = 0.2
 
 assert abs(_W_MORPH + _W_CONTEXT + _W_DEFICIT - 1.0) < 1e-9, "ROI weights must sum to 1"
 
+# Placement-aware 'realism' weights (--score_mode realism). deficit is dropped
+# (empirically refuted, see .dev_note/aroma_step4_h1-recombination-no-info.md);
+# ctx_prior (background↔defect compatibility) is promoted and quality_score
+# (subtype-matching realism, previously a hard gate only) becomes graded.
+_W_R_CONTEXT = 0.5
+_W_R_MORPH   = 0.3
+_W_R_QUALITY = 0.2
+
+assert abs(_W_R_CONTEXT + _W_R_MORPH + _W_R_QUALITY - 1.0) < 1e-9, "realism weights must sum to 1"
+
 
 # ---------------------------------------------------------------------------
 # Data loading helpers
@@ -237,16 +247,26 @@ def score_roi(
     morph_prior: float,
     ctx_prior: float,
     deficit: float,
+    quality_score: float = 0.0,
+    score_mode: str = "legacy",
 ) -> float:
     """
-    ROI_score = 0.4 × P(M_i) + 0.4 × P(C_j) + 0.2 × Deficit(M_i, C_j)
+    score_mode='legacy' (default): ROI_score = 0.4·P(M) + 0.4·P(C) + 0.2·Deficit
+        — byte-identical to the pre-change formula; quality_score ignored.
+    score_mode='realism': ROI_score = 0.5·P(C) + 0.3·P(M) + 0.2·quality
+        — deficit dropped (weight 0, kept in JSON for provenance), quality_score
+        promoted from a hard gate to a graded term.
 
     All inputs clamped to [0, 1].
     """
     mp = max(0.0, min(1.0, float(morph_prior)))
     cp = max(0.0, min(1.0, float(ctx_prior)))
-    d  = max(0.0, min(1.0, float(deficit)))
-    score = _W_MORPH * mp + _W_CONTEXT * cp + _W_DEFICIT * d
+    if score_mode == "realism":
+        qs = max(0.0, min(1.0, float(quality_score)))
+        score = _W_R_CONTEXT * cp + _W_R_MORPH * mp + _W_R_QUALITY * qs
+    else:
+        d = max(0.0, min(1.0, float(deficit)))
+        score = _W_MORPH * mp + _W_CONTEXT * cp + _W_DEFICIT * d
     return float(np.clip(score, 0.0, 1.0))
 
 
@@ -271,6 +291,7 @@ def _parse_bbox(bbox_str: str) -> Any:
 def build_candidates(
     data: Dict[str, Any],
     background_type: str = "directional",
+    score_mode: str = "legacy",
 ) -> List[Dict[str, Any]]:
     """
     Score all (morph_row × context_bin) candidates.
@@ -348,7 +369,9 @@ def build_candidates(
         bin_iter = cluster_row.items() if cluster_row else {"none": 0.0}.items()
         for cell_key, ctx_prior in bin_iter:
             deficit      = float(deficit_rows.get(cid_str, {}).get(cell_key, 0.0))
-            roi_score    = score_roi(morph_prior, float(ctx_prior), deficit)
+            roi_score    = score_roi(morph_prior, float(ctx_prior), deficit,
+                                     quality_score=quality_score,
+                                     score_mode=score_mode)
             prompt_key   = f"{cluster_id}_{cell_key}"
             prompt_entry = prompts.get(prompt_key, {})
 
@@ -1523,6 +1546,7 @@ def run(
     img_diversity_cap: int | None = 1,
     min_quality: float = 0.0,
     background_type: str = "directional",
+    score_mode: str = "legacy",
 ) -> Dict[str, Any]:
     """
     Full Step 3 pipeline: load → score → quality-gate → select → save.
@@ -1547,7 +1571,15 @@ def run(
         logger.error("Input loading failed: %s", data)
         return data
 
-    candidates = build_candidates(data, background_type=background_type)
+    if score_mode == "realism" and rarity_temp != 1.0:
+        logger.warning(
+            "score_mode='realism' with rarity_temp=%.3f (!=1.0): the deficit-"
+            "temperature reordering recomputes with legacy weights and ignores "
+            "the realism score — pin rarity_temp=1.0 for a clean realism run.",
+            rarity_temp,
+        )
+    candidates = build_candidates(data, background_type=background_type,
+                                  score_mode=score_mode)
     passing    = apply_quality_gate(candidates, min_quality)
     if not passing:
         logger.error(
@@ -1657,6 +1689,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Dataset background type for the subtype-matching "
                         "quality proxy (default: directional, suited to "
                         "severstal steel strips). Only used when --min_quality>0.")
+    p.add_argument("--score_mode", default="legacy",
+                   choices=["legacy", "realism"],
+                   help="ROI score formula. 'legacy' (default): "
+                        "0.4·morph+0.4·ctx+0.2·deficit (byte-identical). "
+                        "'realism': 0.5·ctx+0.3·morph+0.2·quality (deficit "
+                        "dropped, quality promoted from gate to graded term).")
     return p.parse_args(argv)
 
 
@@ -1675,6 +1713,7 @@ def main(argv=None) -> None:
         img_diversity_cap=args.img_diversity_cap,
         min_quality=args.min_quality,
         background_type=args.background_type,
+        score_mode=args.score_mode,
     )
     if result.get("status") != "ok":
         sys.exit(1)
