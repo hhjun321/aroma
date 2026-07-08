@@ -40,14 +40,18 @@
 
 ---
 
-## 3. ★ 보정 2 — A−R은 삼중 교란 (이전엔 이중으로만 봤음)
+## 3. ★ 보정 2 — 이것은 "교란"이 아니라 의도된 **풀 프레임워크 vs 단순 baseline** 비교다
+
+> **설계 의도(저자 확인):** AROMA arm은 프레임워크가 동원할 수 있는 **모든 기법을 총동원**(realism 선택 + ControlNet 합성 + seamless 블렌드)한 것이고, random arm은 **단순 copy_paste(+alpha)** 단순 증강이다. 연구 질문은 "ROI 선택 단일 효과"가 아니라 **"AROMA 프레임워크 전체가 단순 증강보다 우월한가"**이다. 따라서 세 요소가 함께 다른 것은 결함이 아니라 **의도된 대비(full-stack vs naive)**다.
 
 | | 선택 전략 | 합성 엔진 | blend mode | 소스 다양성 | 클래스 분포 |
 |--|-----------|-----------|-----------|------------|-------------|
-| **aroma** | realism(tobe) | controlnet 212 + **copy_paste_arfallback 188** | **seamless(Poisson)** | 200 distinct, max reuse 2 | 균등(~80/class) |
-| **random** | random | copy_paste 400 | **alpha** | 143 distinct, **max reuse 10** | 가용도순(crack 38·fray 46 vs 100+) |
+| **AROMA (full stack)** | realism(tobe) | controlnet 212 + **copy_paste_arfallback 188** | **seamless(Poisson)** | 200 distinct, max reuse 2 | 균등(~80/class) |
+| **random (naive)** | random | copy_paste 400 | **alpha** | 143 distinct, **max reuse 10** | 가용도순(crack 38·fray 46 vs 100+) |
 
-→ aroma vs random은 **선택·엔진·블렌드 3요소가 동시에 다름**. "aroma < random"을 ROI 선택 탓으로 돌릴 수 없다. 이전 가이드는 "엔진+선택 이중 교란"이라 했으나, 실제로는 **blend(seamless vs alpha)까지 3중**이다. 이것이 측정의 가장 큰 결함.
+### 이 프레이밍에서의 정직한 결과 (MTD)
+- 이 "총동원 AROMA"(0.925)조차 **단순 random copy_paste(0.931)에 졌다**(A−R −0.006, t=−1.56, 0/3). 즉 **프레임워크 우월성이 MTD에서는 나타나지 않았다** — 오히려 근소 열세. 단 MTD는 near-ceiling(base 0.92)이라 정보량이 낮다.
+- **주의 — 두 연구 질문을 섞지 말 것:** 이 full-stack 비교는 논문 Table 13이 표방하는 *"오직 ROI 선택 전략만 다르다(single-factor swap)"* 비교와 **다른 질문**이다. 이 run을 논문에 넣는다면 **"프레임워크 전체 vs 단순 증강"** 결과로만 서술해야 하고, "ROI 선택의 기여"로 서술하면 안 된다(그건 Table 13의 별도 통제 run이 답한다). 두 프레이밍의 혼동이 유일한 리스크.
 
 ---
 
@@ -67,19 +71,20 @@ aroma(realism+quota)는 클래스 균등(~80), random은 가용도순(crack 38 s
 
 ## 6. 보정된 결론 — roi_check 개선안 착수 전 반드시 할 일
 
-이전 가이드(`roi_check_improvement_guide_20260708.md`)의 결론(MTD는 잘못된 타깃, 집중/중복은 rigging 취약)은 유지된다. 여기에 newpipe가 더한 **가장 중요한 시정 사항**:
+이전 가이드(`roi_check_improvement_guide_20260708.md`)의 결론(MTD는 잘못된 타깃, 집중/중복은 rigging 취약)은 유지된다. 설계 의도(full-stack vs naive)를 반영한 **정정된 권고**:
 
-1. **측정 하베스를 단일변수로 고치는 것이 scoring 개선보다 선행이다.** 현재 random(alpha+copy_paste)과 aroma(seamless+controlnet/cp)는 blend·engine이 달라 어떤 선택 효과도 분리 불가.
-   - random arm도 **seamless blend + 동일 엔진(또는 동일 copy_paste)**으로 맞춰 재생성해야 한다.
-   - 이 confound를 제거하기 전 산출된 A−R(20260704_1 포함)은 **선택 효과의 증거로 쓸 수 없다.**
-2. **realism(tobe)은 이미 aroma에 적용돼 있었고 효과는 16.5% quality 스왑에 그쳤다.** roi_check가 원하는 "더 날카로운 점수"를 시험하려면, (a) legacy vs realism이 아니라 (b) 훨씬 큰 대비의 새 scoring을 (c) **headroom 있는 데이터셋(tiled AITeX)** 에서 (d) 삼중 교란을 제거한 하베스로 측정해야 한다.
-3. **ar_fallback 47%를 보고에 명시.** "ControlNet arm"을 순수 생성 arm으로 서술하면 안 됨. 세장형(crack/break/fray) 결함은 양 arm 모두 copy_paste로 통제됐음을 병기(guide ITEM 3, controlnet execute 문서의 AR 게이트 설계와 일치).
+1. **두 연구 질문을 분리해 각각 정직하게 보고한다.**
+   - **Q1 (프레임워크 우월성, 이 run의 의도):** "총동원 AROMA vs 단순 copy_paste". 이 질문에는 세 요소 동시 차이가 **정당**하다. 단 결과를 "ROI 선택 기여"로 오독하면 안 됨.
+   - **Q2 (ROI 선택 단일 효과, 논문 Table 13):** 이때만 single-factor(선택만 다름)가 필요. Q1 run을 Q2 증거로 쓰지 말 것.
+2. **Q1이 진짜 관심이면, headroom 있는 데이터셋에서 반복해야 결론이 산다.** MTD(near-ceiling)에서 full-stack이 naive에 근소 열세인 것은 "프레임워크가 나쁘다"가 아니라 **"천장이라 어떤 증강도 우열이 안 드러난다"**로 읽어야 한다. tiled AITeX(유일 headroom+positive)에서 full-stack vs naive를 ≥3 seed로 재현하는 것이 프레임워크 우월성 주장의 핵심 증거.
+3. **realism(tobe)은 이미 full-stack에 포함**돼 있었고, legacy→realism 전환의 실질은 16.5% quality 스왑이었다. roi_check가 원하는 "더 날카로운 점수"의 추가 이득을 보려면 headroom 데이터셋에서 별도 측정이 필요.
+4. **ar_fallback 47%를 보고에 명시.** MTD full-stack AROMA의 절반은 실제로 copy_paste(세장형 AR 폴백)였음 — "ControlNet 총동원"이라 해도 non-elongated에만 생성이 적용됐다. 프레임워크 우월성 주장 시 이 한계를 병기.
 
 ### 측정 불가/미확정 (TBD)
-- asis(legacy)의 **downstream 결과 없음** — 20260704_1 aroma는 tobe만. legacy vs realism의 downstream 직접 비교 불가(선택 스왑 33개의 효과 미측정).
-- newpipe 파일은 **MTD 단일**. 이전 가이드 ITEM 0에서 인용한 severstal `casda_aroma/roi_selected.json`(1690, deficit max 0.071) 수치는 **다른 데이터셋**이므로 MTD에 적용 금지 — MTD 실측은 위 §1 표(deficit max 0.051, deficit>0 73%)를 쓸 것.
+- asis(legacy)의 **downstream 결과 없음** — 20260704_1 aroma는 tobe(full-stack)만. legacy vs realism의 downstream 직접 비교 불가.
+- newpipe 파일은 **MTD 단일**. 이전 가이드 ITEM 0에서 인용한 severstal `casda_aroma/roi_selected.json`(1690, deficit max 0.071) 수치는 **다른 데이터셋**이므로 MTD에 적용 금지 — MTD 실측은 §1 표(deficit max 0.051, deficit>0 73%)를 쓸 것.
 
 ---
 
 ## 7. 한 줄 요약
-20260704_1의 "aroma"는 **이미 realism(tobe) 선택**이었고, random과 **선택·엔진·blend 3중으로 달라** 비교 자체가 오염됐으며, ControlNet arm의 47%는 copy_paste 폴백이었다. roi_check의 scoring 개선을 논하기 전에 **단일변수 하베스 복구가 선행**이고, realism 전환은 이미 16.5% quality 스왑으로 시도됐으나 near-ceiling MTD에서 무효였다.
+20260704_1은 **의도된 "총동원 AROMA(realism+ControlNet+seamless) vs 단순 copy_paste" 프레임워크 비교**다. 이 프레이밍에서 MTD 결과는 full-stack AROMA(0.925)가 naive random(0.931)에 **근소 열세**였고(near-ceiling이라 정보량 낮음), ControlNet arm의 47%는 copy_paste 폴백이었다. 프레임워크 우월성을 입증하려면 **headroom 있는 tiled AITeX에서 full-stack vs naive를 ≥3 seed로 재현**해야 하며, 이 run을 논문 Table 13(ROI 선택 단일 효과)의 증거로 전용하지 말아야 한다.
