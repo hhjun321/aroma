@@ -41,14 +41,17 @@ Beyond individual augmentation operators, recent research has investigated autom
 ##3.1. Experimental Setup
 AROMA was evaluated on publicly available industrial anomaly detection datasets selected to span a broad range of morphological and contextual complexity, so that the automatic policy-selection mechanism is exercised across distinct complexity regimes rather than a single visual regime. The evaluated datasets are Severstal (full-frame steel surface with multiple defect classes and large foreground extent), MVTec Leather (an organic surface texture), AITeX (a directional, periodic woven-fabric texture, evaluated under a tiled protocol; see below), and MTD (machined magnetic-tile ceramic surface). Together they cover metal, organic, textile, and machined-ceramic surfaces, providing a heterogeneous test of the framework's claim to generalize without per-dataset re-engineering. This four-dataset roster is the canonical evaluation set; all reported downstream results (Table 12) are drawn from it under a single copy-paste synthesis protocol. The per-dataset statistics are summarized in Table 1.
 
-**Table 1.** Dataset statistics and domain characteristics. `[FROZEN — refill from committed complexity_report.json per dataset; no fabricated counts.]`
+**Table 1.** Dataset complexity characterization and the policies automatically selected by the Meta Policy Generator. MCI and CCI are the Morphology and Context Complexity Indices (Phase 0); the morphology and context policies are those chosen from the per-axis candidate evaluation; morphology clusters is the number of morphology clusters formed; and defect instances is the number of profiled defect crops used for complexity estimation. All values are taken from the committed per-dataset `complexity_report.json` and `morphology_clusters.json`. `[Per-split image counts (train-normal / test-good / test-defect) are not part of the profiling artifacts and are therefore not reported here.]`
 
-| Dataset | Surface / domain | Train (normal) | Test (good) | Test (defect) |
-|---------|------------------|----------------|-------------|---------------|
-| TBD | Steel (full-frame, multi-class) | TBD | TBD | TBD |
-| TBD | Leather (organic texture) | TBD | TBD | TBD |
-| TBD | Textile (directional/periodic, tiled) | TBD | TBD | TBD |
-| TBD | Magnetic tile (machined ceramic) | TBD | TBD | TBD |
+| Dataset | Surface / domain | MCI | CCI | Morphology policy | Context policy | Morph. clusters | Defect instances |
+|---------|------------------|------|------|-------------------|----------------|-----------------|------------------|
+| Severstal     | Steel (full-frame, multi-class)        | 0.455 | 0.306 | otsu | percentile | 5 | 3620 |
+| MVTec Leather | Leather (organic texture)              | 0.645 | 0.236 | otsu | gmm        | 3 | 19   |
+| AITeX         | Textile (directional/periodic, tiled)  | 0.398 | 0.434 | otsu | gmm        | 5 | 311  |
+| MTD           | Magnetic tile (machined ceramic)       | 0.561 | 0.246 | otsu | percentile | 5 | 388  |
+<!-- committed: .claude/.etc/complexity/{severstal,mvtec_leather,aitex,mtd}/complexity_report.json (mci,cci,morphology_policy,context_policy) + .claude/.etc/profiling/{ds}/morphology_clusters.json (n_clusters, len(cluster_assignments)). Per-split image counts are NOT in these artifacts. -->
+
+The complexity indices span a broad range (MCI 0.40–0.65, CCI 0.24–0.43), confirming that the roster exercises the policy-selection mechanism across distinct complexity regimes: AITeX has the highest contextual complexity (directional/periodic texture), MVTec Leather the highest morphological complexity, and the number of morphology clusters and profiled defect instances differ by an order of magnitude across datasets. The morphology axis consistently selects the Otsu policy, whereas the context axis selects GMM or percentile partitioning depending on the dataset—an illustration of the per-dataset, data-driven policy selection that the framework performs without manual tuning.
 
 For each dataset, three experimental conditions were compared under an identical evaluation protocol. The baseline condition employed only real normal images for training, representing the standard unsupervised anomaly detection setting. The random-ROI condition augmented the training set with synthetic defect images in which defect placement regions were sampled uniformly at random. The AROMA-ROI condition augmented the training set with synthetic defect images generated under the proposed data-driven policy, in which placement regions and seed defects were selected according to learned complexity policies. All three conditions shared the same real test set, and synthetic imagery was confined exclusively to the training partition to preserve strict train–test isolation.
 

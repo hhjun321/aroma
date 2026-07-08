@@ -1,0 +1,93 @@
+{
+  "mci": 0.3976437176931611,
+  "cci": 0.43365116278472016,
+  "morphology_policy": "otsu",
+  "context_policy": "gmm",
+  "stability_margin": 0.16611576083499963,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.1807103604087863,
+      "valley_count": 14.0,
+      "class_diversity": 1.0,
+      "inv_silhouette": 0.7039338660363015
+    },
+    "normalized": {
+      "entropy": 0.5451775901021966,
+      "valley_count": 0.34146341463414637,
+      "class_diversity": 0.0,
+      "inv_silhouette": 0.7039338660363015
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.2960661339636985
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 2.8578458331275676,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.015375232544000327,
+      "orient_variance": 1.2649121888405805
+    },
+    "normalized": {
+      "texture_entropy": 0.35723072914094595,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.015375232544000327,
+      "orient_variance": 0.7905701180253628
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 109328
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.27665482736157093,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.44277058819657056,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.3733607825577624,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": -0.028254430807881464,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/aitex",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

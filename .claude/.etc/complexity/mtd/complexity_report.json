@@ -1,0 +1,95 @@
+{
+  "mci": 0.5605615250123928,
+  "cci": 0.2464260322951501,
+  "morphology_policy": "otsu",
+  "context_policy": "percentile",
+  "stability_margin": 0.06531697766053052,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.2126650547030584,
+      "valley_count": 9.0,
+      "class_diversity": 4.61416960218981,
+      "inv_silhouette": 0.7342106299605957
+    },
+    "normalized": {
+      "entropy": 0.5531662636757646,
+      "valley_count": 0.21951219512195122,
+      "class_diversity": 0.7353570112912596,
+      "inv_silhouette": 0.7342106299605957
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.2657893700394042
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 3.215528823092107,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.006537969522542983,
+      "orient_variance": 0.009274376548756225
+    },
+    "normalized": {
+      "texture_entropy": 0.40194110288651336,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.006537969522542983,
+      "orient_variance": 0.00579648534297264
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 20268
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.2712491638991329,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3365661415596634,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.0832888601829313,
+      "stability": 0.09400331485436489,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.1154818514540697,
+      "stability": 0.11268751670446271,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/mtd",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}

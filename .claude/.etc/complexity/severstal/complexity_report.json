@@ -1,0 +1,93 @@
+{
+  "mci": 0.45476630455720773,
+  "cci": 0.3063918481198431,
+  "morphology_policy": "otsu",
+  "context_policy": "percentile",
+  "stability_margin": 0.1864613489236326,
+  "weight_mode": "equal",
+  "mci_components": {
+    "raw": {
+      "entropy": 2.2616661179286854,
+      "valley_count": 4.0,
+      "class_diversity": 2.1875953781925834,
+      "inv_silhouette": 0.7796390734092336
+    },
+    "normalized": {
+      "entropy": 0.5654165294821714,
+      "valley_count": 0.0975609756097561,
+      "class_diversity": 0.37644863972767,
+      "inv_silhouette": 0.7796390734092336
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "silhouette_score": 0.22036092659076648
+  },
+  "cci_components": {
+    "raw": {
+      "texture_entropy": 3.0110710198919803,
+      "cluster_count_ctx": 5.0,
+      "freq_complexity": 0.0072684263099810666,
+      "orient_variance": 0.43277842760691604
+    },
+    "normalized": {
+      "texture_entropy": 0.37638387748649754,
+      "cluster_count_ctx": 0.5714285714285714,
+      "freq_complexity": 0.0072684263099810666,
+      "orient_variance": 0.2704865172543225
+    },
+    "weights": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "weight_mode": "equal",
+    "normalization": "minmax",
+    "n_context_patches_used": 20000,
+    "n_context_patches_total": 590200
+  },
+  "candidate_policies": {
+    "morphology": [
+      "gmm",
+      "otsu"
+    ],
+    "context": [
+      "gmm",
+      "percentile"
+    ]
+  },
+  "evaluation_results": [
+    {
+      "policy": "gmm",
+      "silhouette": 0.12506510180560368,
+      "axis": "morphology"
+    },
+    {
+      "policy": "otsu",
+      "silhouette": 0.3115264507292363,
+      "axis": "morphology"
+    },
+    {
+      "policy": "gmm",
+      "silhouette": 0.1107412978386893,
+      "axis": "context"
+    },
+    {
+      "policy": "percentile",
+      "silhouette": 0.16685973687098787,
+      "axis": "context"
+    }
+  ],
+  "profiling_dir": "/content/tmp/aroma_staging/severstal",
+  "status": "ok",
+  "provenance": {
+    "io_source": "aroma_ref",
+    "ref_source": "aroma_ref"
+  }
+}
