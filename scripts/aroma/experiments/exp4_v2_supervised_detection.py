@@ -860,6 +860,11 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
             # is the fallback. For random/aroma source_roi parses fine so this is
             # only consulted when source_roi is unparseable.
             "cluster_id": e.get("cluster_id"),
+            # Explicit defect-type string written by generate_defects (roi_selection
+            # class_key). Highest-priority class signal in multi mode — avoids the
+            # brittle source_roi path re-parse. None for legacy annotations.json
+            # (no field) → _resolve_synth_class falls back to path parse.
+            "class_key": e.get("class_key"),
         })
 
     log_fn = logger.info if valid else logger.error
@@ -1054,6 +1059,13 @@ def _resolve_synth_class(
     """0-indexed defect class for a synth annotation (multi mode) — dataset-generic.
 
     Priority:
+      0. explicit ``class_key`` annotation field (defect-type string written by
+         generate_defects from roi_selection). Path-independent, so it survives
+         stale/local-staging paths and non-``test/{type}`` layouts that break the
+         regex parse below. class_key equals the folder name (severstal
+         ``class{N}`` → name_to_id['classN']; mvtec/aitex/mtd raw type), so it
+         maps through name_to_id directly. Absent (legacy annotations, CASDA
+         copy-paste) → None → falls through to the path/cluster_id fallbacks.
       1. source_roi (fallback normal_image) ``.../test/{type}/`` segment →
          name_to_id. Works for every dataset whose synth source_roi points at a
          real defect under ``test/{type}/`` (severstal ``test/class{N}`` →
@@ -1065,8 +1077,12 @@ def _resolve_synth_class(
          class. Guarded by ``dataset_key == 'severstal'`` (aroma's cluster_id is
          a morphology cluster id, NOT a class, so must not be used elsewhere).
 
-    Returns None when neither signal yields a valid class (caller defaults to 0).
+    Returns None when no signal yields a valid class (caller defaults to 0).
     """
+    if name_to_id:
+        ck = ann.get("class_key")
+        if isinstance(ck, str) and ck in name_to_id:
+            return name_to_id[ck]
     src = str(ann.get("source_roi") or ann.get("normal_image") or "")
     if name_to_id:
         m = re.search(r"[\\/]test[\\/]([^\\/]+)[\\/]", src)

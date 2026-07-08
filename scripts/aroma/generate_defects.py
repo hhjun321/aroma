@@ -2353,6 +2353,12 @@ def run(
                     "source_roi":    orig_source_roi[roi_idx],
                     "image_id":      roi_entry.get("image_id", ""),
                     "cluster_id":    roi_entry.get("cluster_id"),
+                    # Explicit defect-type string (roi_selection class_key). Lets
+                    # multi-mode YOLO labelling resolve the class from a durable
+                    # field instead of re-parsing the source_roi path. None for
+                    # arms whose roi_entry lacks it (CASDA copy-paste) → downstream
+                    # falls back to path parse / severstal cluster_id.
+                    "class_key":     roi_entry.get("class_key"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),
                     "method":        method,
@@ -2411,6 +2417,9 @@ def run(
                     "image_id":      roi_entry.get("image_id", ""),
                     "normal_image":  staged_to_drive.get(ann_normal, ann_normal),
                     "cluster_id":    roi_entry.get("cluster_id"),
+                    # See dry-run branch: explicit defect-type for path-independent
+                    # multi-mode class resolution (None → downstream fallback).
+                    "class_key":     roi_entry.get("class_key"),
                     "cell_key":      roi_entry.get("cell_key", ""),
                     "prompt":        roi_entry.get("prompt", ""),
                     # AR-fallback controlnet samples carry method="copy_paste_
