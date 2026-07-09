@@ -2160,6 +2160,7 @@ def run(
     texture_dist_threshold: float = 0.0,
     compat_threshold: float = 0.0,
     compat_matrix_json: Optional[str] = None,
+    compat_mode: str = "defect",
     controlnet_path: Optional[str] = None,
     sd_base: str = "runwayml/stable-diffusion-v1-5",
     cn_steps: int = 30,
@@ -2315,10 +2316,37 @@ def run(
                 if _here not in sys.path:
                     sys.path.insert(0, _here)
                 import build_train_jsonl as _btj_cfg  # noqa: PLC0415
-                compat_matrix = load_json(compat_matrix_json).get("matrix", {})
+                _compat_json = load_json(compat_matrix_json)
+                # compat_mode selects the compat_row source. 'symmetric' uses the
+                # SGM clean-grounded matrix (matrix_symmetric); 'defect' (default)
+                # uses the legacy defect-side image-mean matrix — byte-identical
+                # legacy behaviour.
+                #
+                # NO silent fallback for symmetric: compat_threshold is calibrated
+                # against the [0,1] max-normalized symmetric scale, whereas the
+                # legacy 'matrix' holds raw probabilities (compat_max typically
+                # <0.2). Applying a symmetric-scale threshold to raw matrix values
+                # silently changes accept/reject behaviour and mislabels the run —
+                # so an older profile lacking 'matrix_symmetric' hard-fails, forcing
+                # a profiling re-run (or explicit --compat_mode defect) instead.
+                if compat_mode == "symmetric":
+                    compat_matrix = _compat_json.get("matrix_symmetric")
+                    if compat_matrix is None:
+                        raise ValueError(
+                            "compat_mode=symmetric requires 'matrix_symmetric' in "
+                            f"{compat_matrix_json}, but it is absent (older profile). "
+                            "Re-run distribution_profiling to emit it, or use "
+                            "--compat_mode defect."
+                        )
+                else:
+                    compat_matrix = _compat_json.get("matrix", {})
                 _, compat_bin_edges = _btj_cfg._load_bin_edges(config_yaml)
-                logger.info("compat gate ON: threshold=%.2f, %d clusters in matrix",
-                            compat_threshold, len(compat_matrix))
+                logger.info("compat gate ON: threshold=%.2f, mode=%s, %d clusters in matrix",
+                            compat_threshold, compat_mode, len(compat_matrix))
+            except ValueError:
+                # compat_mode=symmetric misconfiguration — hard user error, do
+                # NOT silently disable the gate (would mislabel the run).
+                raise
             except Exception as exc:
                 logger.warning("compat gate: failed to load matrix/bin_edges "
                                "(%s) — gate disabled", exc)
@@ -2542,6 +2570,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--compat_matrix_json", default=None,
                    help="Path to compatibility_matrix.json (profiling output) "
                         "for --compat_threshold. bin_edges come from --config.")
+    p.add_argument("--compat_mode", choices=["symmetric", "defect"],
+                   default="defect",
+                   help="compat_row source for the placement gate. 'defect' "
+                        "(default) = legacy defect-side image-mean matrix "
+                        "(byte-identical legacy). 'symmetric' = SGM "
+                        "clean-grounded matrix_symmetric (falls back to legacy "
+                        "matrix if that key is absent).")
     # --- ControlNet (--method controlnet) ---------------------------------
     p.add_argument("--controlnet_path", default=None,
                    help="Trained ControlNet dir (train_controlnet.py best_model/). "
@@ -2610,6 +2645,7 @@ def main(argv=None) -> None:
         texture_dist_threshold=args.texture_dist_threshold,
         compat_threshold=args.compat_threshold,
         compat_matrix_json=args.compat_matrix_json,
+        compat_mode=args.compat_mode,
         controlnet_path=args.controlnet_path,
         sd_base=args.sd_base,
         cn_steps=args.cn_steps,

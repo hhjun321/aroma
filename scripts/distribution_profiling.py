@@ -539,6 +539,94 @@ def _float_col(rows: List[dict], key: str) -> List[float]:
     return out
 
 
+def _build_symmetric(
+    context_rows: List[dict],
+    cluster_assignments: Dict[str, int],
+    bin_edges: Dict[str, List[float]],
+    n_clusters: int,
+    epsilon: float = 1e-3,
+) -> dict:
+    """Build clean-grounded symmetric compatibility (SGM) at patch granularity.
+
+    Pure computation (no I/O) so it can be smoke-tested standalone. Additive to the
+    legacy image-mean ``matrix`` — this function computes an independent set of keys
+    and does not touch the legacy matrix path.
+
+    context_rows: list of dicts, each one 64px patch, carrying ``image_id``,
+        ``image_type`` and the 5 CONTEXT_FEATURES (string values are tolerated —
+        ``_context_cell_key`` coerces to float). Defect-region patches (mask>0.5)
+        are already excluded upstream by ``_context_worker``, so the patch counting
+        here matches its convention.
+
+    Returns dict with 4 additive keys:
+    - ``clean_dist``: {cell: prob} — cell distribution over all good-image patches
+      (patch-granularity, not image-mean).
+    - ``P_def_patch``: {cluster_str: {cell: prob}} — cell distribution over all
+      defect-image patches per cluster; each patch inherits its image's cluster via
+      ``cluster_assignments[image_id]``.
+    - ``matrix_symmetric``: {cluster_str: {cell: compat_sym}} — per-cluster
+      max-normalized SGM. For each cluster k over its support S_k = {c :
+      P_def_patch[k][c] > 0}::
+
+          compat_sym(k, c) = sqrt((P_def_patch[k][c] + eps) * (clean_dist[c] + eps))
+
+      then each row is divided by its per-cluster max so the row peaks at 1.0.
+    - ``symmetric_epsilon``: the epsilon used.
+    """
+    clean_counts: Dict[str, int] = defaultdict(int)
+    def_counts: Dict[int, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    for r in context_rows:
+        itype = r.get("image_type")
+        if itype == "good":
+            cell = _context_cell_key(r, bin_edges)
+            clean_counts[cell] += 1
+        elif itype == "defect":
+            cid = cluster_assignments.get(r.get("image_id"))
+            if cid is None:
+                continue
+            cell = _context_cell_key(r, bin_edges)
+            def_counts[int(cid)][cell] += 1
+
+    clean_total = sum(clean_counts.values())
+    clean_dist: Dict[str, float] = (
+        {cell: cnt / clean_total for cell, cnt in clean_counts.items()}
+        if clean_total > 0 else {}
+    )
+
+    P_def_patch: Dict[str, Dict[str, float]] = {}
+    for c in range(n_clusters):
+        total = sum(def_counts[c].values()) if c in def_counts else 0
+        if total == 0:
+            P_def_patch[str(c)] = {}
+        else:
+            P_def_patch[str(c)] = {cell: cnt / total for cell, cnt in def_counts[c].items()}
+
+    matrix_symmetric: Dict[str, Dict[str, float]] = {}
+    for c in range(n_clusters):
+        row = P_def_patch.get(str(c), {})
+        if not row:
+            matrix_symmetric[str(c)] = {}
+            continue
+        # SGM over the support S_k = {cell : P_def_patch[k][cell] > 0}
+        raw: Dict[str, float] = {}
+        for cell, p_def in row.items():
+            p_clean = clean_dist.get(cell, 0.0)
+            raw[cell] = ((p_def + epsilon) * (p_clean + epsilon)) ** 0.5
+        max_raw = max(raw.values()) if raw else 0.0
+        if max_raw > 0:
+            matrix_symmetric[str(c)] = {cell: v / max_raw for cell, v in raw.items()}
+        else:
+            matrix_symmetric[str(c)] = {}
+
+    return {
+        "P_def_patch": P_def_patch,
+        "clean_dist": clean_dist,
+        "matrix_symmetric": matrix_symmetric,
+        "symmetric_epsilon": epsilon,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main profiler
 # ---------------------------------------------------------------------------
@@ -915,6 +1003,17 @@ class DistributionProfiler:
             else:
                 matrix[str(c)] = {cell: cnt / total for cell, cnt in counts[c].items()}
 
+        # Additive: clean-grounded symmetric (SGM) compatibility at patch
+        # granularity. Reuses self.cluster_assignments (image_id -> cluster) and the
+        # same bin_edges / _context_cell_key taxonomy. Legacy `matrix` above is left
+        # untouched; these 4 keys are appended (opt-in via compat_mode downstream).
+        symmetric = _build_symmetric(
+            context_rows,
+            self.cluster_assignments,
+            bin_edges,
+            n_clusters,
+        )
+
         save_json(
             {
                 "n_clusters": n_clusters,
@@ -922,6 +1021,7 @@ class DistributionProfiler:
                 "context_features": CONTEXT_FEATURES,
                 "bin_edges": bin_edges,
                 "matrix": matrix,
+                **symmetric,
             },
             out_path,
         )
