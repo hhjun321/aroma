@@ -770,6 +770,21 @@ _POS_STRIDE = 32
 _POS_TOPK = 8
 _POS_MAX_CAND = 4096
 
+# Image-level compat-ranked normal selection (compat_mode=='symmetric' only —
+# devnote aroma_compat_gate_clean-grounded_redesign §3-4 "CASDA-style background
+# IMAGE selection", implemented as top-K RANKING sampling, not weighted choice).
+# The legacy main loop draws the background uniformly (`rng.choice(normals)`), so
+# WHICH image a defect lands on is unconditioned on compatibility — only the
+# WITHIN-image position was compat-ranked (_positive_place). This tier ranks the
+# images themselves: each normal is scored by the mean compatibility of its
+# non-void 64px tiles for the defect cluster, and the background is sampled from
+# the top-K (diversity preserved — argmax would collapse the pool). The per-image
+# tile cell/void list is cluster-independent, so it is computed ONCE per path and
+# cached; only the compat lookup + ranking repeats per cluster.
+_NORMAL_TOPK = 16          # sample the background from the top-K highest-scoring normals
+_NORMAL_SAMPLE_CAP = 64    # max 64px tiles sampled per image (bounds cost on large pools)
+_NORMAL_STRIDE = 64        # tile stride when scanning a normal (auto-coarsened above the cap)
+
 
 def _tile_anchors(start: int, length: int, bound: int, tile: int = 64) -> List[int]:
     """Window start-coordinates that cover footprint [start, start+length) with
@@ -1005,6 +1020,125 @@ def _positive_place(
     # Placement still uses the sampled top-K position for diversity.
     best_nonvoid_mean = float(nonvoid[0][0])
     return chosen_pos, best_nonvoid_mean, len(nonvoid)
+
+
+def _normal_tile_cells(
+    gray: np.ndarray,
+    bin_edges: Dict[str, List[float]],
+    stride: int = _NORMAL_STRIDE,
+    cap: int = _NORMAL_SAMPLE_CAP,
+    min_quality: float = 0.7,
+    blur_threshold: float = 100.0,
+) -> List[Tuple[Optional[str], bool]]:
+    """Tile a normal image into ``(cell, void)`` pairs for image-level compat
+    scoring (``_image_compat_score`` / ``_rank_normals``).
+
+    Slides a full ``_COMPAT_TILE`` (64px) window over ``gray`` (already the SAME
+    grayscale the placement gate uses) with step ``stride``; the step is
+    auto-coarsened until the tile count is under ``cap`` so the samples stay
+    spread across the whole image (never biased to the top-left corner) and the
+    per-image cost is bounded on large pools. For each tile it records:
+
+    - ``cell``: the profiling context cell key (``_extract_context_features`` →
+      ``_context_cell_key``, IDENTICAL to how the compat matrix was built), or
+      ``None`` when the profiling helpers / cv2 are unavailable (scored as a
+      neutral 0.5 downstream).
+    - ``void``: ``not _is_clean_background(tile)`` — a black/flat tile is a void
+      and is excluded from the image's compat score.
+
+    Cluster-independent (neither cell nor void depends on the defect cluster), so
+    the caller computes it ONCE per normal path and reuses it across clusters.
+    Pure / deterministic — no rng.
+    """
+    result: List[Tuple[Optional[str], bool]] = []
+    if gray is None or getattr(gray, "size", 0) == 0:
+        return result
+    h, w = gray.shape[:2]
+    tile = _COMPAT_TILE
+
+    def _anchors(dim: int, st: int) -> List[int]:
+        if dim <= tile:
+            return [0]
+        a = list(range(0, dim - tile + 1, st))
+        if a[-1] != dim - tile:
+            a.append(dim - tile)  # always include the far edge
+        return a
+
+    st = max(1, int(stride))
+    ya = _anchors(h, st)
+    xa = _anchors(w, st)
+    # Coarsen the stride until the tile grid is under the cap — keeps the sample
+    # spread across the image instead of truncating to the first `cap` tiles.
+    while len(ya) * len(xa) > cap and st < max(h, w, 1):
+        st *= 2
+        ya = _anchors(h, st)
+        xa = _anchors(w, st)
+
+    ctx_feat_fn, cell_key_fn = _load_context_cell_helpers()
+    have_cells = ctx_feat_fn is not None and cell_key_fn is not None and HAS_CV2
+
+    for ay in ya:
+        for ax in xa:
+            if len(result) >= cap:
+                return result
+            win = gray[ay:ay + tile, ax:ax + tile]
+            if win.size == 0:
+                continue
+            try:
+                is_void = not _is_clean_background(
+                    win, min_quality=min_quality, blur_threshold=blur_threshold
+                )
+            except Exception:
+                is_void = False
+            cell: Optional[str] = None
+            if have_cells:
+                try:
+                    cell = cell_key_fn(ctx_feat_fn(win), bin_edges)
+                except Exception:
+                    cell = None
+            result.append((cell, is_void))
+    return result
+
+
+def _image_compat_score(
+    cells_voids: List[Tuple[Optional[str], bool]],
+    compat_row: Optional[Dict[str, float]],
+) -> float:
+    """Compat score of one normal image for a defect cluster: the MEAN
+    compatibility of its non-void tiles (``compat_row.get(cell, 0.5)`` — an
+    unobserved / ``None`` cell is neutral 0.5, matching the gate's soft match).
+
+    Returns ``-1.0`` when the image has NO non-void tile (fully black/flat →
+    excluded from ranking by ``_rank_normals``). Pure / deterministic.
+    """
+    row = compat_row or {}
+    vals = [float(row.get(cell, 0.5)) for cell, void in cells_voids if not void]
+    if not vals:
+        return -1.0
+    return sum(vals) / len(vals)
+
+
+def _rank_normals(
+    scored: List[Tuple[float, str]],
+    rng: random.Random,
+    topk: int = _NORMAL_TOPK,
+) -> Optional[str]:
+    """Pick one normal path from ``scored`` ``[(score, path)]`` by compat rank.
+
+    Drops excluded images (``score < 0`` → all-void, ``_image_compat_score``
+    returned -1.0), sorts the rest by score descending (stable → ties keep input
+    order for determinism), and samples ONE path from the top-``topk`` (``rng``
+    → per-selection diversity under a fixed seed; argmax would collapse the pool
+    to a single background). Returns ``None`` when nothing qualifies so the
+    caller can fall back to the uniform draw. Pure given ``rng`` — exactly one
+    rng draw when a path is returned, zero when ``None``.
+    """
+    valid = [(s, p) for s, p in scored if s >= 0.0]
+    if not valid:
+        return None
+    valid.sort(key=lambda t: t[0], reverse=True)
+    k = max(1, min(int(topk), len(valid)))
+    return rng.choice(valid[:k])[1]
 
 
 def _paste_and_finalize(
@@ -2628,6 +2762,50 @@ def run(
     gate_agg = {"active": 0, "repick": 0, "fallback": 0,
                 "texture_active": 0, "compat_active": 0}
 
+    # Image-level compat-ranked normal selection (symmetric mode only). When ON,
+    # the main loop replaces the uniform `rng.choice(normal_images)` with a
+    # top-K sample over normals ranked by their compat with each defect cluster
+    # (devnote §3-4). Cluster-independent tile cell/void lists are cached per
+    # path (`normal_cells_cache`), and the per-cluster ranking is cached
+    # (`cluster_scored_cache` / `cluster_pool_cache`) so a large pool (e.g. mtd
+    # 956) is tiled once and every later ROI/rep is a cheap dict lookup. Gate
+    # OFF ⇒ the uniform draw and rng stream are byte-identical to legacy.
+    image_rank_on = (
+        compat_matrix is not None
+        and compat_bin_edges is not None
+        and compat_mode == "symmetric"
+        and compat_threshold > 0.0   # explicit: keep threshold=0 byte-identical even if matrix load decouples from threshold later
+        and HAS_CV2
+    )
+    if image_rank_on:
+        _irk_feat, _irk_cell = _load_context_cell_helpers()
+        if _irk_feat is None or _irk_cell is None:
+            image_rank_on = False  # profiling helpers unavailable → ranking off
+        else:
+            logger.info("image-level compat ranking ON (symmetric): top-%d of "
+                        "%d normals, cap=%d tiles/img, stride=%d",
+                        _NORMAL_TOPK, len(normal_images),
+                        _NORMAL_SAMPLE_CAP, _NORMAL_STRIDE)
+    normal_cells_cache: Dict[str, List[Tuple[Optional[str], bool]]] = {}
+    cluster_scored_cache: Dict[str, List[Tuple[float, str]]] = {}
+    cluster_pool_cache: Dict[str, List[str]] = {}
+
+    def _normal_cells_for(_p: str) -> List[Tuple[Optional[str], bool]]:
+        """Load a normal, grayscale it exactly as the placement gate does (cv2
+        RGB2GRAY), and return its cached [(cell, void)] tiles."""
+        try:
+            _arr = np.asarray(_PILImage.open(_p).convert("RGB"))
+        except Exception:
+            return []
+        if HAS_CV2 and _arr.ndim == 3:
+            _g = cv2.cvtColor(_arr, cv2.COLOR_RGB2GRAY)
+        else:
+            _g = _arr if _arr.ndim == 2 else _arr[..., 0]
+        return _normal_tile_cells(
+            _g, compat_bin_edges, stride=_NORMAL_STRIDE, cap=_NORMAL_SAMPLE_CAP,
+            min_quality=min_bg_quality, blur_threshold=bg_blur_threshold,
+        )
+
     drive_img_dir = Path(output_dir) / "images"
     drive_mask_dir = Path(output_dir) / "masks"
 
@@ -2666,9 +2844,38 @@ def run(
                 n_ok += 1
                 continue
 
-            normal_path = rng.choice(normal_images)
             compat_row = (compat_matrix.get(str(roi_entry.get("cluster_id")), {})
                           if compat_matrix is not None else None)
+            # Background selection. Symmetric mode with a populated compat_row:
+            # rank the whole pool by per-cluster compat (cached) and top-K
+            # sample the background; the stage-2 re-pick pool is narrowed to the
+            # top-K ranked normals so escapes also stay rank-based. Every other
+            # case (defect / legacy / threshold=0 / empty row) keeps the uniform
+            # draw — exactly one rng.choice, byte-identical stream.
+            stage2_pool = normal_images
+            if image_rank_on and compat_row:
+                _cid = str(roi_entry.get("cluster_id"))
+                _scored = cluster_scored_cache.get(_cid)
+                if _scored is None:
+                    _scored = []
+                    for _npath in normal_images:
+                        _cells = normal_cells_cache.get(_npath)
+                        if _cells is None:
+                            _cells = _normal_cells_for(_npath)
+                            normal_cells_cache[_npath] = _cells
+                        _scored.append((_image_compat_score(_cells, compat_row), _npath))
+                    cluster_scored_cache[_cid] = _scored
+                    _ranked = sorted((_t for _t in _scored if _t[0] >= 0.0),
+                                     key=lambda _t: _t[0], reverse=True)
+                    cluster_pool_cache[_cid] = [_p for _, _p in _ranked[:_NORMAL_TOPK]]
+                _sel = _rank_normals(_scored, rng, _NORMAL_TOPK)
+                if _sel is not None:
+                    normal_path = _sel
+                    stage2_pool = cluster_pool_cache[_cid] or normal_images
+                else:
+                    normal_path = rng.choice(normal_images)
+            else:
+                normal_path = rng.choice(normal_images)
             meta = synthesis_fn(
                 roi_entry=roi_entry,
                 normal_image_path=normal_path,
@@ -2680,7 +2887,7 @@ def run(
                 reject_clean_bg=reject_clean_bg,
                 min_bg_quality=min_bg_quality,
                 blur_threshold=bg_blur_threshold,
-                normal_pool=normal_images,
+                normal_pool=stage2_pool,
                 texture_dist_threshold=texture_dist_threshold,
                 compat_row=compat_row,
                 bin_edges=compat_bin_edges,
