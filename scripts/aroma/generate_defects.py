@@ -757,6 +757,19 @@ def _load_context_cell_helpers() -> tuple:
 _COMPAT_TILE = 64
 _COMPAT_TILE_AGG = "mean"  # 'mean' (default) | 'min' (strict alternative)
 
+# Symmetric positive placement (compat_mode=='symmetric' only — devnote
+# aroma_compat_gate_clean-grounded_redesign §3-4/§7 positive steering). Instead
+# of sampling a random/foreground position and reject-resampling low-compat
+# cells (Scenario B), the placement SCANs every fitting position, RANKs each by
+# the mean compatibility of the 64px tiles covering its footprint (same tiling
+# scale the matrix was built at), drops footprints that straddle a void tile,
+# and PLACEs by sampling from the top-K. _POS_STRIDE bounds both the candidate
+# grid and the 64px feature-extraction cost; _POS_MAX_CAND is a safety cap that
+# auto-coarsens the stride on very large images.
+_POS_STRIDE = 32
+_POS_TOPK = 8
+_POS_MAX_CAND = 4096
+
 
 def _tile_anchors(start: int, length: int, bound: int, tile: int = 64) -> List[int]:
     """Window start-coordinates that cover footprint [start, start+length) with
@@ -847,6 +860,151 @@ def _foreground_paste_position(
         if 0 <= px < fw and 0 <= py < fh and fg_mask[py, px] >= 128:
             return x, y
     return None
+
+
+def _positive_place(
+    nrgb: np.ndarray,
+    crop_wh: Tuple[int, int],
+    compat_row: Dict[str, float],
+    bin_edges: Dict[str, List[float]],
+    min_bg_quality: float,
+    blur_threshold: float,
+    rng: random.Random,
+    stride: int = _POS_STRIDE,
+    topk: int = _POS_TOPK,
+    max_cand: int = _POS_MAX_CAND,
+) -> Tuple[Optional[Tuple[int, int]], float, int]:
+    """Scan-rank-place positive placement for the symmetric compat gate.
+
+    Enumerates every top-left position where the crop fully fits (strided by
+    ``stride``), scores each candidate by the MEAN compatibility of the 64px
+    tiles that cover its footprint (``_tile_anchors`` / ``_COMPAT_TILE`` — the
+    SAME scale the compatibility matrix was built at, and identical to the
+    tiling in ``_compat_ok``), excludes any candidate whose footprint straddles
+    a void tile, then samples the paste position from the top-K highest-compat
+    candidates (``rng`` → per-ROI placement diversity under a fixed seed).
+
+    Args:
+        nrgb:            HxWx3 (or HxW) uint8 background array.
+        crop_wh:         (crop_w, crop_h) of the defect crop (post fit-rescale).
+        compat_row:      matrix[cluster] row (symmetric SGM). ``.get(cell, 0.5)``
+                         → unobserved cell is neutral 0.5.
+        bin_edges:       feature bin edges (shared with matrix construction).
+        min_bg_quality:  void gate — a tile with quality below this is a void.
+        blur_threshold:  passed through to the void quality score.
+        rng:             seeded random.Random (top-K sample = the only new draw).
+        stride:          candidate/grid stride (auto-coarsened above max_cand).
+        topk:            sample the position from the top-K candidates by mean.
+        max_cand:        safety cap on candidate count.
+
+    Returns ``(pos_xy, best_mean, n_nonvoid)``:
+        - ``pos_xy``:    chosen (x, y) top-left; ``None`` iff there is NO
+                         non-void candidate (caller escapes to another normal).
+        - ``best_mean``: footprint mean-compat of the chosen position, or — when
+                         no non-void candidate exists — the best mean-compat over
+                         ALL candidates (so the caller can still force a paste).
+        - ``n_nonvoid``: number of candidates whose footprint has no void tile.
+
+    Pure/deterministic given a fixed ``rng``. The profiling cell helpers are
+    loaded lazily; when unavailable (or cv2 missing) every cell falls back to
+    neutral compat 0.5 so the routine still ranks by voidness alone.
+    """
+    cw, ch = int(crop_wh[0]), int(crop_wh[1])
+    h_img, w_img = nrgb.shape[:2]
+    span_x = max(0, w_img - cw)
+    span_y = max(0, h_img - ch)
+
+    ctx_feat_fn, cell_key_fn = _load_context_cell_helpers()
+    have_cells = ctx_feat_fn is not None and cell_key_fn is not None and HAS_CV2
+
+    def _axis(span: int, st: int) -> List[int]:
+        if span <= 0:
+            return [0]
+        pts = list(range(0, span + 1, st))
+        if pts[-1] != span:
+            pts.append(span)  # always include the far edge so it stays reachable
+        return pts
+
+    # Coarsen the stride until the candidate grid is under the safety cap.
+    st = max(1, int(stride))
+    xs_c = _axis(span_x, st)
+    ys_c = _axis(span_y, st)
+    while len(xs_c) * len(ys_c) > max_cand and st < max(span_x, span_y, 1):
+        st *= 2
+        xs_c = _axis(span_x, st)
+        ys_c = _axis(span_y, st)
+
+    # Per-anchor (64px tile) compat + void cache. cell_key is cluster-independent
+    # and voidness depends only on the tile, so each distinct anchor is computed
+    # once regardless of how many candidate footprints cover it → feature
+    # extraction is O(distinct tiles), not O(candidates).
+    tile_cache: Dict[Tuple[int, int], Tuple[float, bool]] = {}
+
+    def _tile(ax: int, ay: int) -> Tuple[float, bool]:
+        cached = tile_cache.get((ax, ay))
+        if cached is not None:
+            return cached
+        win = nrgb[ay:ay + _COMPAT_TILE, ax:ax + _COMPAT_TILE]
+        if win.size == 0:
+            res = (0.5, True)
+            tile_cache[(ax, ay)] = res
+            return res
+        if HAS_CV2 and win.ndim == 3:
+            gray = cv2.cvtColor(win, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = win if win.ndim == 2 else win[..., 0]
+        try:
+            is_void = not _is_clean_background(
+                gray, min_quality=min_bg_quality, blur_threshold=blur_threshold
+            )
+        except Exception:
+            is_void = False
+        if have_cells:
+            try:
+                cell = cell_key_fn(ctx_feat_fn(gray), bin_edges)
+                compat = float(compat_row.get(cell, 0.5))
+            except Exception:
+                compat = 0.5
+        else:
+            compat = 0.5
+        res = (compat, is_void)
+        tile_cache[(ax, ay)] = res
+        return res
+
+    best_all_mean = -1.0
+    nonvoid: List[Tuple[float, Tuple[int, int]]] = []
+    for y in ys_c:
+        ay_anchors = _tile_anchors(y, ch, h_img, _COMPAT_TILE)
+        for x in xs_c:
+            ax_anchors = _tile_anchors(x, cw, w_img, _COMPAT_TILE)
+            vals: List[float] = []
+            has_void = False
+            for ay in ay_anchors:
+                for ax in ax_anchors:
+                    compat, is_void = _tile(ax, ay)
+                    vals.append(compat)
+                    if is_void:
+                        has_void = True
+            mean = sum(vals) / len(vals) if vals else 0.5
+            if mean > best_all_mean:
+                best_all_mean = mean
+            if not has_void:
+                nonvoid.append((mean, (x, y)))
+
+    if not nonvoid:
+        return None, (best_all_mean if best_all_mean >= 0.0 else 0.5), 0
+
+    # Rank by footprint mean-compat (desc) — stable sort keeps ties in scan
+    # order — then sample from the top-K for placement diversity across the
+    # n_per_roi repeats sharing one seeded rng.
+    nonvoid.sort(key=lambda t: t[0], reverse=True)
+    k = max(1, min(int(topk), len(nonvoid)))
+    _chosen_mean, chosen_pos = rng.choice(nonvoid[:k])
+    # Gate on the BEST non-void mean (nonvoid[0]), not the top-K-sampled one:
+    # re-pick a normal only when NO non-void position reaches τ (devnote §3 step5).
+    # Placement still uses the sampled top-K position for diversity.
+    best_nonvoid_mean = float(nonvoid[0][0])
+    return chosen_pos, best_nonvoid_mean, len(nonvoid)
 
 
 def _paste_and_finalize(
@@ -1009,6 +1167,36 @@ def _paste_and_finalize(
             return True
 
         gate_active = texture_on or compat_on
+
+        # Symmetric positive placement (compat_mode=='symmetric' → compat_tile).
+        # Replace the random/foreground sample + reject-resample (Scenario B)
+        # with scan-rank-place: enumerate fitting positions, score each by the
+        # footprint mean-compat over 64px tiles, drop void-straddling footprints,
+        # and sample from the top-K. `compat_on` (threshold>0 + row/bin_edges +
+        # cv2 + helpers) guarantees everything `_positive_place` needs, so this
+        # is the ONLY place a new rng draw enters the symmetric path. When
+        # `compat_tile` is False (defect mode / legacy / texture-only) this
+        # branch is skipped and the block below stays byte-identical to the
+        # historical path — the compat_tile=False, threshold=0 rng stream is
+        # untouched. NOTE: in symmetric positive mode the texture gate does not
+        # steer placement (position is decided by compat/void alone).
+        if compat_on and compat_tile:
+            pos, best_mean, n_nonvoid = _positive_place(
+                nrgb, (crop_w, crop_h), compat_row, bin_edges,
+                min_bg_quality, blur_threshold, rng,
+                stride=_POS_STRIDE, topk=_POS_TOPK,
+            )
+            if pos is None:
+                # Every candidate footprint straddles a void tile — no usable
+                # target on this normal. Keep a deterministic position so an
+                # eventual last-candidate paste (stage-2 exhaustion) still lands
+                # somewhere; gate_ok=False escapes to another normal first.
+                pos = _random_paste_position(nrm.size, defect_crop.size, rng)
+                return nrgb, pos, False
+            # best_mean < τ triggers the same stage-2 re-pick / forced-paste
+            # fallback the reject path used; the chosen (highest-ranked, top-K
+            # sampled) position is retained for that forced paste.
+            return nrgb, pos, best_mean >= compat_threshold
 
         # Constrain placement to the object foreground when one can be
         # estimated (object-centric datasets like visa_pcb). Falls back to
