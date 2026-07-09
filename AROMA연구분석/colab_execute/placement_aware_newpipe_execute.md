@@ -152,6 +152,7 @@ print(f"DS={os.environ['DS']}  τ={cfg['tau']}  gray={cfg['grayscale']}")
 > **`--local_staging` 금지**: ControlNet sidecar 캐시는 Drive 직결이어야 세션 재개 시 GPU 스킵.
 > **로그**: `controlnet stats`(blank_rate<0.2), compat ON이면 `placement-gate stats: fallback=M%`. **fallback>50%면** placement no-op(legacy 회귀)로 "placement-aware" 주장 금지. aitex <50% 예상.
 > **grayscale**: leather만 OFF(컬러 가죽), 나머지 ON.
+> **compat_mode (신규, commit 6c8658f)**: `generate_defects`에 `--compat_mode {defect,symmetric}` 추가됨. **본 가이드는 기본 `defect`(legacy, 바이트동일)로 실행** — 위 명령 무변경. `symmetric`(clean-grounded SGM)은 **별도 게이트 트랙**이며 이 3-way 검증에 섞지 말 것: (1) **profiling 재실행** 필요(compatibility_matrix.json에 `matrix_symmetric` emit — 없으면 `--compat_mode symmetric`은 **hard-fail**), (2) τ는 symmetric [0,1] max-norm 스케일로 **사전스캔 재확정**(τ=0.5는 CPU 진단상 관측 cell 전멸거부/과통과 — `compat_gate_cpu_diagnosis_execute.md` 참조), (3) downstream metric 미입증(devnote `aroma_compat_gate_clean-grounded_redesign` §5·§6 게이팅).
 
 ### 4.2 random — 기존 copy-paste (무변경 통제군, CPU)
 
@@ -244,3 +245,4 @@ if seeds:
 - **오프라인 clean-bg cell inventory 인덱스**: compat 게이트 런타임 재계산 → 사전 인덱스(placement devnote 후속).
 - **CCI adaptive-range**(`aroma_step1_cci-adaptive-range.md`): 미구현, 독립 진행.
 - **confound 분리 ablation**(placement×selection): 이득 귀속 필요 시 별도 작성.
+- **compat_mode=symmetric 트랙 분리**(clean-grounded SGM 게이트, commit 6c8658f): 착수 전 (1) profiling 재실행(matrix_symmetric emit), (2) `compat_gate_cpu_diagnosis_execute.md` CPU 진단 통과(TV≥0.1·fallback 하락), (3) symmetric 스케일 τ 사전스캔 필요. 현행 3-way(defect)와 별도. leather는 cluster washout(0.13)로 cluster-무관 필터 degrade — 실측 확인됨. devnote §5-2.
