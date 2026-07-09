@@ -3,7 +3,7 @@
 > **목적**: commit `6c8658f`의 clean-grounded SGM 게이트를 쓰려면 `compatibility_matrix.json`에 신규 키(`matrix_symmetric`·`P_def_patch`·`clean_dist`·`symmetric_epsilon`)가 있어야 한다(없으면 `--compat_mode symmetric` **hard-fail**). 본 가이드는 profiling을 재실행해 이 키를 emit하고, 산출이 로컬 검증치와 일치하는지 확인한다.
 > **실행 환경**: Colab, **CPU**(SAM fallback 미사용 시 GPU 불요). MVTec/aitex/mtd/severstal ground_truth 마스크 사용.
 > **위치**: symmetric 트랙 3선결 중 (1). 이후 (2) `compat_gate_cpu_diagnosis_execute.md` CPU 진단 → (3) τ 사전스캔 → symmetric 활성.
-> **⚠️ drift 경고**: 재실행은 GMM 클러스터링·bin_edges를 **재계산**한다. GMM init 확률성으로 legacy `matrix`·`morphology_clusters`가 기존과 **미세하게 달라질 수 있고**, 이는 defect-mode(현행 3-way) 실험 baseline과 로컬 검증치(leather 5-cell 등)에도 영향. → **반드시 기존 profiling 백업 후 재실행하고 §4 drift 체크**.
+> **⚠️ drift 경고**: 재실행은 GMM 클러스터링·bin_edges를 **재계산**한다. GMM은 **시드 고정**(`random_state=42`, distribution_profiling.py:461)이라 **현 코드 run-to-run은 재현**되지만, **업로드된 구 profiling은 구 코드 산물**이라 cluster 수·라벨이 다를 수 있다(실측: leather 구=3클러스터[0·2 non-empty] vs 신=4클러스터[2·3 non-empty]). 이는 defect-mode(현행 3-way) baseline·로컬 검증치와 어긋남. → **기존 profiling 백업 후 재실행, §4 drift 체크. drift 시 defect-mode·symmetric 모두 신 profiling으로 통일(구 것 혼용 금지).** `matrix_symmetric` union은 patch 기반이라 cluster 재라벨과 무관하게 동일(leather 191 실측 재현).
 
 ---
 

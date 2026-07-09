@@ -63,6 +63,12 @@ matrix는 결함 이미지 배경의 P(cell|cluster). 게이트는 이걸 clean(
 placement 사실성을 건드리는 유일 경로 = compat 게이트뿐. SELECTION 재랭킹(`build_candidates` ctx_prior)은 실제로 바뀌나 **placement와 직교** — 게이트는 `cluster_id`로 row 선택(:2376), 선택된 cell_key가 위치를 제약 안 함. 위치는 여전히 random+reject(**Scenario B**). +H1(recombination no-info, severstal flat 실측).
 → **"기준분포만 교체"는 목표(배치 사실성)를 못 바꾼다.** 3 설계안(bayes-invert/clean-conditional/SGM) 모두 이 사유로 `survives=false`. 진짜 병목 = compat 공식이 아니라 **(A) granularity 불일치 + soft-fallback 구조**.
 
+### 발견 E — **build(64px) vs query(crop-size) 스케일 불일치 [미해결, SGM 미포함]**
+게이트 질의(`generate_defects._compat_ok` :919)는 clean-bg patch를 **결함 crop 크기 그대로**(`nrgb[py:py+crop_h, px:px+crop_w]`) 잘라 cell화한다. 그러나 matrix·bin_edges·clean_dist·P_def_patch는 **전부 64px patch**(`_context_worker` GRID_SIZE=64)로 학습된다. `_extract_context_features`(:207)는 patch 크기를 **정규화하지 않음**.
+- 5 feature 중 `frequency_energy`(`r=min(h,w)//4`+FFT 차원 의존)는 **강한 size 의존**; 극소 crop(예 8×8)은 LBP/FFT/variance 통계 무의미. → **같은 배경이라도 crop 크기가 64px에서 멀면 다른 cell로 분류** → 64px 학습 matrix 조회가 어긋남. 결함 크기 범위 넓은 셋(leather/mtd/aitex: ~8px~600px)에서 "적절한 위치" 판단 부정확.
+- ⚠️ **SGM/patch-gran(§3) 개선은 이 축을 안 고침** — build 측을 image-mean→64px-patch로만 바꿨고, build(64px) vs query(crop) 불일치는 그대로. 별개 갭.
+- **fix 방향(§7 TODO)**: footprint를 64px 타일로 덮어 각 타일 compat 집계(mean/min) = build·query 동일 스케일 + 실제 면적 커버(정합안). 대안: 위치중심 64px window / query resize→64(고주파 왜곡).
+
 ---
 
 ## 3. 확정 설계 — SGM + patch-granularity (clean_dist AND P_def)
@@ -165,6 +171,32 @@ patch-gran P_def + SGM + per-cluster max-norm 게이트를 good patch 조회로 
 - **washout(§3-1 ⚠️#1) — 실 cluster로 재검증 후 갈림**: leather **WASHOUT**(실 cluster 0·2 pairwise TV 0.130, 둘 다 compact_blob) / mtd 판별 유지(0.390). → leather 게이트는 cluster-무관 clean-plausibility 필터로 degrade. (초기 defect-type proxy "0.42 통과"는 오도, 정정됨.)
 - **support 15-vs-5 불일치 해소**: 실 bin_edges로 재현 시 image-mean support = **5(leather)/94(mtd) = 실 matrix 정확 일치**. 로컬 15는 재계산 bin_edges 아티팩트였음. fix-sim 위 수치도 실 bin_edges/cluster 기준 재산출(leather neutral 96.8→2.9%, mtd 69.5→6.9%).
 
+### 5-3. profiling 재검증 완료 (Colab 4종, 2026-07-09 — commit 6c8658f 실측)
+
+`profiling_symmetric_rebuild_verify_execute.md`로 4종 재실행 → 신규 4키 emit·정규화·support 확장 전부 확인:
+
+| DS | legacy matrix | matrix_symmetric | 확장 | 정규화 max | drift |
+| --- | --- | --- | --- | --- | --- |
+| leather | 5 | 191 | 38× | 1.0 (비어있지 않은 2 cluster) | 3→4 cluster (구 코드 profiling) |
+| mtd | 94 | 205 | 2.2× | 1.0 (5 cluster) | 없음 |
+| severstal | 107 | 203 | 1.9× | 1.0 (5 cluster) | 없음 |
+| aitex | 43 | 87 | 2.0× | 1.0 (5 cluster) | 미세(diag 40→43, 버전차) |
+
+→ **SGM 구현 실 Colab 확정 검증.** GMM 시드 고정(`random_state=42`)이라 run-to-run 재현; leather drift는 업로드 profiling이 구 코드 산물이었던 탓(비결정성 아님). matrix_symmetric union은 patch 기반이라 cluster 재라벨과 무관하게 동일. **defect-mode·symmetric 모두 신 profiling으로 통일 권장(구 것 혼용 금지).** ⚠️ CPU 진단(§5-1)·washout(§3-1)은 구 클러스터 기준 — 신 profiling(특히 leather 신 4-cluster)으로 재측정 필요.
+
+### 5-4. τ 사전스캔 (local, 2026-07-09 — 타일링-aware, symmetric, R=0.25)
+
+신 profiling(profiling_tobe) + 타일링 게이트 재현(gd._tile_anchors, mean) + crop 크기=morphology_features.defect_bbox로 good 배경 tiled mean-compat 분포 → R=0.25 percentile:
+
+| DS | ds_tau | cluster τ | neutral(미관측) | OK |
+| --- | --- | --- | --- | --- |
+| leather | **0.1148** | 2:0.102 / 3:0.128 | 0.8% | 2/2 |
+| mtd | **0.2348** | 0.20~0.25 (5 cluster) | 0.2~10% | 5/5 |
+
+- **τ=0.5 금지 실증**: 데이터 τ가 0.10~0.25로 훨씬 낮음(확률/max-norm 스케일). 전 cluster τ ∈ (agg_min, median)·non-degenerate·≠0.5 → OK.
+- **over-accept end-to-end 치료**: neutral leather 0.8%/mtd 0.2~10% — 개선 전(image-mean matrix+crop query) 95%/70% over-accept가 (patch-gran P_def → SGM → max-norm → 타일링) 체인으로 거의 소멸. 게이트 실제 물림 확정.
+- leather washout에도 τ 산출(cluster 2·3 유사값=cluster-무관 필터). caveat: crop 크기 morphology_features(pre-selection 전체) — Colab은 roi_selected 사용 권장. severstal/aitex는 Colab(§10).
+
 착수 후: threshold 사전스캔([[feedback_prescan_thresholds]]) → profiling 1회 재실행(신규 키 emit 확인) → Colab 소규모 생성으로 fallback률 하락·표적기각 로그 확인. 테스트 코드 신규 작성·pytest 금지(CLAUDE.md).
 
 ---
@@ -182,8 +214,12 @@ patch-gran P_def + SGM + per-cluster max-norm 게이트를 good patch 조회로 
 
 ## 7. TODO / 후속
 
-- [ ] `AROMA연구분석/colab_execute/`에 §5 CPU 진단 실행 가이드(.md) 작성 — H1(granularity)·H2(coverage)·H3(τ분해)·H4(steering)
-- [ ] 4종(leather/aitex/mtd/severstal) 진단 → coverage/accept 분해 표 → 데이터셋별 착수 판정
+- [x] `AROMA연구분석/colab_execute/`에 §5 CPU 진단 실행 가이드(.md) 작성 — `compat_gate_cpu_diagnosis_execute.md`
+- [x] profiling 재검증 가이드 `profiling_symmetric_rebuild_verify_execute.md` + 4종 Colab 재실행 완료(§5-3, support 확장 확인)
+- [ ] 4종(leather/aitex/mtd/severstal) 진단 → coverage/accept 분해 표 → 데이터셋별 착수 판정 (**신 profiling으로 재측정** — 5-1은 구 클러스터 기준)
+- [x] **발견 E 해소 — footprint 64px 타일링** (commit 6b027f7): `_tile_anchors` + `_compat_ok` 타일링(symmetric 한정, mean 집계). local 검증(leather/mtd): crop=64서 legacy와 0% 변화(통제), off-64서 cell 불일치 94~100%·out-of-support 21%→≤1% → 스케일 불일치 실측 치료. defect 모드 byte-identical.
+- [ ] **MEDIUM (리뷰 발견, 미해소)**: (a) **ControlNet AR-fallback copy_paste**(generate_defects.py:~1726) 호출이 compat_row/threshold/tile 미전달 → symmetric 모드서 AR-fallback 샘플은 게이트 완전 우회(기존 누락, 타일링과 무관). symmetric 게이트 균일 커버 원하면 배선 추가. (b) **대형 footprint perf**: ~970px footprint(1024 이미지)면 ~256 tile × max_bg_tries(20) ≈ 5k feature 추출/이미지. bounded·cheap(64×64)이나 곱셈적 — 대형 crop 많은 셋서 per-image 비용↑. tile cap 또는 anchor별 cell 캐시 고려(load-test 미측정).
 - [ ] τ data-driven 재보정
 - [ ] leather 제외 정책 확정(newpipe 가이드 반영)
+- [x] **positive placement (Scenario A, 3요건)** 구현 완료 (commit 362e7dd, symmetric 한정). `_positive_place`: fit-only 후보(요건1) + void-tile straddle 배제(요건2) + footprint mean-compat top-K rng 샘플(요건3-b, 슬라이딩 best-mean). local smoke PASS(fit/void 0위반, positive mean-compat≫random +0.4~0.69) + PNG 시각검증(`.claude/.etc/positive_place_viz/`). **잔여 MEDIUM**(우리 4셋 무영향): M2 texture+symmetric 동시 시 texture가 위치 steer 안 함, M3 foreground 제약 생략(full-frame이라 no-op). **H1 downstream 판정 여전 미실행** — positive placement가 mAP 올리는지는 exp4v2 A/B 필요.
 - [ ] (별도 devnote) positive steering = Scenario A 배치기하 재설계 — **CASDA 기전 정정**(workflow 확인): CASDA placement 사실성은 배경선택(get_compatible_background compose_casda_images.py:562)이 아니라 **소스좌표 보존**(_compose_single_task: x1_j=원본 x1+jitter±100 :842, y1=원본 소스 y 유지 :867, scale 0.875~1.0)에서 나옴. "결함을 원본이 있던 좌표대로(소폭 jitter) 재배치"가 양의 배치기하의 원천 — AROMA random+reject(Scenario B) 대비 실제 lever. Scenario A 재설계는 배경선택이 아니라 **ROI별 원본 좌표 메타 보존 → paste 위치 prior** 방향으로 착안.

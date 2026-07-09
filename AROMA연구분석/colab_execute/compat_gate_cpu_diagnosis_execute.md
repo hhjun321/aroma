@@ -269,3 +269,138 @@ generate_defects.py --compat_threshold <τ>  vs  --compat_threshold 0  두 번 �
 - **4종 전부 실행**(leather/aitex/mtd/severstal) 후 §8 표로 데이터셋별 판정 — cherry-pick 금지.
 - 결과 표를 devnote `aroma_compat_gate_clean-grounded_redesign` §5에 append하고 착수 여부 확정.
 - 부하 측정 항목(H4 대량화)은 자동 실행 안 함(load-test 정책).
+
+---
+
+## §10. τ 사전스캔 — symmetric 스케일 + 타일링-aware (compat_mode=symmetric 전용)
+
+> **목적**: `compat_mode=symmetric`에서 데이터셋별 `compat_threshold` τ를 **데이터로 확정**([[feedback_prescan_thresholds]]). `matrix_symmetric`은 per-cluster max-norm으로 [0,1]이나 **τ=0.5 금지**(0.5=legacy 확률 스케일 중립값). τ는 good 배경의 실제 tiled mean-compat 분포에서 목표 reject율 percentile로.
+> **타일링-aware**: 게이트 symmetric 경로(`_compat_ok`, generate_defects.py)와 **동일** — footprint를 64px window(`_tile_anchors`)로 덮어 cell compat mean 집계. 사전스캔이 이를 그대로 재현.
+> **무결성**: 목표 reject율 **R=0.25를 수치 보기 전 고정**. R20/R30은 민감도 참고. **신 profiling(`matrix_symmetric`) 필수** — 구 profile hard-fail. severstal/aitex 大 → Colab만.
+
+### 10.1 로드 (§1·§2 이어서 — matrix_symmetric + 타일링 헬퍼)
+
+```python
+import os, sys, json, csv, numpy as np, collections, random
+os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', f"{os.environ['AROMA_REF']}/dataset_config.json")
+with open(os.environ['DATASET_CONFIG']) as f: _dscfg = json.load(f)
+os.environ['NORMAL_DIR'] = _dscfg[os.environ['DS']]['image_dir']
+os.environ['ROI_SELECTED'] = f"{os.environ['SEL_AROMA']}/roi_selected.json"   # 실 crop 크기 출처
+for k in ('NORMAL_DIR','ROI_SELECTED','COMPAT_JSON'):
+    print(k, '=', os.environ[k], ' exists:', os.path.exists(os.environ[k]))
+
+sys.path.insert(0, f"{os.environ['AROMA_REF']}/scripts")
+sys.path.insert(0, f"{os.environ['AROMA_REF']}/scripts/aroma")
+import distribution_profiling as dp
+import generate_defects as gd
+_tile_anchors = gd._tile_anchors; TILE = gd._COMPAT_TILE; AGG = gd._COMPAT_TILE_AGG
+print(f"tiling: TILE={TILE} AGG={AGG}")
+
+compat = json.load(open(os.environ['COMPAT_JSON']))
+msym = compat.get('matrix_symmetric')
+if msym is None:
+    raise SystemExit("matrix_symmetric 없음 — 구 profile. distribution_profiling 재실행 필요.")
+bin_edges = compat['bin_edges']; FEATS = dp.CONTEXT_FEATURES
+clusters = [c for c, r in msym.items() if r]
+print(f"clusters(비어있지않음)={clusters}")
+for c in clusters:
+    r = msym[c]; print(f"  cluster {c}: {len(r)} cells compat[{min(r.values()):.3f},{max(r.values()):.3f}]")
+```
+
+### 10.2 실 crop 크기 + good 이미지
+
+```python
+import cv2
+from pathlib import Path
+IMG_EXTS = {'.png','.jpg','.jpeg','.bmp','.tif','.tiff'}
+sel = json.load(open(os.environ['ROI_SELECTED']))
+crop_sizes = [(int(e['defect_bbox'][2]), int(e['defect_bbox'][3])) for e in sel
+              if isinstance(e.get('defect_bbox'), (list,tuple)) and len(e['defect_bbox'])==4
+              and int(e['defect_bbox'][2])>0 and int(e['defect_bbox'][3])>0]
+assert crop_sizes, "roi_selected defect_bbox 크기 없음"
+_cw=np.array([c[0] for c in crop_sizes]); _ch=np.array([c[1] for c in crop_sizes])
+print(f"실 crop n={len(crop_sizes)} w[{_cw.min()}/{int(np.median(_cw))}/{_cw.max()}] h[{_ch.min()}/{int(np.median(_ch))}/{_ch.max()}]")
+
+N_GOOD, M_POS, SEED = 60, 40, 42
+rng = random.Random(SEED)
+good_paths = sorted(str(p) for p in Path(os.environ['NORMAL_DIR']).rglob('*') if p.suffix.lower() in IMG_EXTS)
+if len(good_paths) > N_GOOD: good_paths = rng.sample(good_paths, N_GOOD)
+print(f"good 이미지: {len(good_paths)}")
+```
+
+### 10.3 타일링 mean-compat 분포 (게이트 재현)
+
+```python
+_cell_cache = {}
+def _cell_at(gray, gi, ax, ay):
+    key=(gi,ax,ay); v=_cell_cache.get(key)
+    if v is None:
+        v = dp._context_cell_key(dp._extract_context_features(gray[ay:ay+TILE, ax:ax+TILE]), bin_edges)
+        _cell_cache[key]=v
+    return v
+
+footprints=[]
+for gi, gp in enumerate(good_paths):
+    g = cv2.imread(gp, cv2.IMREAD_GRAYSCALE)
+    if g is None: continue
+    H,W = g.shape[:2]
+    for _ in range(M_POS):
+        cw,ch = crop_sizes[rng.randrange(len(crop_sizes))]
+        if cw>W or ch>H:                       # rescale-to-fit 재현
+            s=min(W/cw,H/ch)*0.95; cw,ch=max(1,int(cw*s)),max(1,int(ch*s))
+        px,py = rng.randint(0,max(0,W-cw)), rng.randint(0,max(0,H-ch))
+        cells=[_cell_at(g,gi,ax,ay) for ay in _tile_anchors(py,ch,H,TILE) for ax in _tile_anchors(px,cw,W,TILE)]
+        if cells: footprints.append(cells)
+print(f"footprint 샘플={len(footprints)} (cell 캐시={len(_cell_cache)})")
+
+def _agg(cells,row):
+    vals=[float(row.get(c,0.5)) for c in cells]
+    return min(vals) if AGG=='min' else sum(vals)/len(vals)
+agg_by_cluster={c: np.array([_agg(cells,msym[c]) for cells in footprints]) for c in clusters}
+```
+
+### 10.4 목표 reject율 → τ (percentile)
+
+```python
+R_PRIMARY=0.25                       # 채택값 (수치 보기 전 고정)
+def _tau_at(a,R): return float(np.percentile(a, R*100.0))
+print(f"[τ 사전스캔] R={R_PRIMARY} AGG={AGG}\n")
+TAU={}
+for c in clusters:
+    a=agg_by_cluster[c]; amin,amed,amax=float(a.min()),float(np.median(a)),float(a.max())
+    neutral=float(np.mean(a==0.5)); tau=_tau_at(a,R_PRIMARY)
+    rej=float(np.mean(a<tau)); acc=1-rej
+    q25,q50=_tau_at(a,0.25),_tau_at(a,0.50); degen=abs(q25-q50)<1e-6
+    ok=(amin<=tau<amed) and (not degen) and (abs(tau-0.5)>1e-6)
+    verdict="OK" if ok else ("DEGENERATE" if degen else ("τ≈0.5" if abs(tau-0.5)<=1e-6 else "범위이탈"))
+    TAU[c]={'tau':round(tau,4),'accept':round(acc,3),'reject':round(rej,3),
+            'agg_min':round(amin,4),'agg_med':round(amed,4),'agg_max':round(amax,4),
+            'neutral':round(neutral,3),'verdict':verdict,
+            'tau_R20':round(_tau_at(a,0.20),4),'tau_R30':round(_tau_at(a,0.30),4)}
+    print(f" cluster {c}: τ={tau:.4f} acc={acc*100:4.1f}% rej={rej*100:4.1f}% "
+          f"agg[{amin:.3f}/{amed:.3f}/{amax:.3f}] neutral={neutral*100:4.1f}% → {verdict} "
+          f"(R20={TAU[c]['tau_R20']:.4f} R30={TAU[c]['tau_R30']:.4f})")
+ok_taus=[TAU[c]['tau'] for c in clusters if TAU[c]['verdict']=='OK']
+ds_tau=round(float(np.median(ok_taus)),4) if ok_taus else None
+print(f"\n데이터셋 대표 τ (OK median)={ds_tau} ({len(ok_taus)}/{len(clusters)} OK)")
+```
+
+### 10.5 저장 · 판정
+
+```python
+res={'DS':os.environ['DS'],'mode':'symmetric','agg':AGG,'tile':TILE,'R_primary':R_PRIMARY,
+     'seed':SEED,'n_footprints':len(footprints),'n_good':len(good_paths),'crop_n':len(crop_sizes),
+     'per_cluster':TAU,'ds_tau':ds_tau,'n_ok':len(ok_taus),'n_cluster':len(clusters)}
+out=f"{os.environ['OUT_DIR']}/compat_tau_prescan_{os.environ['DS']}.json"
+json.dump(res, open(out,'w'), indent=2, ensure_ascii=False)
+print("저장:",out,"→ 채택 τ=",ds_tau,"(--compat_mode symmetric --compat_threshold)")
+```
+
+| 관측 | 판정 | 조치 |
+|---|---|---|
+| 다수 cluster **OK**, ds_tau ∈ (agg_min, median) | τ 확정 성공 | `--compat_mode symmetric --compat_threshold <ds_tau>` |
+| 다수 **DEGENERATE** | tiled-compat 한 점 집중 → 무판별 | 해당 DS 게이트 무의미 — 착수 보류 |
+| 다수 **τ≈0.5** | neutral 질량 지배 | §3-1 patch-gran support·profiling 재점검(τ 교정 불가) |
+| R20/R30 폭 큼 | 분포 평탄 | R=0.25 고정, 사후 변경 금지 |
+
+> **재현 스케일**: `gd._tile_anchors`·`TILE=64`·`AGG=mean`·`dp._context_cell_key/_extract_context_features` = 게이트 `_compat_ok` symmetric 경로와 동일. crop 크기는 roi_selected `defect_bbox` 전역 분포 + rescale-to-fit 재현. 위치는 uniform(random+reject 프록시). cell은 cluster-무관이라 crop↔cluster 결합은 2차 효과(정직 표기).
