@@ -745,6 +745,57 @@ def _load_context_cell_helpers() -> tuple:
     return _CTX_CELL_HELPERS
 
 
+# Compat-gate tiling (compat_mode=='symmetric' only). The compatibility matrix
+# and bin_edges are learned on 64px patches (distribution_profiling
+# _context_worker, GRID_SIZE=64), but the legacy gate query cropped the patch at
+# the DEFECT crop size — a scale mismatch that misclassifies the cell on
+# size-heterogeneous sets (devnote §2 finding E). When tiling is on the defect
+# footprint is covered by full 64px windows queried at the SAME scale the matrix
+# was built at, and their compat values are aggregated. 'mean' = average
+# background suitability over the footprint (default); 'min' = strictest tile
+# (safer against over-reject on large defects — alternative, not default).
+_COMPAT_TILE = 64
+_COMPAT_TILE_AGG = "mean"  # 'mean' (default) | 'min' (strict alternative)
+
+
+def _tile_anchors(start: int, length: int, bound: int, tile: int = 64) -> List[int]:
+    """Window start-coordinates that cover footprint [start, start+length) with
+    full ``tile``-wide windows, each lying inside the image axis [0, bound).
+
+    - Every returned anchor ``a`` satisfies 0 <= a <= bound-tile, so window
+      [a, a+tile) is fully in-image (when bound >= tile).
+    - The windows' union covers the whole footprint span; the final window is
+      positioned to cover the footprint end.
+    - ``length < tile``  → a single window centred on the footprint, clamped
+      in-image.
+    - ``bound <= tile``  → ``[0]`` (image is not wider than one tile on this
+      axis; the caller slices what exists).
+
+    Pure / deterministic — no rng. Anchors are de-duplicated, order preserved.
+    """
+    if bound <= tile:
+        return [0]
+    max_a = bound - tile
+    if length < tile:
+        center = start + length / 2.0
+        a = int(round(center - tile / 2.0))
+        return [max(0, min(a, max_a))]
+    end = start + length
+    anchors: List[int] = []
+    a = start
+    # Step by tile across the footprint; stop once a window would already reach
+    # the footprint end (that tail is covered by the final anchor below).
+    while a + tile < end:
+        ca = max(0, min(a, max_a))
+        if ca not in anchors:
+            anchors.append(ca)
+        a += tile
+    last = max(0, min(end - tile, max_a))
+    if last not in anchors:
+        anchors.append(last)
+    return anchors
+
+
 def _foreground_paste_position(
     fg_mask: np.ndarray,
     bg_size: Tuple[int, int],
@@ -818,6 +869,7 @@ def _paste_and_finalize(
     compat_row: Optional[Dict[str, float]] = None,
     bin_edges: Optional[Dict[str, List[float]]] = None,
     compat_threshold: float = 0.0,
+    compat_tile: bool = False,
 ) -> Dict[str, Any]:
     """Shared placement + blending + GT-mask tail used by every synthesis method.
 
@@ -915,9 +967,32 @@ def _paste_and_finalize(
             # form fails on sets whose defect context is rare in clean patches
             # (leather 4.7% coverage → ~95% fallback). Returns True on any
             # failure so a descriptor error never rejects a usable placement.
+            #
+            # compat_tile (symmetric mode only): the matrix/bin_edges were built
+            # on 64px patches, so query at that SAME scale — cover the defect
+            # footprint with full 64px windows (_tile_anchors, clamped in-image)
+            # and aggregate each window's compat. Legacy (compat_tile=False):
+            # query the crop-size patch, byte-identical to the historical gate.
             px, py = pos_xy
-            patch = nrgb[py:py + crop_h, px:px + crop_w]
             try:
+                if compat_tile:
+                    h_img, w_img = nrgb.shape[:2]
+                    ys = _tile_anchors(py, crop_h, h_img, _COMPAT_TILE)
+                    xs = _tile_anchors(px, crop_w, w_img, _COMPAT_TILE)
+                    vals: List[float] = []
+                    for ay in ys:
+                        for ax in xs:
+                            win = nrgb[ay:ay + _COMPAT_TILE, ax:ax + _COMPAT_TILE]
+                            g = (cv2.cvtColor(win, cv2.COLOR_RGB2GRAY)
+                                 if win.ndim == 3 else win)
+                            cell = _cell_key_fn(_ctx_feat_fn(g), bin_edges)
+                            vals.append(float(compat_row.get(cell, 0.5)))
+                    if not vals:
+                        return True
+                    agg = (min(vals) if _COMPAT_TILE_AGG == "min"
+                           else sum(vals) / len(vals))
+                    return agg >= compat_threshold
+                patch = nrgb[py:py + crop_h, px:px + crop_w]
                 gray = cv2.cvtColor(patch, cv2.COLOR_RGB2GRAY) if patch.ndim == 3 else patch
                 cell = _cell_key_fn(_ctx_feat_fn(gray), bin_edges)
                 return float(compat_row.get(cell, 0.5)) >= compat_threshold
@@ -1102,6 +1177,7 @@ def copy_paste_synthesis(
     compat_row: Optional[Dict[str, float]] = None,
     bin_edges: Optional[Dict[str, List[float]]] = None,
     compat_threshold: float = 0.0,
+    compat_tile: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Paste the defect region from roi_entry onto the normal image.
@@ -1241,6 +1317,7 @@ def copy_paste_synthesis(
             compat_row=compat_row,
             bin_edges=bin_edges,
             compat_threshold=compat_threshold,
+            compat_tile=compat_tile,
         )
 
     except Exception as exc:
@@ -1794,6 +1871,7 @@ def controlnet_synthesis(
             compat_row=kwargs.get("compat_row"),
             bin_edges=kwargs.get("bin_edges"),
             compat_threshold=kwargs.get("compat_threshold", 0.0),
+            compat_tile=kwargs.get("compat_tile", False),
         )
         if meta:
             stats["gen_ok"] += 1
@@ -2419,6 +2497,9 @@ def run(
                 compat_row=compat_row,
                 bin_edges=compat_bin_edges,
                 compat_threshold=compat_threshold,
+                # 64px footprint tiling only in symmetric mode; defect mode keeps
+                # the legacy crop-size query byte-identical (devnote §finding E).
+                compat_tile=(compat_mode == "symmetric"),
             )
             if meta:
                 n_ok += 1
