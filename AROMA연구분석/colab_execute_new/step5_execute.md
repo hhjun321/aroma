@@ -218,7 +218,8 @@ copy-paste 피벗(무학습 기판)용 경로. ControlNet 생성 대신 **결함
 
 - **선결이 더 가볍다**: ControlNet 학습(step4b, GPU) **불요**. phase0·step1~3·step3.5 + (compat 쓰면) step4c τ만 있으면 된다. **GPU 불필요(CPU)**.
 - **공통**: `--method copy_paste` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <…>`(positive placement, method-무관) + `--blend_mode seamless`(또는 `alpha`) + `--n_per_roi 3 --seed 42`.
-- **CN 전용 인자 미사용**: `--controlnet_path`·`--morphology_csv`·`--context_features`·`--config`(CN conditioning), `--cn_ar_threshold`·`--cn_no_grayscale`(ControlNet squash/그레이스케일 전용) 모두 **넣지 않는다**(copy_paste는 squash가 없어 AR 폴백 자체가 없음).
+- **CN 전용 인자 미사용**: `--controlnet_path`·`--morphology_csv`·`--context_features`(CN conditioning), `--cn_ar_threshold`·`--cn_no_grayscale`(ControlNet squash/그레이스케일 전용)는 **넣지 않는다**(copy_paste는 squash가 없어 AR 폴백 자체가 없음).
+- **⚠️ `--config $PROF/recommended_config.yaml`는 필수(compat 사용 시)**: compat 게이트는 `--compat_matrix_json` **그리고 `--config`**(bin_edges/context 이산화)를 **둘 다** 요구한다. `--config`가 없으면 `compat gate: … requires --compat_matrix_json AND --config — gate disabled` 경고와 함께 **placement 게이트가 조용히 꺼진다**(clean_bg 배경 소비는 유지되나 위치 게이트 무효). 로컬 검증: `--config` 포함 시 `compat gate ON` + `placement-gate active=40`, 누락 시 `active=0`.
 - **aitex 텍스처 게이트만** 선택 적용: `--texture-dist-threshold $TEX_T`(텍스처 이질 배치 거부는 method-무관). AR 게이트는 미적용.
 - **`--local_staging` 사용 가능**(CPU 경로).
 - **출력**: controlnet과 **택일**이면 `S('synth_aroma', DS)`. 두 방법을 **비교**하려면 output_dir을 분리(예: `S('synth_aroma_cp', DS)`)해 exp*에서 각각 `--aroma_synthetic_dir`로 지정.
@@ -228,6 +229,7 @@ DATASETS_GEN = DATASETS   # 세션 분리 시 좁힘
 
 for DS in DATASETS_GEN:
     os.environ['DS']     = DS
+    os.environ['PROF']   = S('profiling', DS)
     os.environ['ROI']    = S('roi', DS)
     os.environ['NORMAL'] = normal_dir(DS)
     os.environ['OUT']    = S('synth_aroma', DS)     # controlnet과 비교 시 별도 dir(예: 'synth_aroma_cp')
@@ -240,6 +242,7 @@ for DS in DATASETS_GEN:
         --normal_dir  $NORMAL \
         --output_dir  $OUT \
         --method      copy_paste \
+        --config      $PROF/recommended_config.yaml \
         --n_per_roi 3 --seed 42 --blend_mode seamless \
         --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
         --compat_mode symmetric --compat_threshold $TAU \
@@ -248,7 +251,7 @@ for DS in DATASETS_GEN:
         $EXTRA
 ```
 
-> **compat 없이(순수 clean_bg 배치)** 돌리려면 `--compat_mode`·`--compat_threshold`·`--compat_matrix_json`을 빼면 된다(그러면 step4c τ도 불요 → phase0·step1~3·step3.5만으로 완결). 단 exp에서 controlnet arm과 비교할 때는 **placement 게이트를 맞춰야** 공정하다.
+> **compat 없이(순수 clean_bg 배치)** 돌리려면 `--compat_mode`·`--compat_threshold`·`--compat_matrix_json`·`--config`를 모두 빼면 된다(그러면 step4c τ도 불요 → phase0·step1~3·step3.5만으로 완결). 단 exp에서 controlnet arm과 비교할 때는 **placement 게이트를 맞춰야** 공정하다.
 > **활성 확인(로그)**: STEP 3과 동일하게 `clean_bg assignment ON` + `clean_bg resolve used/fallback/mismatch` 확인. `placement-gate stats: fallback=M%`도 동일 적용. `controlnet stats`·`ar_fallback`은 copy_paste에선 나오지 않는다(정상).
 > **정직성**: copy_paste는 생성 novelty가 없다(원본 crop 재조합). exp3(FID/생성품질)에서 controlnet arm과 절대비교하지 말고, AROMA ROI-선택·배치 기여(exp4v2 mAP)로 판정한다.
 
