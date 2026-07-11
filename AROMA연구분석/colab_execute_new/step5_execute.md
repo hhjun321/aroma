@@ -2,19 +2,22 @@
 
 > 이 문서는 `colab_execute_new/_SPEC.md`를 **정본**으로 따른다. STEP 0 환경 셀은 `_SPEC §1`을 그대로 복사한 것이며, 명령은 `_SPEC §3 step5`만 사용한다. env·output 루트 규약을 재발명하지 않는다.
 
-**목적**: exp4v2/exp3/exp5/exp6가 소비할 **합성물 2종**을 생성한다.
-- **AROMA arm** (`generate_defects.py --method controlnet` + `--compat_mode symmetric`): ControlNet 생성 + SGM matrix_symmetric + 64px 타일링 query + positive placement + clean-bg 게이트 + seamless 블렌딩. → `S('synth_aroma', ds)`
-- **random arm** (`generate_random.py`, 통제군): 동일 clean-bg 게이트. → `S('synth_random', ds)`
+**목적**: exp4v2/exp3/exp5/exp6가 소비할 합성물을 생성한다. AROMA arm은 **두 생성 방법**을 모두 지원하며(reviewer 대응 — 무학습 copy_paste vs 생성형 ControlNet 비교), 여기에 통제군 random arm을 더해 최대 3종을 만든다.
 
-**중요 — step5는 소비만 한다 (재사전스캔 금지)**: τ 사전스캔·(aitex) AR/텍스처 게이트 임계·ControlNet 학습은 **step4에서 이미 확정**됐다. step5는 이 확정값을 **읽어서 소비만** 한다. step5에서 τ·AR·TEX를 다시 스캔하지 않는다(`_SPEC §5` prescan 필수 원칙, aitex 98% 폴백 교훈).
+- **AROMA arm — ControlNet** (STEP 3, `--method controlnet` + `--compat_mode symmetric`, **GPU**): ControlNet 생성 + SGM matrix_symmetric + 64px 타일링 query + positive placement + clean-bg 게이트 + seamless. → `S('synth_aroma', ds)` (또는 비교 시 `synth_aroma_cn`).
+- **AROMA arm — copy_paste** (STEP 3B, `--method copy_paste`, **CPU·무학습**): 원본 crop을 clean-bg에 직접 합성. **동일한** clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비. ControlNet 학습 불요. → 비교 시 `S('synth_aroma_cp', ds)`.
+- **random arm** (STEP 4, `generate_random.py`, 통제군): 동일 clean-bg 게이트. → `S('synth_random', ds)`.
 
-**실행 환경**: AROMA arm 생성(ControlNet) = **GPU 필수**(Colab Pro A100 권장) | random arm = CPU.
+> **두 방법 대응(reviewer)**: 논문 피벗은 무학습 copy_paste가 주 방법, ControlNet은 생성형 대조(future-work 근거). reviewer가 "생성형 대비 무학습의 기여"를 물으면 **동일 ROI·동일 clean_bg·동일 placement 게이트** 하에 두 arm을 각각 생성해 exp4v2/exp3에서 나란히 보고한다(placement 게이트를 맞춰야 공정). AROMA ROI-선택·배치 기여는 두 방법 공통이고, ControlNet은 여기에 생성 novelty만 더한다.
 
-**전제 — step4 완료**: 데이터셋별로 아래가 모두 존재해야 한다(아래 선결 assert가 검증).
-- `$CN_MODELS/{ds}/best_model/` (step4 ControlNet 학습본)
-- `S('profiling',ds)/compatibility_matrix.json` 에 `matrix_symmetric` 키 (없으면 symmetric 모드 hard-fail)
-- `S('compat_gate',ds)/compat_tau_prescan_{ds}.json` 의 `ds_tau` (τ 사전스캔 확정값)
-- (**aitex 전용**) `S('compat_gate','aitex')/ar_tex_prescan_aitex.json` 의 `ar_threshold`·`tex_threshold` (step4에서 확정한 AR/텍스처 게이트 임계)
+**중요 — step5는 소비만 한다 (재사전스캔 금지)**: τ 사전스캔·(aitex) AR/텍스처 게이트 임계·ControlNet 학습은 **step4에서 이미 확정**됐다. step5는 이 확정값을 **읽어서 소비만** 한다(`_SPEC §5` prescan 필수 원칙, aitex 98% 폴백 교훈).
+
+**실행 환경**: ControlNet arm = **GPU 필수**(Colab Pro A100 권장) | copy_paste arm·random arm = **CPU**.
+
+**전제 (방법별로 다름)**:
+- **공통(두 방법)**: `S('profiling',ds)/compatibility_matrix.json`의 `matrix_symmetric` 키(없으면 symmetric hard-fail), `S('roi',ds)/roi_selected.json`·`clean_bg_selected.json`(step3·step3.5), `compat_mode symmetric`일 때 `S('compat_gate',ds)/compat_tau_prescan_{ds}.json`의 `ds_tau`(step4c).
+- **ControlNet 전용 추가**: `$CN_MODELS/{ds}/best_model/`(step4b 학습본), (**aitex**) `ar_tex_prescan_aitex.json`의 `ar_threshold`·`tex_threshold`.
+- **copy_paste는 CN 학습본·AR 임계 불요** — ControlNet 학습(step4b)을 건너뛴다. (aitex 텍스처 게이트 `tex_threshold`만 선택 사용.)
 
 **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex = tiled(256×256/stride128, single-class).
 
@@ -78,6 +81,11 @@ step4가 확정한 값을 **읽어들이고**(재스캔 금지), 없으면 hard-
 ```python
 import pathlib, json
 
+# 생성할 AROMA arm 방법. 둘 다면 ["controlnet","copy_paste"], 무학습만이면 ["copy_paste"].
+METHODS = ["controlnet", "copy_paste"]
+USE_CN = "controlnet" in METHODS          # CN 학습본·AR 임계 필요 여부
+USE_COMPAT = True                          # compat_mode symmetric 사용(τ 필요). False면 순수 clean_bg 배치.
+
 TAU_BY_DS = {}
 AR_T = TEX_T = None
 missing = []
@@ -85,15 +93,18 @@ missing = []
 for DS in DATASETS:
     prof = S('profiling', DS)
     checks = {
-        "CN best_model":         f"{os.environ['CN_MODELS']}/{DS}/best_model",
         "compatibility_matrix":  f"{prof}/compatibility_matrix.json",
         "morphology_features":   f"{prof}/morphology_features.csv",
         "context_features":      f"{prof}/context_features.csv",
         "recommended_config":    f"{prof}/recommended_config.yaml",
         "roi_selected":          f"{S('roi', DS)}/roi_selected.json",
         "roi_candidates":        f"{S('roi', DS)}/roi_candidates.json",
-        "tau_prescan":           f"{S('compat_gate', DS)}/compat_tau_prescan_{DS}.json",
+        "clean_bg_selected":     f"{S('roi', DS)}/clean_bg_selected.json",   # step3.5 (두 방법 공통)
     }
+    if USE_CN:      # ControlNet 경로만 학습본 필수
+        checks["CN best_model"] = f"{os.environ['CN_MODELS']}/{DS}/best_model"
+    if USE_COMPAT:  # compat symmetric placement 쓸 때만 τ 필수
+        checks["tau_prescan"] = f"{S('compat_gate', DS)}/compat_tau_prescan_{DS}.json"
     print(f"\n=== {DS} ({'multi' if is_multi(DS) else 'single'}) ===")
     for name, p in checks.items():
         ok = pathlib.Path(p).exists()
@@ -109,31 +120,31 @@ for DS in DATASETS:
         assert 'matrix_symmetric' in cj, \
             f"{DS}: matrix_symmetric 없음 → phase0(symmetric emit) 재실행 필요. --compat_mode symmetric는 hard-fail."
 
-    # τ 로드 (ds_tau) — 재스캔 금지, step4 확정값 소비. τ=0.5 금지.
-    tp = checks["tau_prescan"]
-    if pathlib.Path(tp).exists():
-        tau = json.load(open(tp)).get('ds_tau')
-        assert tau is not None and 0.0 < tau < 0.5, \
-            f"{DS}: τ 이상({tau}) — step4 §τ 사전스캔 재확인 (τ=0.5/None 금지)"
-        assert abs(tau - 0.5) > 1e-9, f"{DS}: τ=0.5 금지 (사전스캔 미실행 폴백 의심)"
-        TAU_BY_DS[DS] = float(tau)
-        print(f"  τ(ds_tau) = {tau}")
+    # τ 로드 (ds_tau) — compat symmetric 쓸 때만. 재스캔 금지, τ=0.5 금지.
+    if USE_COMPAT:
+        tp = checks["tau_prescan"]
+        if pathlib.Path(tp).exists():
+            tau = json.load(open(tp)).get('ds_tau')
+            assert tau is not None and 0.0 < tau < 0.5, \
+                f"{DS}: τ 이상({tau}) — step4c τ 사전스캔 재확인 (τ=0.5/None 금지)"
+            TAU_BY_DS[DS] = float(tau)
+            print(f"  τ(ds_tau) = {tau}")
 
-# aitex 전용: AR/텍스처 게이트 임계 (step4 확정값) — 재스캔 금지
+# aitex 전용 AR/텍스처 임계 — ControlNet 경로만 AR 사용(copy_paste는 텍스처만 선택). 재스캔 금지.
 ar_p = f"{S('compat_gate', 'aitex')}/ar_tex_prescan_aitex.json"
 print(f"\n=== aitex AR/TEX 게이트 임계 ===\n  {'✓' if pathlib.Path(ar_p).exists() else '✗'} {ar_p}")
 if pathlib.Path(ar_p).exists():
     _at = json.load(open(ar_p))
     AR_T, TEX_T = _at.get('ar_threshold'), _at.get('tex_threshold')
-    assert AR_T is not None and TEX_T is not None, "aitex AR_T/TEX_T 누락 → step4 AR/텍스처 사전스캔 재확인"
-    print(f"  AR_T={AR_T}  TEX_T={TEX_T}  (step4 확정값 — step5 재스캔 금지)")
-else:
+    print(f"  AR_T={AR_T}  TEX_T={TEX_T}  (step4c 확정값 — step5 재스캔 금지)")
+elif USE_CN:   # ControlNet + aitex면 AR 임계 필수
     missing.append(f"aitex:ar_tex_prescan → {ar_p}")
 
 print("\nMISSING:", len(missing))
 for m in missing: print("  -", m)
-assert not missing, "선결 산출 누락 — step4(CN 학습 + τ·AR/TEX 사전스캔) 먼저 완료할 것"
-assert set(TAU_BY_DS) == set(DATASETS), f"τ 미로드 데이터셋 존재: {set(DATASETS) - set(TAU_BY_DS)}"
+assert not missing, f"선결 산출 누락 — METHODS={METHODS}: 필요한 상류(step3.5/step4c{'/step4b CN' if USE_CN else ''}) 먼저 완료할 것"
+if USE_COMPAT:
+    assert set(TAU_BY_DS) == set(DATASETS), f"τ 미로드 데이터셋 존재: {set(DATASETS) - set(TAU_BY_DS)}"
 print("\n✓ 선결 OK — TAU_BY_DS =", {k: round(v, 4) for k, v in TAU_BY_DS.items()})
 ```
 
@@ -198,6 +209,48 @@ for DS in DATASETS_GEN:
 > - `placement-gate stats: fallback=M%` — positive placement(scan·rank·place). fallback 과다(>50%)면 τ 과대 의심 → step4 사전스캔 재확인(step5에서 튜닝 금지).
 > - (aitex) `controlnet stats`(gen_ok / ar_fallback / blank_rate) + `texture-gate stats` — AR 폴백·텍스처 게이트 동작.
 > - severstal 수천 장 = 수 시간. 캐시 재개 가능(동일 셀 재실행).
+
+---
+
+## STEP 3B — AROMA arm 생성 (copy_paste, 무학습·CPU) — 대안 경로
+
+copy-paste 피벗(무학습 기판)용 경로. ControlNet 생성 대신 **결함 crop을 clean-bg에 직접 합성**한다. STEP 3(controlnet)과 **동일한 clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비**를 쓰되, 생성 방식만 copy_paste다.
+
+- **선결이 더 가볍다**: ControlNet 학습(step4b, GPU) **불요**. phase0·step1~3·step3.5 + (compat 쓰면) step4c τ만 있으면 된다. **GPU 불필요(CPU)**.
+- **공통**: `--method copy_paste` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <…>`(positive placement, method-무관) + `--blend_mode seamless`(또는 `alpha`) + `--n_per_roi 3 --seed 42`.
+- **CN 전용 인자 미사용**: `--controlnet_path`·`--morphology_csv`·`--context_features`·`--config`(CN conditioning), `--cn_ar_threshold`·`--cn_no_grayscale`(ControlNet squash/그레이스케일 전용) 모두 **넣지 않는다**(copy_paste는 squash가 없어 AR 폴백 자체가 없음).
+- **aitex 텍스처 게이트만** 선택 적용: `--texture-dist-threshold $TEX_T`(텍스처 이질 배치 거부는 method-무관). AR 게이트는 미적용.
+- **`--local_staging` 사용 가능**(CPU 경로).
+- **출력**: controlnet과 **택일**이면 `S('synth_aroma', DS)`. 두 방법을 **비교**하려면 output_dir을 분리(예: `S('synth_aroma_cp', DS)`)해 exp*에서 각각 `--aroma_synthetic_dir`로 지정.
+
+```python
+DATASETS_GEN = DATASETS   # 세션 분리 시 좁힘
+
+for DS in DATASETS_GEN:
+    os.environ['DS']     = DS
+    os.environ['ROI']    = S('roi', DS)
+    os.environ['NORMAL'] = normal_dir(DS)
+    os.environ['OUT']    = S('synth_aroma', DS)     # controlnet과 비교 시 별도 dir(예: 'synth_aroma_cp')
+    os.environ['COMPAT'] = f"{S('profiling', DS)}/compatibility_matrix.json"
+    os.environ['TAU']    = str(TAU_BY_DS[DS])        # step4c 확정 τ (compat_mode symmetric일 때)
+    os.environ['EXTRA']  = f"--texture-dist-threshold {TEX_T}" if DS == "aitex" else ""  # 텍스처 게이트만
+    print(f"\n===== AROMA copy_paste gen {DS}  (τ={os.environ['TAU']}) =====")
+    !python $AROMA_SCRIPTS/generate_defects.py \
+        --roi_dir     $ROI \
+        --normal_dir  $NORMAL \
+        --output_dir  $OUT \
+        --method      copy_paste \
+        --n_per_roi 3 --seed 42 --blend_mode seamless \
+        --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
+        --compat_mode symmetric --compat_threshold $TAU \
+        --compat_matrix_json $COMPAT \
+        --local_staging \
+        $EXTRA
+```
+
+> **compat 없이(순수 clean_bg 배치)** 돌리려면 `--compat_mode`·`--compat_threshold`·`--compat_matrix_json`을 빼면 된다(그러면 step4c τ도 불요 → phase0·step1~3·step3.5만으로 완결). 단 exp에서 controlnet arm과 비교할 때는 **placement 게이트를 맞춰야** 공정하다.
+> **활성 확인(로그)**: STEP 3과 동일하게 `clean_bg assignment ON` + `clean_bg resolve used/fallback/mismatch` 확인. `placement-gate stats: fallback=M%`도 동일 적용. `controlnet stats`·`ar_fallback`은 copy_paste에선 나오지 않는다(정상).
+> **정직성**: copy_paste는 생성 novelty가 없다(원본 crop 재조합). exp3(FID/생성품질)에서 controlnet arm과 절대비교하지 말고, AROMA ROI-선택·배치 기여(exp4v2 mAP)로 판정한다.
 
 ---
 
