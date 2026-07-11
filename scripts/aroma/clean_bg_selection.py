@@ -200,8 +200,11 @@ def load_inputs(profiling_dir: str, roi_dir: str) -> Dict[str, Any]:
     # so the per-class background aggregate is complete. Optional: absent → class
     # signal simply unavailable (w_class derives to 0).
     iid_to_class: Dict[str, str] = {}
+    iid_to_bbox: Dict[str, Optional[List[int]]] = {}
     for m in _read_csv_rows(pd / "morphology_features.csv"):
-        iid_to_class[m.get("image_id", "")] = m.get("defect_type", "")
+        _iid = m.get("image_id", "")
+        iid_to_class[_iid] = m.get("defect_type", "")
+        iid_to_bbox[_iid] = _parse_bbox(m.get("defect_bbox"))
 
     good_by_img: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     defect_rows: List[Dict[str, str]] = []
@@ -221,6 +224,7 @@ def load_inputs(profiling_dir: str, roi_dir: str) -> Dict[str, Any]:
         "good_by_img": dict(good_by_img),
         "defect_rows": defect_rows,
         "iid_to_class": iid_to_class,
+        "iid_to_bbox": iid_to_bbox,
     }
 
 
@@ -381,6 +385,84 @@ def _size_ok(defect_wh: Tuple[int, int], bg_dim: Tuple[int, int]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Phase 3 (§E2) — class-conditioned geometry prior for the paste POSITION
+# ---------------------------------------------------------------------------
+# E2 showed placement is geometry-blind (mtd break real edge 100% -> placed
+# 46.5%; leather 0% -> 41.7%). Here we derive each class's real edge/surface
+# tendency from morphology defect_bbox (pixel-free: source dim from the source
+# image's context patch_xy grid) and precompute a paste position on the assigned
+# background that RESPECTS that tendency. Opt-in (--geometry_prior); mAP effect
+# is GPU-TBD (E2 caveat) so it defaults OFF.
+
+_EDGE_MARGIN_FRAC = 0.08   # geometric border band (fraction of min side); E2 convention
+_SPAN_FRAC = 0.80          # bbox covering >=80% of a side is a full-frame span
+
+
+def _edge_surface(bbox_wh_xy: Tuple[int, int, int, int], dim: Tuple[int, int],
+                  margin_frac: float = _EDGE_MARGIN_FRAC) -> str:
+    """Classify a bbox placement as 'span' | 'edge' | 'surface' (mirrors E2)."""
+    x, y, w, h = bbox_wh_xy
+    W, H = dim
+    if W <= 0 or H <= 0:
+        return "surface"
+    if w >= _SPAN_FRAC * W or h >= _SPAN_FRAC * H:
+        return "span"
+    m = margin_frac * min(W, H)
+    if x <= m or y <= m or (W - (x + w)) <= m or (H - (y + h)) <= m:
+        return "edge"
+    return "surface"
+
+
+def _class_edge_prior(iid_to_class, iid_to_bbox, src_dim_by_img,
+                      margin_frac: float = _EDGE_MARGIN_FRAC
+                      ) -> Tuple[Dict[str, float], float]:
+    """Per-class 'edge+span' fraction of REAL defects + the global fraction —
+    the data-driven target the placement should match (E2)."""
+    by_class = defaultdict(lambda: [0, 0])  # class -> [edge_or_span, total]
+    g_es = g_tot = 0
+    for iid, bbox in iid_to_bbox.items():
+        cls = iid_to_class.get(iid)
+        dim = src_dim_by_img.get(iid)
+        if not cls or not bbox or not dim:
+            continue
+        cat = _edge_surface((bbox[0], bbox[1], bbox[2], bbox[3]), dim, margin_frac)
+        es = 1 if cat in ("edge", "span") else 0
+        by_class[cls][0] += es
+        by_class[cls][1] += 1
+        g_es += es
+        g_tot += 1
+    prior = {c: (v[0] / v[1]) for c, v in by_class.items() if v[1]}
+    global_es = (g_es / g_tot) if g_tot else 0.5
+    return prior, global_es
+
+
+def _place_position(wh: Tuple[int, int], dim: Tuple[int, int],
+                    want_edge: bool, jitter01: float) -> Optional[List[int]]:
+    """Deterministic paste top-left (x,y) that lands the crop at an EDGE (flush
+    to one of the 4 borders, rotated by jitter for diversity) or on the SURFACE
+    (interior, small jitter offset). None if the crop does not fit."""
+    cw, ch = wh
+    W, H = dim
+    if cw <= 0 or ch <= 0 or cw > W or ch > H:
+        return None
+    xmax, ymax = W - cw, H - ch
+    if want_edge:
+        side = int(jitter01 * 4) % 4  # 0=left 1=top 2=right 3=bottom, rotated
+        if side == 0:
+            return [0, min(ymax, int(jitter01 * ymax))]
+        if side == 1:
+            return [min(xmax, int(jitter01 * xmax)), 0]
+        if side == 2:
+            return [xmax, min(ymax, int(jitter01 * ymax))]
+        return [min(xmax, int(jitter01 * xmax)), ymax]
+    # surface: interior, centred with a small deterministic offset for diversity
+    cx, cy = xmax // 2, ymax // 2
+    ox = int((jitter01 - 0.5) * 0.4 * xmax)
+    oy = int((jitter01 - 0.5) * 0.4 * ymax)
+    return [max(0, min(xmax, cx + ox)), max(0, min(ymax, cy + oy))]
+
+
+# ---------------------------------------------------------------------------
 # Candidate build + ranking
 # ---------------------------------------------------------------------------
 
@@ -408,6 +490,7 @@ def build_and_rank(
     var_floor: float,
     edge_floor: float,
     pool_k: Optional[int],
+    geometry_prior: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, float]]:
     """Two signals per (ROI x valid good) candidate:
       src_fit   = hist∩(good, the ROI's SOURCE-image background)  [Phase 1, E1-faithful]
@@ -434,6 +517,14 @@ def build_and_rank(
                        for iid, rows in defect_by_img.items()}
     class_hist = _class_bg_hist(defect_rows, names, bin_edges, var_floor, edge_floor,
                                 iid_to_class)
+
+    # Phase 3 (§E2) — class edge/surface prior from REAL defect geometry.
+    class_edge = {}
+    global_edge = 0.5
+    if geometry_prior:
+        src_dim_by_img = {iid: _image_dim(rows) for iid, rows in defect_by_img.items()}
+        class_edge, global_edge = _class_edge_prior(
+            iid_to_class, data.get("iid_to_bbox", {}), src_dim_by_img)
 
     good_hist: Dict[str, Dict[str, float]] = {}
     good_dim: Dict[str, Tuple[int, int]] = {}
@@ -504,17 +595,33 @@ def build_and_rank(
                 "class_axis": pr["axis"], "class_value": pr["cls_val"],
                 "cluster_id": pr["cluster_id"], "cell_key": pr["cell_key"],
                 "defect_bbox": pr["bbox"]}
+
+        # Phase 3 — precompute a paste position per pool bg matching this class's
+        # real edge/surface tendency (want_edge = class more edge-bound than the
+        # global rate). Position depends on (bg dim, crop wh); deterministic
+        # jitter for diversity. None (position at generation) when geometry off.
+        def _pos_for(nid):
+            if not geometry_prior or not pr["bbox"]:
+                return None
+            wh = (pr["bbox"][2], pr["bbox"][3])
+            want_edge = class_edge.get(str(pr["cls_val"]), global_edge) > global_edge
+            j = (_bg_jitter(src_key, nid) / 1e-7)  # blake2b frac in [0,1)
+            return _place_position(wh, good_dim.get(nid, (0, 0)), want_edge, j)
+
         if top:
             comb_j, best_id, sf, cf, so = top[0]
             selected.append(dict(base,
                                  assigned_normal_id=best_id,
                                  topk_pool=[t[1] for t in top],
+                                 topk_positions=[_pos_for(t[1]) for t in top],
+                                 position=_pos_for(best_id),
                                  score=round(comb_j - _bg_jitter(src_key, best_id), 6),
                                  hist_intersection=round(sf, 6),   # per-source (E1-comparable)
                                  class_fit=round(cf, 6),           # class-conditioned (Phase 2)
                                  size_ok=bool(so), n_valid_bg=len(pr["cand"])))
         else:
             selected.append(dict(base, assigned_normal_id=None, topk_pool=[],
+                                 topk_positions=[], position=None,
                                  score=0.0, hist_intersection=0.0, class_fit=0.0,
                                  size_ok=False, n_valid_bg=0))
 
@@ -527,6 +634,9 @@ def build_and_rank(
         "lift_class": round(float(np.mean(lifts_cls)), 4) if lifts_cls else 0.0,
         # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
         "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
+        "geometry_prior": float(geometry_prior),
+        "class_edge_prior": {c: round(v, 3) for c, v in class_edge.items()},
+        "global_edge": round(global_edge, 3),
     }
     return selected, derived
 
@@ -614,6 +724,7 @@ def run(
     reject_clean_bg: bool = True,
     void_frac_max: Optional[float] = None,
     pool_k: Optional[int] = None,
+    geometry_prior: bool = False,
 ) -> Dict[str, Any]:
     logger.info("Loading inputs: profiling_dir=%s roi_dir=%s", profiling_dir, roi_dir)
     data = load_inputs(profiling_dir, roi_dir)
@@ -629,7 +740,7 @@ def run(
                 len(valid_ids), len(data["good_by_img"]), derived_void["void_frac_max"])
 
     selected, derived_pool = build_and_rank(
-        data, valid_ids, var_floor, edge_floor, pool_k
+        data, valid_ids, var_floor, edge_floor, pool_k, geometry_prior=geometry_prior
     )
     # attach void provenance to each assignment
     for s in selected:
@@ -692,6 +803,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Per-ROI ranked background pool size. Default: DATA-DRIVEN "
                         "(all size-fit candidates; generate_defects indexes rep→pool). "
                         "Set an int to cap.")
+    p.add_argument("--geometry_prior", action="store_true",
+                   help="Phase 3 (E2): also precompute a paste POSITION per pool bg "
+                        "matching each class's real edge/surface tendency (from "
+                        "morphology defect_bbox). Emits position/topk_positions; "
+                        "generate_defects places there. Default OFF (mAP effect GPU-TBD).")
     return p.parse_args(argv)
 
 
@@ -707,6 +823,7 @@ def main(argv=None) -> None:
         reject_clean_bg=args.reject_clean_bg,
         void_frac_max=args.void_frac_max,
         pool_k=args.pool_k,
+        geometry_prior=args.geometry_prior,
     )
     if result.get("status") != "ok":
         sys.exit(1)
