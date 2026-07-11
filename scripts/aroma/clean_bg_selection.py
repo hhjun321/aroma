@@ -47,7 +47,7 @@ import json
 import logging
 import os
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -318,36 +318,17 @@ def _image_hist(rows: List[Dict[str, str]], names, bin_edges,
     for r in rows:
         if _patch_void(r, var_floor, edge_floor):
             continue
-        counts[_cell_key(r, names, bin_edges)] = counts.get(_cell_key(r, names, bin_edges), 0) + 1
+        ck = _cell_key(r, names, bin_edges)
+        counts[ck] = counts.get(ck, 0) + 1
         total += 1
     if total == 0:
         return {}
     return {c: n / total for c, n in counts.items()}
 
 
-def _class_bg_hist(defect_rows: List[Dict[str, str]], names, bin_edges,
-                   var_floor: float, edge_floor: float,
-                   iid_to_class: Dict[str, str]) -> Dict[str, Dict[str, float]]:
-    """Class-conditioned source-defect background histograms: aggregate defect
-    image patches BY class → {class: {cell: frac}}. Offline analogue of
-    _dv_bg_hist, generalized to the class axis (§1-a.1). Defect tiles are already
-    excluded upstream by profiling's _context_worker."""
-    by_class_counts: Dict[str, Counter] = defaultdict(Counter)
-    by_class_total: Dict[str, int] = defaultdict(int)
-    for r in defect_rows:
-        iid = r.get("image_id", "")
-        cls = iid_to_class.get(iid)
-        if cls is None:
-            continue
-        if _patch_void(r, var_floor, edge_floor):
-            continue
-        by_class_counts[cls][_cell_key(r, names, bin_edges)] += 1
-        by_class_total[cls] += 1
-    out: Dict[str, Dict[str, float]] = {}
-    for cls, counts in by_class_counts.items():
-        tot = by_class_total[cls] or 1
-        out[cls] = {c: n / tot for c, n in counts.items()}
-    return out
+# NOTE: class-conditioned dv histograms (aggregate defect patches BY class) are a
+# Phase-2 upgrade (§1-a.1). Phase 1 uses per-source-image dv (E1-faithful, see
+# build_and_rank), so no class aggregation helper is defined here yet.
 
 
 # ---------------------------------------------------------------------------

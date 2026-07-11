@@ -3057,6 +3057,8 @@ def run(
             logger.warning("clean_bg json load failed (%s) — legacy selection",
                            _cbg_exc)
             clean_bg_map = None
+    # Resolve telemetry (surfaces stale json / id↔path mismatch / leather collision).
+    _cbg_used = _cbg_fallback = _cbg_mismatch = 0
 
     for roi_idx, roi_entry in enumerate(selected):
         for rep_idx in range(n_per_roi):
@@ -3108,13 +3110,31 @@ def run(
             # synthesis for the WITHIN-image _positive_place (unchanged).
             stage2_pool = normal_images
             _cbg_entry = clean_bg_map.get(roi_idx) if clean_bg_map else None
+            # Staleness guard: a clean_bg_selected.json produced against a DIFFERENT
+            # roi_selected.json (regenerated seed/top_k) joins by positional roi_idx
+            # only. Reject an entry whose recorded image_id disagrees with this ROI
+            # → fall back to legacy for it (and count it) instead of pasting onto a
+            # background chosen for a different defect.
+            if (_cbg_entry is not None and _cbg_entry.get("image_id")
+                    not in (None, "", roi_entry.get("image_id"))):
+                _cbg_mismatch += 1
+                _cbg_entry = None
             _cbg_pool = ([p for p in
                          (_resolve_bg(i) for i in (_cbg_entry.get("topk_pool") or []))
                          if p] if _cbg_entry else [])
+            if clean_bg_map is not None and not _cbg_pool:
+                _cbg_fallback += 1
             if _cbg_pool:
-                # Precomputed identity → deterministic rep→pool index (no rng draw).
+                # Precomputed identity → deterministic rep→pool index. Consume ONE
+                # placeholder draw so EVERY (roi,rep) spends exactly one selection
+                # draw whether it uses the precomputed pool or the legacy fallback —
+                # this keeps the downstream placement/feather rng stream aligned even
+                # under partial resolution (some ROIs precomputed, some fallback),
+                # which the 0-draw variant did not guarantee.
+                _ = rng.random()
                 normal_path = _cbg_pool[rep_idx % len(_cbg_pool)]
                 stage2_pool = _cbg_pool
+                _cbg_used += 1
             elif image_rank_on:
                 _dv_key, _p_dv = _dv_hist_for(roi_entry)
                 if _p_dv:
@@ -3216,6 +3236,18 @@ def run(
     drive_out.mkdir(parents=True, exist_ok=True)
     save_json(annotations, str(drive_out / "annotations.json"))
     logger.info("Generated %d images (%d skipped) → %s", n_ok, n_skip, drive_out)
+    if clean_bg_map is not None:
+        _cbg_total = _cbg_used + _cbg_fallback
+        logger.info("clean_bg resolve: used=%d fallback=%d mismatch=%d / %d (roi,rep)",
+                    _cbg_used, _cbg_fallback, _cbg_mismatch, _cbg_total)
+        if _cbg_total and _cbg_used < 0.9 * _cbg_total:
+            logger.warning(
+                "clean_bg resolve rate LOW (%.0f%%) — likely a stale "
+                "clean_bg_selected.json vs roi_selected.json, an image_id<->path "
+                "mismatch, or leather stem-collision. Most ROIs fell back to legacy "
+                "selection; the symmetric-control invariant may not hold.",
+                100.0 * _cbg_used / _cbg_total,
+            )
 
     result: Dict[str, Any] = {
         "status":       "ok",
