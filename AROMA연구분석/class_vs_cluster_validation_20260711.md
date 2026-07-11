@@ -55,6 +55,29 @@ KS = 분포 거리(0~1), p = KS 유의확률. AR = regionprops aspect_ratio.
 
 ---
 
+## V4 — 합성 충실도 (synth annotations, leather 제외 severstal/mtd/aitex)
+
+synth 산출(`AROMA_DATASET/synth/{ds}/annotations.json`)의 `method`·`class_key`로 최종 증강셋을 분석. `copy_paste_arfallback` = AR 게이트(`cn_ar_threshold` 2.5) 걸린 세장 결함이 ControlNet 대신 copy_paste로 처리된 것.
+
+### ★ ControlNet 생성이 세장 결함에서 체계적으로 실패 (핵심 기제)
+| 데이터셋 | 전체 ar_fallback | corr(real AR median, class ar_fallback%) | 극단 사례 |
+|---|---|---|---|
+| **severstal** | 64% (384/600) | **+0.91** | class2(AR 11.7) → **98% 폴백** (ControlNet 3/150) |
+| **mtd** | 47% (94/200) | **+0.84** | crack(AR 11.2) → **81%**; blowhole(AR 1.6) → 10% |
+| **aitex** | 38% (231/600) | (단일 클래스) | AR 5.13 → 38% 폴백 |
+
+→ **"ControlNet arm"은 실상 "compact 결함=ControlNet, elongated 결함=copy_paste"**. 세장할수록 폴백률이 오름(corr +0.84~+0.91). 가장 세장한 클래스(severstal class2 98%, mtd crack 81%)는 사실상 전량 copy_paste. **프레임워크 우월성(Q1) 주장 시 "생성 엔진은 세장 결함을 못 만든다"를 반드시 병기.**
+
+### 최종 증강셋이 baseline 클래스 분포를 강하게 왜곡
+- **severstal**: synth **25%/25%/25%/25%** (강제 균등) vs real class3 **76%**·class2 3%. class_floor 효과가 합성 출력까지 전파.
+- **mtd**: synth ~20% 균등 vs real blowhole 30%/fray 8%.
+→ V3(선택)에서 본 왜곡이 합성 출력에 그대로 남음. baseline-유사 증강과는 반대 방향(단 이는 주장 제외 항목).
+
+### aitex 세장 결함의 이중 불리 (arbiter 함의)
+aitex 결함은 세장(AR 5.13): (a) V3에서 **선택이 극단 세장을 버리고**(AR IQR 32→11), (b) V4에서 **남은 것도 38% copy_paste 폴백**. → arbiter(aitex)에서 생성 엔진의 실제 기여가 제한적임을 정량 확인.
+
+---
+
 ## 종합 판정 (정직)
 
 1. **클래스 그룹핑은 방어 가능**: 비지도 클러스터가 클래스를 복원 못 함(V1 ARI 0.02–0.12) + leather 클러스터링 degenerate → **라벨 사용이 정직하고 실용적**. 논문에서 "라벨 있으면 라벨 사용, 없을 때만 비지도"로 서술하는 근거 확보.
@@ -64,6 +87,8 @@ KS = 분포 거리(0~1), p = KS 유의확률. AR = regionprops aspect_ratio.
 3. **비지도의 유일한 실측 가치 = 단일클래스 aitex intra-class context 구조(I=0.46)** = 유보한 확장 (a). **결정 1(b now / a for reviewer)은 합리적이나, (a)가 arbiter에서 가장 값지다는 점을 각주로 무장**(리뷰어가 정확히 이 지점을 찌를 수 있음).
 
 4. **V3는 선택이 baseline 클래스 분포를 왜곡함을 보임**(severstal 76%→25% 등). 향후 baseline-유사 증강을 추구하면 현 class_floor가 역효과 — 단 이는 주장 제외 항목.
+
+5. **(V4) 생성 엔진은 세장 결함을 못 만든다**(corr AR↔ar_fallback +0.84~+0.91): "ControlNet arm"은 compact만 생성·elongated는 copy_paste 폴백. severstal class2 98%·mtd crack 81% 폴백. → 프레임워크 우월성/생성 novelty 주장 시 **"세장 결함은 양 arm 모두 copy_paste"**를 필수 병기. arbiter(aitex)는 세장이라 생성 기여 제한적(V3 선택 드롭 + V4 38% 폴백 이중 불리).
 
 ## 논문 반영 (스코프 확정)
 - 자동화 기여 = **배경 문맥 특성화 + context-plausible 배치**로 한정. V2 근거로 "개선" 대신 "프레임워크" 서술.
