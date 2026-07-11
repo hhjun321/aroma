@@ -57,9 +57,12 @@ for DS in DATASETS:
 > `--emit_random_arm`: 대칭 대조군용 `clean_bg_random_arm.json`(동일 ROI 집합, random 배경)을 함께 생성. **AROMA arm vs random arm이 배경 정체성만 다르고 배치/블렌딩은 동일**해지는 계측기(step4에서 `--clean_bg_json`으로 선택).
 >
 > **선택 인자**:
+> - `--geometry_prior` — **Phase 3(E2 레버)**: 클래스별 실제 결함 기하(edge/surface/span prior)를 morphology bbox+실제 dim에서 유도해, 배정 배경 위 **paste 위치를 precompute**(`position`/`topk_positions`). step4가 이 위치를 소비(clamp-free, 아래 §STEP1 주의). 기본 OFF(mAP 효과 GPU-TBD). ON 시 배치가 배경 정체성뿐 아니라 위치까지 결정 → 배경 대칭대조(random arm)와는 별개의 **배치-정책 실험**(AROMA-geo vs AROMA-nogeo)용.
 > - `--pool_k <int>` — per-ROI 배경 풀 크기 상한(기본: 데이터-유도 P95). 명시 시 고정.
 > - `--void_frac_max <float>` — void 컷 상한(기본: 데이터-유도 P90). 명시 시 고정.
 > - `--no_reject_clean_bg` — void/품질 선행 필터 비활성(전 good 유지).
+>
+> **실제 dim 전제(`b1bb497`)**: phase0가 `context_features.csv`에 `image_w/image_h`를 방출하면 위치·`scale_factor`(size-fit)가 **실제 이미지 dim** 기준으로 계산된다(patch-격자 추정 fallback 대비 edge-flush가 실제 가장자리에 정확히 부착, 위치 clamp 제거). 컬럼 없으면 자동 grid fallback(무오류, 정밀도만 저하). 로컬 mtd 20-ROI 재검증(`local_revalidation_mtd20_20260711.md`): step4 위치 소비 **40/40 clamp-free**, dim gap 63.2px→0.
 
 ---
 
@@ -90,15 +93,15 @@ for DS in DATASETS:
     ceil = float(m.group(1)) if m else 0.0
     ref = E1_SIM_BEST.get(DS)
     ok = ref is None or abs(ceil - ref) < 0.05
-    # 데이터-유도 신호 가중(w_src/w_class)도 함께 표기 — 정직성/재현
-    w = re.search(r'w_src=([0-9.]+)\s+w_class=([0-9.]+)', sm)
-    wtxt = f" | weights w_src={w.group(1)} w_class={w.group(2)}" if w else ""
+    # 데이터-유도 3-신호 가중(w_src/w_class/w_size)도 함께 표기 — 정직성/재현
+    w = re.search(r'w_src=([0-9.]+)\s+w_class=([0-9.]+)\s+w_size=([0-9.]+)', sm)
+    wtxt = f" | weights src={w.group(1)} class={w.group(2)} size={w.group(3)}" if w else ""
     print(f"{DS:10s} src_fit_ceiling {ceil:.3f}  vs E1 {ref}  → {'PASS' if ok else 'DRIFT(조사)'}{wtxt}")
 ```
 
-> `w_class`(데이터-유도)는 클래스-조건부 배경 신호의 변별력(lift)에 비례 — leather 제외 3종 로컬: mtd 0.33 / aitex 0.31 / severstal 0.41. 값이 데이터셋별로 다른 것이 정상(no-hardcoding).
+> **3-신호 데이터-유도 가중(no-hardcoding)**: `w_src`(per-source hist) + `w_class`(클래스-조건부 hist, Phase 2) + `w_size`(크기 fit, 옵션1). 각 신호의 관측 lift에 비례하며 정규화. **배경 크기가 균일한 셋은 `w_size≈0`으로 자동 downweight**(변별 불가 신호 자동 억제), 크기 편차 있는 셋(mtd)은 `w_size>0`. 로컬 실측: mtd `src=0.559 class=0.282 size=0.160`(20-ROI 재검증). 값이 데이터셋별로 다른 것이 정상.
 
-> DRIFT 시(±0.05 초과): profiling의 비-overlap truncate 타일링 ↔ generate_defects의 far-edge-inclusive 타일링 **discretization 갭** 조사(설계 §2). 통과 못 하면 배포 보류.
+> **discretization 갭 해소(`b1bb497`)**: 과거 DRIFT 원인이던 profiling 비-overlap 타일링 ↔ generate_defects 타일링 dim 불일치는, phase0가 `image_w/image_h`를 방출하면 clean_bg가 **실제 dim**을 써서 사라진다(로컬 mtd: patch-격자 63.2px 과소추정 → 0px). `image_w/image_h` 컬럼이 없으면(구 profiling) grid fallback이라 갭이 남을 수 있으니, DRIFT(±0.05 초과) 시 **phase0를 `b1bb497` 이상으로 재실행**했는지 먼저 확인.
 
 ---
 

@@ -191,6 +191,9 @@ for DS in DATASETS_GEN:
 ```
 
 > **활성 확인(로그)**:
+> - `clean_bg assignment ON: clean_bg_selected.json (N ROIs)` — step3.5 사전선정 배경 소비(파일 없으면 legacy 생성-시점 선정으로 자동 fallback, 무해).
+> - `clean_bg resolve: used=U fallback=F mismatch=M / T (roi,rep)` — **U가 T에 근접(F·M≈0)해야 정상**. `<90%` 시 WARNING(경로 불일치/staleness). 로컬 mtd 20-ROI 재검증: used=40 fallback=0 mismatch=0.
+> - (step3.5를 `--geometry_prior`로 실행한 경우) precompute된 `position`을 소비해 클래스 기하대로 배치. phase0가 `image_w/image_h`를 방출하면 **clamp-free**(로컬 40/40 정확); 없으면 grid 추정이라 edge-flush가 실제 가장자리보다 안쪽에 놓일 수 있음.
 > - `compat gate ON: threshold=… mode=symmetric` — symmetric 게이트 활성(matrix_symmetric 없으면 hard-fail).
 > - `placement-gate stats: fallback=M%` — positive placement(scan·rank·place). fallback 과다(>50%)면 τ 과대 의심 → step5 사전스캔 재확인(step4에서 튜닝 금지).
 > - (aitex) `controlnet stats`(gen_ok / ar_fallback / blank_rate) + `texture-gate stats` — AR 폴백·텍스처 게이트 동작.

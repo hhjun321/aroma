@@ -2,7 +2,9 @@
 
 > **목적**: v2-1 4종(`severstal · mvtec_leather · mtd · aitex`)의 분포 프로파일링을 stage-first 루트(`sym_final/profiling/{ds}`)로 재생성한다. symmetric 게이트(clean-grounded SGM)를 쓰려면 `compatibility_matrix.json`에 신규 키(`matrix_symmetric`·`P_def_patch`·`clean_dist`·`symmetric_epsilon`)가 있어야 하므로, 본 단계에서 그 키의 존재를 **hard assert** 한다(없으면 `--compat_mode symmetric` 자체가 hard-fail).
 > **실행 환경**: **CPU**. MVTec/aitex/mtd/severstal은 ground_truth 마스크 사용 → SAM 불요(마스크 없으면 Otsu fallback 자동).
-> **전제**: 저장소는 commit `6c8658f` 이상(신규 키를 emit하는 코드)이어야 한다. aitex는 tiled 데이터셋(`aitex_tiled/train/good`, single-class)이 이미 준비되어 있어야 하며 `dataset_config.json`의 `image_dir`가 이를 가리키므로 자동 해소된다.
+> **전제**: 저장소는 commit `6c8658f` 이상(신규 키를 emit하는 코드)이어야 한다. **추가로 `b1bb497` 이상**이면 `context_features.csv`가 이미지 실제 dim(`image_w`/`image_h`) 컬럼을 방출하고(step3.5 정밀 배치·스케일의 전제), `31ee0aa` 이상이면 `image_id`가 **클래스-고유키**(`{defect_type}_{stem}`, good=`_{stem}`)로 생성된다(MVTec leather stem 충돌 해소). aitex는 tiled 데이터셋(`aitex_tiled/train/good`, single-class)이 이미 준비되어 있어야 하며 `dataset_config.json`의 `image_dir`가 이를 가리키므로 자동 해소된다.
+>
+> **로컬 재검증(2026-07-11, mtd 20-ROI, `AROMA연구분석/local_revalidation_mtd20_20260711.md`)**: 신 코드로 4-stage end-to-end 무결 동작 확인 — `image_w/image_h`로 patch-격자 dim 과소추정(mean 63.2px)이 **0px으로 완전 폐쇄**(956/956), step3.5 위치 소비 clamp-free 40/40.
 > **실행 순서 체인**: **phase0 → step1 → step2 → step3 → step5(ControlNet 학습) → step4(생성) → exp3/exp4v2/exp5/exp6**. 본 문서는 체인의 최상류.
 > **경로 주의**: `distribution_profiling.py`는 `scripts/`(루트)에 있다 — `$AROMA_REF/scripts/...`로 호출한다. (`compute_complexity.py`/`prompt_generation.py`만 `scripts/aroma/`.)
 
@@ -133,6 +135,27 @@ for DS in DATASETS:
         print(f"  [{DS}] 로컬 기대치 없음 — symmetric union > matrix union 이면 support 확장 성립.")
 ```
 
+### 3-2b. context_features 신규 스키마 확인 (image_id 고유키 + 실제 dim 컬럼)
+
+`b1bb497`/`31ee0aa` 이상에서 재실행했는지 확인. `image_w`/`image_h` 컬럼이 있으면 step3.5가 patch-격자 추정 대신 **실제 dim**을 써 위치·스케일이 정밀해진다(없으면 자동 grid fallback — 무오류이나 edge-flush가 실제 가장자리보다 최대 ~63px 안쪽).
+
+```python
+import csv
+for DS in DATASETS:
+    p = f"{S('profiling', DS)}/context_features.csv"
+    with open(p, encoding='utf-8') as f:
+        rd = csv.DictReader(f); cols = rd.fieldnames
+        first = next(rd, {})
+    has_dim = ('image_w' in cols) and ('image_h' in cols)
+    # image_id 고유키: good=_{stem}, defect={class}_{stem}
+    sample_ids = [first.get('image_id','')]
+    print(f"[{DS}] image_w/image_h 컬럼: {'OK' if has_dim else '누락(구 코드 — grid fallback)'}"
+          f"  | image_id 예: {sample_ids}")
+    assert has_dim, f"[{DS}] image_w/image_h 없음 — b1bb497 이상으로 재실행해야 step3.5 정밀 배치 성립."
+```
+
+> DRIFT 주의: image_id 고유키(`31ee0aa`)로 **전 데이터셋 image_id 문자열이 변경**된다(mtd/severstal/aitex는 stem이 이미 고유라 로직 무영향, leather는 stem 충돌 해소로 클러스터 정상화). 구 profiling과 문자열 불일치 → step3(roi_selection)·step3.5(clean_bg) 조인은 반드시 **동일 재실행 산출물**끼리 사용(구/신 혼용 금지).
+
 ### 3-3. drift 체크 — 백업 대비 legacy matrix 재현 여부
 
 ```python
@@ -159,6 +182,7 @@ for DS in DATASETS:
 - [ ] 3-1 산출 파일 6종 존재 (4 데이터셋 전부)
 - [ ] 3-2 신규 키 4종 존재 (assert 통과), 비어있지 않은 cluster row max=1.0, clean_dist·P_def_patch 합=1
 - [ ] 3-2 leather 5→191 / mtd 94→205 재현 (또는 support 확장)
+- [ ] 3-2b `image_w/image_h` 컬럼 존재(assert 통과), image_id 고유키 포맷 확인
 - [ ] 3-3 drift 없음 (있으면 신 profiling으로 통일, 혼용 금지)
 
 통과 시 → **step1**(`compute_complexity.py`, 입력 `S('profiling',ds)`).

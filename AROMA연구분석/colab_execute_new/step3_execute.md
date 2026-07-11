@@ -157,6 +157,8 @@ for DS in DATASETS:
 
 > `roi_candidates.json`은 step5 `build_train_jsonl.py --roi_candidates`가, `roi_selected.json`(및 후보)은
 > step4 `generate_defects.py --roi_dir $(S('roi',ds))` / `generate_random.py --candidates_json .../roi_candidates.json`이 소비한다.
+>
+> ⚠️ **`roi_candidates.json`은 전체 후보 풀이라 대용량**(로컬 mtd 실측 ~13MB vs `roi_selected.json` ~15KB, 약 889×). 그러나 **삭제/미생성 불가** — random arm(`generate_random.py`는 selected가 아니라 **candidates 풀에서 무작위 샘플**), ControlNet train jsonl(`build_train_jsonl`), exp1/2/6 품질·커버리지 메트릭이 재소비한다. copy_paste 전용 경로만 쓰는 경우엔 미참조지만, 4종 파이프라인 전체에서는 필수. (슬림 스키마화는 별도 최적화 과제.)
 
 ---
 

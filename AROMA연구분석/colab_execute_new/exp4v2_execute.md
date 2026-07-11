@@ -112,6 +112,21 @@ print("\nMISSING (labelable=0):", need)
 
 ---
 
+## 운영 노트 — synth_ratio 스윕 & arm parity 범위
+
+**① synth_ratio 스윕은 재생성 불요(한 번 크게 생성 → ratio만 변경)**: exp4v2는 로드된 합성 풀에서 `cap=int(n_real_train*synth_ratio)`만큼 **동일 seed 결정적 subsample**한다(`exp4_v2_supervised_detection.py:2418-2434`). 따라서 step4(`generate_defects`)를 **최대 ratio(≥1.0)를 채울 만큼 크게** 한 번 생성(`--n_per_roi` 상향)해두면, `--synth_ratio`만 바꿔 여러 번 실행하면 된다. 주의: **ratio마다 `--output_dir` 분리**(같은 dir이면 `--resume` skip에 걸려 재학습 안 됨), `--seed`·`--val_frac` 고정.
+
+```python
+for R in ["1.0", "0.8", "0.6", "0.4"]:
+    !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+        ... (동일 인자) ... \
+        --synth_ratio $R --output_dir ${EXP4V2_OUT}/ratio_$R
+```
+
+**② arm parity 범위(현행 = 총량 동수만)**: `synth_ratio` cap은 random/aroma/casda에 **동일 cap·동일 seed**를 적용해 **전체 합성 개수**를 맞춘다. **클래스별 개수·라벨화-후 실개수는 강제 매칭하지 않는다**(uniform subsample). 이는 의도적 — 합성 결함의 클래스 분포·bbox 라벨 수율은 AROMA 선택·배치의 **결과(post-treatment)**라, 강제 동일화하면 AROMA의 정당한 이득 경로를 지우는 **bad control**이 된다. 현행은 `n_synth_per_class`·distinct sources 로그로 **계측·보고**만 한다(분해 해석용). per-class stratified cap + 라벨화-후 동수는 **리뷰어가 명시 요청할 때만** 도입(보존 스펙: `.claude/.dev_note/aroma_exp4v2_perclass-parity-cap.md`).
+
+---
+
 ## STEP 2 — 3종 실행 (severstal · mvtec_leather · mtd)
 
 **그룹 A 파라미터** (`_SPEC §4`): `--class_mode multi` · `--imgsz 640` · `--rect` · `--baseline_epochs 100` · `--patience 50` · `--seeds 42 1 2`. 공통: `--condition all` · `--val_frac 0.3` · `--synth_ratio 1.0` · `--batch 64` · `--cache ram` · `--resume`.
