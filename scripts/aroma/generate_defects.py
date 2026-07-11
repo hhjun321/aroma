@@ -1314,6 +1314,7 @@ def _paste_and_finalize(
     bin_edges: Optional[Dict[str, List[float]]] = None,
     compat_threshold: float = 0.0,
     compat_tile: bool = False,
+    forced_xy: Optional[Tuple[int, int]] = None,
 ) -> Dict[str, Any]:
     """Shared placement + blending + GT-mask tail used by every synthesis method.
 
@@ -1396,6 +1397,14 @@ def _paste_and_finalize(
         pilot images: 24-34% foreground), so a fallback-only texture gate
         would silently bypass exactly the mismatch it exists to catch."""
         nrgb = np.asarray(nrm.convert("RGB"))
+
+        if forced_xy is not None:
+            # Phase 3 (clean_bg geometry prior): paste at the PRECOMPUTED position
+            # (class edge/surface geometry decided upstream), clamped to fit. Skips
+            # foreground/compat/random sampling and its rng draws.
+            fx = max(0, min(int(forced_xy[0]), max(0, nrgb.shape[1] - crop_w)))
+            fy = max(0, min(int(forced_xy[1]), max(0, nrgb.shape[0] - crop_h)))
+            return nrgb, (fx, fy), True
 
         def _tex_ok(pos_xy: Tuple[int, int]) -> bool:
             px, py = pos_xy
@@ -1777,6 +1786,7 @@ def copy_paste_synthesis(
         return _paste_and_finalize(
             normal_img, defect_crop, mask, output_path,
             blend_mode=blend_mode,
+            forced_xy=roi_entry.get("_forced_xy"),
             feather_px=feather_px,
             rng=rng,
             mask_output_path=mask_output_path,
@@ -2332,6 +2342,7 @@ def controlnet_synthesis(
         meta = _paste_and_finalize(
             normal_img, defect_crop, mask, output_path,
             blend_mode=kwargs.get("blend_mode", "alpha"),
+            forced_xy=roi_entry.get("_forced_xy"),
             feather_px=kwargs.get("feather_px", 4),
             rng=place_rng,
             mask_output_path=mask_output_path,
@@ -3119,9 +3130,18 @@ def run(
                     not in (None, "", roi_entry.get("image_id"))):
                 _cbg_mismatch += 1
                 _cbg_entry = None
-            _cbg_pool = ([p for p in
-                         (_resolve_bg(i) for i in (_cbg_entry.get("topk_pool") or []))
-                         if p] if _cbg_entry else [])
+            roi_entry.pop("_forced_xy", None)   # clear any prior geometry position
+            # Resolve pool ids → paths, carrying the parallel precomputed position
+            # (Phase 3 geometry prior; None when --geometry_prior was off).
+            _cbg_pairs = []
+            if _cbg_entry:
+                _ids = _cbg_entry.get("topk_pool") or []
+                _poss = _cbg_entry.get("topk_positions") or []
+                for _i, _id in enumerate(_ids):
+                    _rp = _resolve_bg(_id)
+                    if _rp:
+                        _cbg_pairs.append((_rp, _poss[_i] if _i < len(_poss) else None))
+            _cbg_pool = [p for p, _ in _cbg_pairs]
             if clean_bg_map is not None and not _cbg_pool:
                 _cbg_fallback += 1
             if _cbg_pool:
@@ -3132,7 +3152,10 @@ def run(
                 # under partial resolution (some ROIs precomputed, some fallback),
                 # which the 0-draw variant did not guarantee.
                 _ = rng.random()
-                normal_path = _cbg_pool[rep_idx % len(_cbg_pool)]
+                _pick_path, _pick_pos = _cbg_pairs[rep_idx % len(_cbg_pairs)]
+                normal_path = _pick_path
+                if _pick_pos:
+                    roi_entry["_forced_xy"] = (int(_pick_pos[0]), int(_pick_pos[1]))
                 stage2_pool = _cbg_pool
                 _cbg_used += 1
             elif image_rank_on:
