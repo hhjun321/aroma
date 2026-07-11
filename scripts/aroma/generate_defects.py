@@ -2874,12 +2874,8 @@ def run(
     compat_matrix: Optional[Dict[str, Dict[str, float]]] = None
     compat_bin_edges: Optional[Dict[str, List[float]]] = None
     if compat_threshold > 0.0:
-        if compat_matrix_json and Path(compat_matrix_json).exists() and config_yaml:
+        if compat_matrix_json and Path(compat_matrix_json).exists():
             try:
-                _here = str(Path(__file__).resolve().parent)
-                if _here not in sys.path:
-                    sys.path.insert(0, _here)
-                import build_train_jsonl as _btj_cfg  # noqa: PLC0415
                 _compat_json = load_json(compat_matrix_json)
                 # compat_mode selects the compat_row source. 'symmetric' uses the
                 # SGM clean-grounded matrix (matrix_symmetric); 'defect' (default)
@@ -2904,12 +2900,28 @@ def run(
                         )
                 else:
                     compat_matrix = _compat_json.get("matrix", {})
-                _, compat_bin_edges = _btj_cfg._load_bin_edges(config_yaml)
+                # bin_edges: prefer --config when given (controlnet path passes it),
+                # else fall back to the compat matrix JSON's OWN bin_edges — the
+                # matrix is self-describing and its bin_edges are identical to the
+                # config's (both from distribution_profiling). This lets the
+                # copy_paste compat gate run WITHOUT a separate --config.
+                if config_yaml:
+                    _here = str(Path(__file__).resolve().parent)
+                    if _here not in sys.path:
+                        sys.path.insert(0, _here)
+                    import build_train_jsonl as _btj_cfg  # noqa: PLC0415
+                    _, compat_bin_edges = _btj_cfg._load_bin_edges(config_yaml)
+                else:
+                    compat_bin_edges = _compat_json.get("bin_edges")
+                if not compat_bin_edges:
+                    raise ValueError(
+                        "compat gate: no bin_edges available — pass --config or "
+                        f"ensure 'bin_edges' is present in {compat_matrix_json}.")
                 logger.info("compat gate ON: threshold=%.2f, mode=%s, %d clusters in matrix",
                             compat_threshold, compat_mode, len(compat_matrix))
             except ValueError:
-                # compat_mode=symmetric misconfiguration — hard user error, do
-                # NOT silently disable the gate (would mislabel the run).
+                # compat_mode=symmetric / missing-bin_edges misconfiguration — hard
+                # user error, do NOT silently disable the gate (would mislabel run).
                 raise
             except Exception as exc:
                 logger.warning("compat gate: failed to load matrix/bin_edges "
@@ -2917,7 +2929,7 @@ def run(
                 compat_matrix = compat_bin_edges = None
         else:
             logger.warning("compat gate: --compat_threshold>0 requires "
-                           "--compat_matrix_json AND --config — gate disabled")
+                           "--compat_matrix_json — gate disabled")
 
     rng = random.Random(seed)
     annotations: List[Dict[str, Any]] = []
