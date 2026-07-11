@@ -45,7 +45,7 @@ DATASETS = ["severstal", "mtd", "aitex"]
 for DS in DATASETS:
     os.environ['DS']   = DS
     os.environ['PROF'] = S('profiling', DS)     # context_features.csv, compatibility_matrix.json
-    os.environ['ROI']  = f"{os.environ['AROMA_OUT']}/roi/{DS}"  # roi_selected.json (step3 출력)
+    os.environ['ROI']  = S('roi', DS)           # roi_selected.json (step3 출력) — step3/step4와 동일 경로 규약
     print(f"\n===== clean_bg_selection: {DS} =====")
     !python $AROMA_SCRIPTS/clean_bg_selection.py \
         --profiling_dir  $PROF \
@@ -73,7 +73,7 @@ for DS in DATASETS:
 ```python
 from pathlib import Path
 for DS in DATASETS:
-    roi = f"{os.environ['AROMA_OUT']}/roi/{DS}"
+    roi = S('roi', DS)
     for f in ['clean_bg_selected.json', 'clean_bg_random_arm.json', 'clean_bg_summary.md']:
         print(f"  {'OK  ' if Path(f'{roi}/{f}').exists() else '누락 '} {DS}/{f}")
     print(Path(f"{roi}/clean_bg_summary.md").read_text(encoding='utf-8').split('## Sample')[0])
@@ -88,7 +88,7 @@ import re
 # 로컬 검증 기준값 (AROMA연구분석/pivot_local_validation_20260711.md, scripts_local/e1.py)
 E1_SIM_BEST = {"aitex": 0.895, "mtd": 0.502, "severstal": 0.623}
 for DS in DATASETS:
-    sm = open(f"{os.environ['AROMA_OUT']}/roi/{DS}/clean_bg_summary.md", encoding='utf-8').read()
+    sm = open(f"{S('roi', DS)}/clean_bg_summary.md", encoding='utf-8').read()
     m = re.search(r'src_fit_ceiling_mean=([0-9.]+)', sm)
     ceil = float(m.group(1)) if m else 0.0
     ref = E1_SIM_BEST.get(DS)
