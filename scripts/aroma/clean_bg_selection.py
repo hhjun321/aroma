@@ -560,6 +560,23 @@ def build_and_rank(
     class_hist = _class_bg_hist(defect_rows, names, bin_edges, var_floor, edge_floor,
                                 iid_to_class)
 
+    # Guard: the per-source (E1) signal needs each ROI's image_id to resolve to a
+    # defect row in context_features.csv. If most ROIs don't resolve, src_fit is
+    # silently 0 for all of them (E1 gate reads 0, background diversity collapses)
+    # — the classic stale-roi / new-profiling image_id mismatch. Make it LOUD.
+    n_src_missing = sum(1 for r in roi
+                        if str(r.get("image_id", "")) not in src_hist_by_img)
+    src_match_frac = 1.0 - (n_src_missing / len(roi)) if roi else 0.0
+    if roi and src_match_frac < 0.5:
+        logger.warning(
+            "image_id MISMATCH: %d/%d ROIs (%.0f%%) have no matching defect row in "
+            "context_features.csv -> per-source (E1) signal is ~0 and background "
+            "diversity will collapse. Likely a STALE roi_selected.json vs a freshly "
+            "reprofiled context_features.csv (e.g. phase0 image_id unique-key rerun). "
+            "FIX: re-run step3 (roi_selection) on the SAME profiling.",
+            n_src_missing, len(roi), 100.0 * (1.0 - src_match_frac),
+        )
+
     # Phase 3 (§E2) — class edge/surface prior from REAL defect geometry.
     class_edge = {}
     global_edge = 0.5
@@ -693,6 +710,9 @@ def build_and_rank(
         "lift_size": round(lift_size_m, 4),
         # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
         "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
+        # fraction of ROIs whose image_id resolves to a defect row (E1 signal health);
+        # <1.0 → stale roi / profiling image_id mismatch (see warning above)
+        "src_match_frac": round(src_match_frac, 4),
         "geometry_prior": float(geometry_prior),
         "class_edge_prior": {c: round(v, 3) for c, v in class_edge.items()},
         "global_edge": round(global_edge, 3),
@@ -757,6 +777,8 @@ def _build_summary(selected, derived_pool, derived_void, strategy) -> str:
         f"lift_size={derived_pool.get('lift_size')})",
         f"- src_fit_ceiling_mean={derived_pool.get('src_fit_ceiling_mean')}  "
         f"(E1 reproduction gate — compare to E1 sim_best)",
+        f"- src_match_frac={derived_pool.get('src_match_frac')}  "
+        f"(ROI image_id ↔ context defect 매칭율; <1.0이면 stale roi/profiling 불일치)",
         "",
         "## Sample assignments (top 30)",
         "",
