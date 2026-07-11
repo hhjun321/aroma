@@ -2472,9 +2472,19 @@ def _stage_inputs(
     def _is_already_local(path: str) -> bool:
         return any(path.startswith(r) for r in _local_roots)
 
-    # Stage defect images (deduplicated)
+    # Stage defect images (deduplicated). The dst path (incl. the dedup suffix
+    # `_{len}`) is resolved in THIS main-thread loop so naming stays byte-identical
+    # to the legacy sequential order; only the shutil.copy2 calls are dispatched to
+    # a ThreadPoolExecutor below (FUSE round-trips, not CPU, are the bottleneck —
+    # same rationale as _push_outputs). Failures propagate (abort) as before.
     defect_map: Dict[str, str] = {}
     n_defect_already_local = 0
+    copy_jobs: List[Tuple[str, str]] = []
+    # Deferred copies mean `dst.exists()` can't see files staged earlier in THIS
+    # run, so basename collisions are tracked in-memory (`_claimed`) — seeded with
+    # `dst.exists()` for the pre-existing-on-disk case (Colab --resume). Suffix is
+    # still `_{len(defect_map)}`, identical to the legacy sequential naming.
+    _claimed_defect: set = set()
     for entry in selected:
         orig = entry.get("image_path", "")
         if orig and orig not in defect_map and Path(orig).exists():
@@ -2485,10 +2495,21 @@ def _stage_inputs(
                 continue
             p = Path(orig)
             dst = defect_dir / p.name
-            if dst.exists():
-                dst = defect_dir / f"{p.stem}_{len(defect_map)}{p.suffix}"
-            shutil.copy2(orig, str(dst))
+            # Bump the suffix until the name is neither claimed this run nor
+            # present on disk — the suffixed fallback itself can collide (e.g. a
+            # source basename that already looks like `x_1.png`), which under the
+            # ThreadPoolExecutor would race two copies onto one dst. Seed with
+            # len(defect_map) to keep the common single-collision case naming
+            # byte-identical to the legacy sequential version.
+            if str(dst) in _claimed_defect or dst.exists():
+                n = len(defect_map)
+                dst = defect_dir / f"{p.stem}_{n}{p.suffix}"
+                while str(dst) in _claimed_defect or dst.exists():
+                    n += 1
+                    dst = defect_dir / f"{p.stem}_{n}{p.suffix}"
+            _claimed_defect.add(str(dst))
             defect_map[orig] = str(dst)
+            copy_jobs.append((orig, str(dst)))
 
     staged_selected = []
     for entry in selected:
@@ -2498,16 +2519,36 @@ def _stage_inputs(
             e["image_path"] = defect_map[orig]
         staged_selected.append(e)
 
-    # Stage normal images (deduplicated)
+    # Stage normal images (deduplicated). Same deferred-copy scheme as defects.
     normal_map: Dict[str, str] = {}
+    _claimed_normal: set = set()
     for orig in normal_images:
         if orig not in normal_map and Path(orig).exists():
             p = Path(orig)
             dst = normal_dir_local / p.name
-            if dst.exists():
-                dst = normal_dir_local / f"{p.stem}_{len(normal_map)}{p.suffix}"
-            shutil.copy2(orig, str(dst))
+            if str(dst) in _claimed_normal or dst.exists():
+                n = len(normal_map)
+                dst = normal_dir_local / f"{p.stem}_{n}{p.suffix}"
+                while str(dst) in _claimed_normal or dst.exists():
+                    n += 1
+                    dst = normal_dir_local / f"{p.stem}_{n}{p.suffix}"
+            _claimed_normal.add(str(dst))
             normal_map[orig] = str(dst)
+            copy_jobs.append((orig, str(dst)))
+
+    # Parallel copy dispatch. Latency-bound FUSE round-trips → ThreadPoolExecutor
+    # with the same AROMA_STAGE_WORKERS knob as _push_outputs. fut.result() in the
+    # as_completed loop re-raises the first copy failure so a missing/broken input
+    # aborts staging exactly as the legacy sequential shutil.copy2 did.
+    if copy_jobs:
+        workers = _push_workers()
+
+        def _copy(job: Tuple[str, str]) -> None:
+            shutil.copy2(job[0], job[1])
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for fut in as_completed(ex.submit(_copy, j) for j in copy_jobs):
+                fut.result()  # propagate first exception (abort), as before
 
     staged_normal = [normal_map.get(p, p) for p in normal_images]
 
