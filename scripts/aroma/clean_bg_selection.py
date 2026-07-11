@@ -363,9 +363,20 @@ def _class_bg_hist(defect_rows: List[Dict[str, str]], names, bin_edges,
 # ---------------------------------------------------------------------------
 
 def _image_dim(rows: List[Dict[str, str]], tile: int = 64) -> Tuple[int, int]:
-    """Approx (W, H) of a good image from its patch grid: max patch_xy + tile.
-    patch_xy is 'x_y' (top-left of a 64px patch)."""
-    max_x = max_y = 0
+    """(W, H) of a good image. Prefer the exact pixel size emitted by profiling
+    (image_w/image_h columns, same value on every patch row); fall back to the
+    patch-grid estimate (max patch_xy + tile) for older CSVs without those
+    columns. The grid estimate underestimates by up to one tile (truncated edge
+    patches), so exact columns give clamp-free placement/scale."""
+    for r in rows:                       # exact size — first valid row wins
+        try:
+            w = int(float(r.get("image_w", "")))
+            h = int(float(r.get("image_h", "")))
+        except (ValueError, TypeError):
+            continue
+        if w > 0 and h > 0:
+            return w, h
+    max_x = max_y = 0                     # fallback: patch-grid estimate
     for r in rows:
         pxy = str(r.get("patch_xy", ""))
         if "_" not in pxy:

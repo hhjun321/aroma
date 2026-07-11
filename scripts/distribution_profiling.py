@@ -99,6 +99,12 @@ _CONTEXT_CSV_FIELDS = [
     "image_id", "image_type", "patch_xy",
     "local_variance", "edge_density", "texture_entropy",
     "frequency_energy", "orientation_consistency",
+    # actual source-image pixel size (same value on every patch row of an image).
+    # Consumed by clean_bg_selection._image_dim for exact placement/scale — patch
+    # grid alone underestimates by up to one tile (truncated edge patches). NOT a
+    # context feature: kept out of CONTEXT_FEATURES so complexity/compat vectors
+    # (order-indexed) are unaffected.
+    "image_w", "image_h",
 ]
 
 # ---------------------------------------------------------------------------
@@ -381,6 +387,8 @@ def _context_worker(task: dict) -> List[dict]:
                     "image_id": f"{defect_type}_{image_path.stem}",
                     "image_type": image_type,
                     "patch_xy": f"{x1}_{y1}",
+                    "image_w": w,   # actual pixel size (img.shape is (h, w))
+                    "image_h": h,
                 })
                 rows.append(feats)
     except Exception as exc:
