@@ -6,9 +6,9 @@
 **런타임**: FID 모드 = **CPU 가능** | AD 모드 = **GPU 필수** (Colab Pro A100 권장).
 **데이터셋**: v2-1 4종 `severstal · mvtec_leather · aitex · mtd`. aitex = tiled(256×256/stride128, single-class).
 
-**전제 (step4 완료)**: step4에서 4종 모두 AROMA arm(`S('synth_aroma', ds)`)·random arm(`S('synth_random', ds)`) 합성본이 생성되어 있어야 한다.
-- **AROMA 입력은 이제 aroma-sym(ControlNet + symmetric compat 게이트)** 산출이다 — 구 copy_paste arm이 아니다. step4의 `generate_defects.py --method controlnet --compat_mode symmetric`가 만든 결과를 그대로 소비한다.
-- **clean-bg 게이트 parity는 step4에서 이미 적용**되어 있다 (AROMA·random 양 arm 모두 `--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0` 동일 조건). 따라서 본 문서는 **합성 재생성을 하지 않는다** — 두 arm 모두 step4 산출을 읽기만 한다.
+**전제 (step5 완료)**: step5에서 4종 모두 AROMA arm(`S('synth_aroma', ds)`)·random arm(`S('synth_random', ds)`) 합성본이 생성되어 있어야 한다.
+- **AROMA 입력은 이제 aroma-sym(ControlNet + symmetric compat 게이트)** 산출이다 — 구 copy_paste arm이 아니다. step5의 `generate_defects.py --method controlnet --compat_mode symmetric`가 만든 결과를 그대로 소비한다.
+- **clean-bg 게이트 parity는 step5에서 이미 적용**되어 있다 (AROMA·random 양 arm 모두 `--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0` 동일 조건). 따라서 본 문서는 **합성 재생성을 하지 않는다** — 두 arm 모두 step5 산출을 읽기만 한다.
 
 ---
 
@@ -26,7 +26,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
@@ -62,9 +62,9 @@ print("EXP3_OUT     :", os.environ['EXP3_OUT'])
 
 ---
 
-## STEP 2 — 전제 확인 (step4 합성본 존재)
+## STEP 2 — 전제 확인 (step5 합성본 존재)
 
-두 arm 모두 4종의 합성 이미지가 있어야 진행한다. 없으면 step4를 먼저 완료할 것.
+두 arm 모두 4종의 합성 이미지가 있어야 진행한다. 없으면 step5를 먼저 완료할 것.
 
 ```python
 import pathlib
@@ -83,7 +83,7 @@ for ds in DATASETS:
 print("\nMISSING:", missing if missing else "없음 (진행 가능)")
 ```
 
-> AROMA 쪽 이미지는 **aroma-sym**(ControlNet + symmetric 게이트) 산출이다. count가 0이면 step4의 AROMA arm(`generate_defects.py --method controlnet --compat_mode symmetric`)이 완료되지 않은 것이다.
+> AROMA 쪽 이미지는 **aroma-sym**(ControlNet + symmetric 게이트) 산출이다. count가 0이면 step5의 AROMA arm(`generate_defects.py --method controlnet --compat_mode symmetric`)이 완료되지 않은 것이다.
 
 ---
 
@@ -181,7 +181,7 @@ with open(f"{os.environ['EXP3_OUT']}/exp3_summary.md") as f:
 | Image AUROC | **aroma-sym > Random > Baseline** |
 | Pixel AUROC | **aroma-sym > Random > Baseline** |
 
-- **FID**: aroma-sym의 FID가 Random보다 낮으면, ControlNet + symmetric 호환 게이트가 만든 결함 패치가 real 결함 패치 분포에 더 근접함을 의미한다. clean-bg 게이트 parity는 step4에서 이미 양 arm 동일하게 적용되었으므로, 남은 차이는 **selection(deficit_aware/realism) + 생성(controlnet/symmetric)** 기여로 해석한다.
+- **FID**: aroma-sym의 FID가 Random보다 낮으면, ControlNet + symmetric 호환 게이트가 만든 결함 패치가 real 결함 패치 분포에 더 근접함을 의미한다. clean-bg 게이트 parity는 step5에서 이미 양 arm 동일하게 적용되었으므로, 남은 차이는 **selection(deficit_aware/realism) + 생성(controlnet/symmetric)** 기여로 해석한다.
 - **AD(PaDiM AUROC)**: 합성본을 train에 섞었을 때 이상탐지 성능이 얼마나 오르는가를 본다. aroma-sym 조건이 random·baseline을 상회하면 생성 품질이 다운스트림 유용성으로 이어진다는 근거다. baseline은 합성 미포함(real train only) 기준선이다.
 - 방향이 뒤집히거나 데이터셋별로 엇갈리면 **사후 튜닝하지 말고** 그대로 보고한다(무결성 §). 특히 aitex는 tile-level·single-class라 절대값 비교가 아니라 Δ(조건 간 차이)만 유효하다.
 
@@ -200,7 +200,7 @@ with open(f"{os.environ['EXP3_OUT']}/exp3_summary.md") as f:
 ## 공통 무결성 / 정직 (`_SPEC §5`)
 
 - **사후 튜닝 금지**: seed·image_size 등은 위 커맨드 값을 그대로 쓰고, 결과 보고 후 변경하지 않는다. FID/AUROC 방향이 기대와 달라도 재생성·재선택으로 되돌리지 않는다.
-- **합성 재생성 금지 (parity)**: 본 문서는 step4 산출(`synth_aroma`/`synth_random`)을 **읽기만** 한다. clean-bg 게이트는 step4에서 양 arm 동일 조건으로 이미 적용되었다 — exp3에서 게이트를 다시 켜거나 합성을 다시 만들면 parity가 깨진다.
+- **합성 재생성 금지 (parity)**: 본 문서는 step5 산출(`synth_aroma`/`synth_random`)을 **읽기만** 한다. clean-bg 게이트는 step5에서 양 arm 동일 조건으로 이미 적용되었다 — exp3에서 게이트를 다시 켜거나 합성을 다시 만들면 parity가 깨진다.
 - **aroma-sym 입력 명시**: AROMA arm은 ControlNet + symmetric compat 게이트(구 copy_paste 아님) 산출이다. 결과 해석·논문 기술 시 이 arm 정의를 정확히 표기한다.
 - **FID 소표본 경고**: `fid_unstable: true`이면 real 결함 패치가 50개 미만이라는 뜻 — 해당 값은 참고용으로만 쓰고 결론 근거로 삼지 않는다.
 - **aitex tile-level 주석**: aitex는 tiled(256×256/stride128)·single-class다. FID/AUROC **절대값을 타 데이터셋과 직접 비교 금지**, 동일 데이터셋 내 조건 간 Δ만 유효하다.

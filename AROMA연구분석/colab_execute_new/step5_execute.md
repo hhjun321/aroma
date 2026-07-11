@@ -1,24 +1,32 @@
-# step5 — ControlNet 학습 + τ 확정 실행 가이드 (sym_final)
+# step5 — AROMA arm + random arm 생성 (sym_final)
 
-> 이 문서는 `colab_execute_new/_SPEC.md`를 **정본**으로 따른다. STEP 0 환경 셀은 `_SPEC §1`을 그대로 복사한 것이며, 명령은 `_SPEC §3 step5`(5a/5b/5c)만 사용한다. env·output 루트 규약을 재발명하지 않는다.
+> 이 문서는 `colab_execute_new/_SPEC.md`를 **정본**으로 따른다. STEP 0 환경 셀은 `_SPEC §1`을 그대로 복사한 것이며, 명령은 `_SPEC §3 step5`만 사용한다. env·output 루트 규약을 재발명하지 않는다.
 
-**목적**: step4(AROMA arm 생성)가 소비하는 **모든 생성 선결물을 이 단계에서 확정**한다.
-1. **ControlNet 학습본** — step0(profiling)·step3(roi_candidates)로 학습 데이터를 빌드(5a)하고 SD1.5 + canny ControlNet을 fine-tune(5b)하여 `$CN_MODELS/{ds}/best_model` 산출.
-2. **τ(compat_threshold) 사전스캔**(5c, 본 문서에 절차 인라인) — symmetric 스케일 + 64px 타일링-aware로 데이터셋별 `ds_tau` 확정(`S('compat_gate',ds)/compat_tau_prescan_{ds}.json`). **aitex 전용**으로 AR/텍스처 게이트 임계(`AR_T`/`TEX_T`)도 함께 사전스캔.
+**목적**: exp4v2/exp3/exp5/exp6가 소비할 **합성물 2종**을 생성한다.
+- **AROMA arm** (`generate_defects.py --method controlnet` + `--compat_mode symmetric`): ControlNet 생성 + SGM matrix_symmetric + 64px 타일링 query + positive placement + clean-bg 게이트 + seamless 블렌딩. → `S('synth_aroma', ds)`
+- **random arm** (`generate_random.py`, 통제군): 동일 clean-bg 게이트. → `S('synth_random', ds)`
 
-> τ·AR·TEX는 step4의 `--compat_threshold`·`--cn_ar_threshold`·`--texture-dist-threshold`가 그대로 소비한다. **생성 직전 재발명 금지** — step5 말미에서 모두 확정한다(`_SPEC §3 step5 5c`).
+**중요 — step5는 소비만 한다 (재사전스캔 금지)**: τ 사전스캔·(aitex) AR/텍스처 게이트 임계·ControlNet 학습은 **step4에서 이미 확정**됐다. step5는 이 확정값을 **읽어서 소비만** 한다. step5에서 τ·AR·TEX를 다시 스캔하지 않는다(`_SPEC §5` prescan 필수 원칙, aitex 98% 폴백 교훈).
 
-**실행 순서 체인**: `phase0 → step1 → step2 → step3 → **step5(CN 학습 + τ 확정, 이 문서)** → step4(생성)`.
-- step5는 **step3 뒤·step4 앞**이다. step0(profiling)·step3(roi)의 산출을 입력으로 쓰고, step4의 `generate_defects --method controlnet --compat_mode symmetric`이 이 CN 모델(`$CN_MODELS/{ds}/best_model`)과 τ/AR/TEX 임계를 소비한다.
+**실행 환경**: AROMA arm 생성(ControlNet) = **GPU 필수**(Colab Pro A100 권장) | random arm = CPU.
 
-**환경**: 학습(5b)은 **GPU 필수** (Colab Pro A100 권장). 5a(빌드)·5c(τ 사전스캔)는 **CPU**.
-
-**전제**: phase0(profiling) · step1(complexity) · step2(prompts) · step3(roi) 완료. 즉 데이터셋별로 아래가 존재해야 한다.
-- `S('profiling',ds)/morphology_features.csv` · `context_features.csv` · `recommended_config.yaml`
-- `S('profiling',ds)/compatibility_matrix.json` — **`matrix_symmetric` 키 필수**(신 profiling). 없으면 5c hard-fail (구 profile은 `--compat_mode symmetric` 불가).
-- `S('roi',ds)/roi_candidates.json` · `roi_selected.json`
+**전제 — step4 완료**: 데이터셋별로 아래가 모두 존재해야 한다(아래 선결 assert가 검증).
+- `$CN_MODELS/{ds}/best_model/` (step4 ControlNet 학습본)
+- `S('profiling',ds)/compatibility_matrix.json` 에 `matrix_symmetric` 키 (없으면 symmetric 모드 hard-fail)
+- `S('compat_gate',ds)/compat_tau_prescan_{ds}.json` 의 `ds_tau` (τ 사전스캔 확정값)
+- (**aitex 전용**) `S('compat_gate','aitex')/ar_tex_prescan_aitex.json` 의 `ar_threshold`·`tex_threshold` (step4에서 확정한 AR/텍스처 게이트 임계)
 
 **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex = tiled(256×256/stride128, single-class).
+
+---
+
+## 실행 순서 (체인)
+
+```
+phase0(profiling) → step1(complexity) → step2(prompts) → step3(roi_selection) → step4(CN 학습 + τ·AR/TEX 사전스캔) → [step5(생성, 이 문서)] → exp4v2/exp3/exp5/exp6
+```
+
+step5는 **step4 뒤·exp* 앞**이다. step4가 확정한 CN 모델·τ·(aitex)AR/TEX를 소비해 합성물을 만들고, 그 산출(`synth_aroma`/`synth_random`)을 exp4v2/exp3/exp5/exp6가 소비한다.
 
 ---
 
@@ -36,7 +44,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
@@ -47,41 +55,9 @@ def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aite
 def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
 ```
 
-### 전제 확인 (모두 ✓여야 진행)
-
-```python
-import pathlib
-
-need = []
-for ds in DATASETS:
-    prof, roi = S('profiling', ds), S('roi', ds)
-    checks = {
-        "morphology_features.csv": f"{prof}/morphology_features.csv",
-        "context_features.csv":    f"{prof}/context_features.csv",
-        "recommended_config.yaml": f"{prof}/recommended_config.yaml",
-        "compatibility_matrix.json": f"{prof}/compatibility_matrix.json",  # 5c τ 사전스캔 (matrix_symmetric)
-        "roi_candidates.json":     f"{roi}/roi_candidates.json",
-        "roi_selected.json":       f"{roi}/roi_selected.json",             # 5c crop 크기 출처
-    }
-    for name, p in checks.items():
-        ok = pathlib.Path(p).exists()
-        if not ok: need.append(p)
-        print(f"{'✓' if ok else '✗'} {ds:14s} {name}: {p}")
-print("\nMISSING:", len(need))
-
-# matrix_symmetric 키 존재 확인 (5c hard-fail 예방 — 신 profiling 필수)
-import json as _json
-for ds in DATASETS:
-    cj = f"{S('profiling', ds)}/compatibility_matrix.json"
-    if not pathlib.Path(cj).exists():
-        print(f"✗ {ds:14s} compat json 없음"); continue
-    has = "matrix_symmetric" in _json.load(open(cj))
-    print(f"{'✓' if has else '✗ 구 profile — phase0 재실행 필요'} {ds:14s} matrix_symmetric")
-```
-
 ---
 
-## STEP 1 — 패키지 설치 (CPU)
+## STEP 1 — 패키지 설치 (AROMA arm 생성용, GPU)
 
 ```python
 !pip install diffusers transformers accelerate safetensors -q
@@ -95,391 +71,199 @@ for ds in DATASETS:
 
 ---
 
-## STEP 5a — ControlNet 학습 데이터 빌드 (`build_train_jsonl.py`, CPU, 4종)
+## STEP 2 — 선결 assert (step4 산출 확인 + τ·AR/TEX 로드)
 
-학습(5b)과 생성(step4)이 **같은 hint/prompt 생성기**를 쓰도록 `build_train_jsonl.py`로 빌드한다 (`--style technical` 고정). 입력은 step0(profiling)·step3(roi) 산출, 출력은 `S('cn_data', ds)`.
+step4가 확정한 값을 **읽어들이고**(재스캔 금지), 없으면 hard-fail한다. τ는 데이터셋별 `ds_tau`를 `TAU_BY_DS`에 담아 STEP 3 생성 루프가 소비한다. **τ=0.5 금지**(사전스캔 미실행 폴백 방지).
 
 ```python
-for ds in DATASETS:
-    os.environ['DS']      = ds
-    os.environ['PROF']    = S('profiling', ds)
-    os.environ['ROI']     = S('roi', ds)
-    os.environ['CN_DATA'] = S('cn_data', ds)
-    print(f"\n=== build {ds} ===")
-    !python $AROMA_SCRIPTS/build_train_jsonl.py \
+import pathlib, json
+
+TAU_BY_DS = {}
+AR_T = TEX_T = None
+missing = []
+
+for DS in DATASETS:
+    prof = S('profiling', DS)
+    checks = {
+        "CN best_model":         f"{os.environ['CN_MODELS']}/{DS}/best_model",
+        "compatibility_matrix":  f"{prof}/compatibility_matrix.json",
+        "morphology_features":   f"{prof}/morphology_features.csv",
+        "context_features":      f"{prof}/context_features.csv",
+        "recommended_config":    f"{prof}/recommended_config.yaml",
+        "roi_selected":          f"{S('roi', DS)}/roi_selected.json",
+        "roi_candidates":        f"{S('roi', DS)}/roi_candidates.json",
+        "tau_prescan":           f"{S('compat_gate', DS)}/compat_tau_prescan_{DS}.json",
+    }
+    print(f"\n=== {DS} ({'multi' if is_multi(DS) else 'single'}) ===")
+    for name, p in checks.items():
+        ok = pathlib.Path(p).exists()
+        if not ok: missing.append(f"{DS}:{name} → {p}")
+        print(f"  {'✓' if ok else '✗'} {name:<22} {p}")
+
+    # profiling: matrix_symmetric 키 필수 (symmetric 모드 hard-fail 방지)
+    cj_p = checks["compatibility_matrix"]
+    if pathlib.Path(cj_p).exists():
+        cj = json.load(open(cj_p))
+        have = [k for k in ('matrix','matrix_symmetric','P_def_patch','clean_dist','symmetric_epsilon') if k in cj]
+        print(f"  compat keys: {have}")
+        assert 'matrix_symmetric' in cj, \
+            f"{DS}: matrix_symmetric 없음 → phase0(symmetric emit) 재실행 필요. --compat_mode symmetric는 hard-fail."
+
+    # τ 로드 (ds_tau) — 재스캔 금지, step4 확정값 소비. τ=0.5 금지.
+    tp = checks["tau_prescan"]
+    if pathlib.Path(tp).exists():
+        tau = json.load(open(tp)).get('ds_tau')
+        assert tau is not None and 0.0 < tau < 0.5, \
+            f"{DS}: τ 이상({tau}) — step4 §τ 사전스캔 재확인 (τ=0.5/None 금지)"
+        assert abs(tau - 0.5) > 1e-9, f"{DS}: τ=0.5 금지 (사전스캔 미실행 폴백 의심)"
+        TAU_BY_DS[DS] = float(tau)
+        print(f"  τ(ds_tau) = {tau}")
+
+# aitex 전용: AR/텍스처 게이트 임계 (step4 확정값) — 재스캔 금지
+ar_p = f"{S('compat_gate', 'aitex')}/ar_tex_prescan_aitex.json"
+print(f"\n=== aitex AR/TEX 게이트 임계 ===\n  {'✓' if pathlib.Path(ar_p).exists() else '✗'} {ar_p}")
+if pathlib.Path(ar_p).exists():
+    _at = json.load(open(ar_p))
+    AR_T, TEX_T = _at.get('ar_threshold'), _at.get('tex_threshold')
+    assert AR_T is not None and TEX_T is not None, "aitex AR_T/TEX_T 누락 → step4 AR/텍스처 사전스캔 재확인"
+    print(f"  AR_T={AR_T}  TEX_T={TEX_T}  (step4 확정값 — step5 재스캔 금지)")
+else:
+    missing.append(f"aitex:ar_tex_prescan → {ar_p}")
+
+print("\nMISSING:", len(missing))
+for m in missing: print("  -", m)
+assert not missing, "선결 산출 누락 — step4(CN 학습 + τ·AR/TEX 사전스캔) 먼저 완료할 것"
+assert set(TAU_BY_DS) == set(DATASETS), f"τ 미로드 데이터셋 존재: {set(DATASETS) - set(TAU_BY_DS)}"
+print("\n✓ 선결 OK — TAU_BY_DS =", {k: round(v, 4) for k, v in TAU_BY_DS.items()})
+```
+
+> - `matrix_symmetric` 없으면 `--compat_mode symmetric`가 설계상 **hard-fail**한다 — phase0에서 symmetric 키를 emit한 profiling인지 확인.
+> - τ는 step4 사전스캔 확정값을 **그대로** 쓴다. 로컬 참고치(mtd≈0.23)는 참고용일 뿐, Colab에서는 `ds_tau` 실측을 사용한다.
+> - **aitex AR/TEX는 step4에서 확정**해 `ar_tex_prescan_aitex.json`(키 `ar_threshold`·`tex_threshold`)으로 남긴 값을 소비한다. step5에서 `roi_selected.json`으로 AR을 다시 스캔하지 않는다.
+
+---
+
+## STEP 3 — AROMA arm 생성 (ControlNet + symmetric 게이트, GPU)
+
+`_SPEC §3 step5`. 4종 공통 명령에 **데이터셋별 추가 플래그**만 붙는다.
+
+- **공통**: `--method controlnet --controlnet_path $CN_MODELS/$DS/best_model` + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <compatibility_matrix.json>` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--blend_mode seamless` + `--n_per_roi 3 --seed 42`.
+- **mvtec_leather**: `--cn_no_grayscale` 추가(컬러 가죽 — grayscale 강제 해제).
+- **aitex**: `--cn_ar_threshold $AR_T --texture-dist-threshold $TEX_T` 추가(elongated 왜곡 방지, step4 확정 임계).
+- **`--local_staging` 미사용**(ControlNet): sidecar 캐시가 Drive 직결이어야 세션 재개 시 살아남는다.
+- **출력 `--output_dir` = `S('synth_aroma', DS)`**(= `sym_final/synth_aroma/{ds}`). exp*가 `--aroma_synthetic_dir $(S('synth_aroma'))`에 `/{ds}`를 붙이므로 이 경로여야 정합한다.
+
+> ⚠️ **GPU 세션 관리**: severstal은 수천 장이라 최장이다. 세션이 끊기면 **동일 셀 재실행** = sidecar 캐시로 이어서 생성(재-GPU 스킵). 한 번에 한 데이터셋만 돌리려면 `DATASETS_GEN = ["severstal"]`처럼 좁혀 아래 루프의 대상을 바꾼다.
+
+```python
+DATASETS_GEN = DATASETS   # 세션 분리 시 ["severstal"] 등으로 좁힘
+
+for DS in DATASETS_GEN:
+    os.environ['DS']     = DS
+    os.environ['PROF']   = S('profiling', DS)
+    os.environ['ROI']    = S('roi', DS)
+    os.environ['NORMAL'] = normal_dir(DS)
+    os.environ['OUT']    = S('synth_aroma', DS)                       # ← 반드시 이 경로
+    os.environ['COMPAT'] = f"{S('profiling', DS)}/compatibility_matrix.json"
+    os.environ['TAU']    = str(TAU_BY_DS[DS])                          # step4 확정 τ 소비
+    # 데이터셋별 추가 플래그 (step4 확정값 소비 — 재사전스캔 금지)
+    if DS == "mvtec_leather":
+        os.environ['EXTRA'] = "--cn_no_grayscale"
+    elif DS == "aitex":
+        os.environ['EXTRA'] = f"--cn_ar_threshold {AR_T} --texture-dist-threshold {TEX_T}"
+    else:
+        os.environ['EXTRA'] = ""
+    print(f"\n===== AROMA gen {DS}  (τ={os.environ['TAU']}, extra='{os.environ['EXTRA']}') =====")
+    !python $AROMA_SCRIPTS/generate_defects.py \
+        --roi_dir     $ROI \
+        --normal_dir  $NORMAL \
+        --output_dir  $OUT \
+        --method      controlnet \
+        --controlnet_path  $CN_MODELS/$DS/best_model \
         --morphology_csv   $PROF/morphology_features.csv \
-        --roi_candidates   $ROI/roi_candidates.json \
         --context_features $PROF/context_features.csv \
         --config           $PROF/recommended_config.yaml \
-        --output_dir       $CN_DATA \
-        --style            technical
+        --n_per_roi 3 --seed 42 --blend_mode seamless \
+        --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
+        --compat_mode symmetric --compat_threshold $TAU \
+        --compat_matrix_json $COMPAT \
+        $EXTRA
 ```
 
-**확인**: 각 `S('cn_data',ds)/train.jsonl` 라인 수 출력. `background_type collapsed` WARN이 뜨면 그대로 진행하되 기록한다(학습·생성 동일 분포이므로 parity 유지).
-
-```python
-for ds in DATASETS:
-    p = f"{S('cn_data', ds)}/train.jsonl"
-    n = sum(1 for _ in open(p)) if pathlib.Path(p).exists() else 0
-    print(f"{ds}: train.jsonl lines = {n}")
-```
+> **활성 확인(로그)**:
+> - `clean_bg assignment ON: clean_bg_selected.json (N ROIs)` — step3.5 사전선정 배경 소비. **파일이 없으면 legacy 생성-시점 선정으로 자동 fallback되는데, 이는 "무해"가 아니다**: legacy는 원본 good 픽셀 재스캔 휴리스틱이라 step3.5의 profiling-파생 배경 선정과 **배경 히스토그램 분포가 다르다** → aroma arm의 배경이 의도와 달라지고 exp4v2 aroma/random 대조의 공정성이 저하될 수 있다. **`clean_bg assignment ON`이 반드시 떠야** 하며, 안 뜨면 step3.5 산출(`S('roi',ds)/clean_bg_selected.json`) 존재·경로를 먼저 확인한다(fallback 상태로 생성 금지).
+> - `clean_bg resolve: used=U fallback=F mismatch=M / T (roi,rep)` — **U가 T에 근접(F·M≈0)해야 정상**. `<90%` 시 WARNING(경로 불일치/staleness). 로컬 mtd 20-ROI 재검증: used=40 fallback=0 mismatch=0.
+> - (step3.5를 `--geometry_prior`로 실행한 경우) precompute된 `position`을 소비해 클래스 기하대로 배치. phase0가 `image_w/image_h`를 방출하면 **clamp-free**(로컬 40/40 정확); 없으면 grid 추정이라 edge-flush가 실제 가장자리보다 안쪽에 놓일 수 있음.
+> - `compat gate ON: threshold=… mode=symmetric` — symmetric 게이트 활성(matrix_symmetric 없으면 hard-fail).
+> - `placement-gate stats: fallback=M%` — positive placement(scan·rank·place). fallback 과다(>50%)면 τ 과대 의심 → step4 사전스캔 재확인(step5에서 튜닝 금지).
+> - (aitex) `controlnet stats`(gen_ok / ar_fallback / blank_rate) + `texture-gate stats` — AR 폴백·텍스처 게이트 동작.
+> - severstal 수천 장 = 수 시간. 캐시 재개 가능(동일 셀 재실행).
 
 ---
 
-## STEP 5b — ControlNet 학습 (`train_controlnet.py`, GPU, 데이터셋당 1세션 권장)
+## STEP 4 — random arm 생성 (통제군, CPU)
 
-공통: SD1.5 base + canny ControlNet init, `--mixed_precision fp16`, `--gradient_checkpointing`, early stopping, `--checkpointing_steps 500`, `--save_optimizer_state`, `--save_fp16`, `--resume_from_checkpoint latest`.
-
-산출: `$CN_MODELS/$DS/best_model/` (= `S('controlnet_models', ds)/best_model` = `sym_final/controlnet_models/{ds}/best_model`). `ControlNetModel.from_pretrained`로 로드 가능하며 step4가 이를 소비한다.
-
-**데이터셋별 차등** (`_SPEC §3 step5` / `controlnet_aroma_arm_execute.md` STEP 4 규약):
-
-| 데이터셋 | epochs | `--augment` | grayscale target | early_stopping_patience |
-|---------|--------|-------------|------------------|-------------------------|
-| severstal | 100 | OFF | 기본 ON (강판 grayscale) | 20 |
-| mtd | 150 | **ON** | 기본 ON (자성타일 grayscale) | 20 |
-| aitex (tiled) | 150 | **ON** | 기본 ON (직물 grayscale — mtd 준용) | 20 |
-| mvtec_leather | 300 | **ON** | **OFF** (`--no_force_grayscale_target`, 컬러 가죽) | 30 |
-
-> **권장**: 데이터셋당 1세션. severstal는 최장(수천 crop)이므로 단독 세션 권장. 세션이 끊기면 **동일 셀 재실행** → `--resume_from_checkpoint latest`가 마지막 checkpoint에서 이어서 학습한다.
+`_SPEC §3 step5 random`. AROMA arm과 **동일 clean-bg 게이트**·동일 `top_k`/`n_per_roi`/`seed`. positive placement·compat 게이트는 미적용(무변경 통제군). CPU라 `--local_staging` 사용 가능(`_SPEC §5`).
 
 ```python
-# ── severstal (100ep, no-aug, grayscale ON) — 최장, 단독 세션 권장 ──
-os.environ['DS'] = "severstal"; os.environ['CN_DATA'] = S('cn_data', "severstal")
-!python /content/AROMA/scripts/train_controlnet.py \
-    --data_dir $CN_DATA \
-    --output_dir $CN_MODELS/$DS \
-    --mixed_precision fp16 \
-    --gradient_checkpointing \
-    --num_train_epochs 100 \
-    --early_stopping_patience 20 \
-    --checkpointing_steps 500 \
-    --save_optimizer_state \
-    --save_fp16 \
-    --resume_from_checkpoint latest
+for DS in DATASETS:
+    os.environ['DS']     = DS
+    os.environ['ROI']    = S('roi', DS)
+    os.environ['NORMAL'] = normal_dir(DS)
+    os.environ['OUT_R']  = S('synth_random', DS)                      # ← exp*가 /{ds} 붙임
+    print(f"\n===== random gen {DS} =====")
+    !python $AROMA_SCRIPTS/generate_random.py \
+        --candidates_json $ROI/roi_candidates.json \
+        --normal_dir      $NORMAL \
+        --output_dir      $OUT_R \
+        --top_k 200 --n_per_roi 3 --seed 42 \
+        --local_staging \
+        --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0
 ```
 
-```python
-# ── mtd (150ep, augment ON, grayscale ON) ──
-os.environ['DS'] = "mtd"; os.environ['CN_DATA'] = S('cn_data', "mtd")
-!python /content/AROMA/scripts/train_controlnet.py \
-    --data_dir $CN_DATA \
-    --output_dir $CN_MODELS/$DS \
-    --mixed_precision fp16 \
-    --gradient_checkpointing \
-    --num_train_epochs 150 \
-    --augment \
-    --early_stopping_patience 20 \
-    --checkpointing_steps 500 \
-    --save_optimizer_state \
-    --save_fp16 \
-    --resume_from_checkpoint latest
-```
-
-```python
-# ── aitex (tiled/single: 150ep, augment ON, grayscale 기본 ON — mtd 준용) ──
-os.environ['DS'] = "aitex"; os.environ['CN_DATA'] = S('cn_data', "aitex")
-!python /content/AROMA/scripts/train_controlnet.py \
-    --data_dir $CN_DATA \
-    --output_dir $CN_MODELS/$DS \
-    --mixed_precision fp16 \
-    --gradient_checkpointing \
-    --num_train_epochs 150 \
-    --augment \
-    --early_stopping_patience 20 \
-    --checkpointing_steps 500 \
-    --save_optimizer_state \
-    --save_fp16 \
-    --resume_from_checkpoint latest
-```
-
-```python
-# ── mvtec_leather (300ep, augment ON, grayscale OFF — 컬러 가죽) ──
-os.environ['DS'] = "mvtec_leather"; os.environ['CN_DATA'] = S('cn_data', "mvtec_leather")
-!python /content/AROMA/scripts/train_controlnet.py \
-    --data_dir $CN_DATA \
-    --output_dir $CN_MODELS/$DS \
-    --mixed_precision fp16 \
-    --gradient_checkpointing \
-    --num_train_epochs 300 \
-    --augment \
-    --no_force_grayscale_target \
-    --early_stopping_patience 30 \
-    --checkpointing_steps 500 \
-    --save_optimizer_state \
-    --save_fp16 \
-    --resume_from_checkpoint latest
-```
-
-> 학습 중 validation 이미지가 `$CN_MODELS/{ds}/validation/step_*/`에 주기 저장된다.
-
-### validation 육안 게이트 (간단)
-
-전량 생성(step4) 전에 각 데이터셋 validation 이미지를 **육안으로 한 번** 본다. 결함 텍스처가 배경과 이질적이지 않고 그럴듯하면 통과. leather가 끝내 비현실적이면 학습 하이퍼(augment/epoch) 재조정 후 재학습이 원칙이며, 그래도 안 되면 step4에서 "controlnet arm 부적합"으로 정직 보고. (본격 pilot 육안·`blank_rate`·AR/텍스처 게이트는 step4의 소관.)
-
-```python
-from PIL import Image
-import matplotlib.pyplot as plt
-for ds in DATASETS:
-    vd = sorted(pathlib.Path(f"{os.environ['CN_MODELS']}/{ds}/validation").glob("step_*"))
-    if not vd: 
-        print(f"{ds}: validation 없음"); continue
-    imgs = sorted(vd[-1].glob("*.png")) + sorted(vd[-1].glob("*.jpg"))
-    imgs = imgs[:4]
-    if not imgs: continue
-    fig, axes = plt.subplots(1, len(imgs), figsize=(16, 4)); fig.suptitle(f"{ds} — {vd[-1].name}")
-    for ax, p in zip(axes if len(imgs) > 1 else [axes], imgs):
-        ax.imshow(Image.open(p)); ax.axis('off')
-    plt.show()
-```
+> random은 개선(positive placement·compat) 무관이지만 clean-bg 게이트는 AROMA와 대칭이어야 비교가 공정하다. 출력 `--output_dir`은 반드시 `S('synth_random', DS)`.
 
 ---
 
-## STEP 5c — τ (+aitex AR/TEX) 사전스캔 (CPU) — step4 생성 선결
+## STEP 5 — parity / 확인 (exp* 진입 전)
 
-step4의 `generate_defects --compat_mode symmetric --compat_threshold <τ>`가 소비하는 **τ·AR·TEX 임계를 여기서 모두 확정**한다(생성 직전 재사전스캔 금지). 신 profiling(`matrix_symmetric`, phase0) 필수.
-
-### τ 사전스캔 (symmetric 스케일, 타일링-aware)
-
-**목표 reject율 R=0.25를 수치 보기 전 고정.** τ=0.5 금지(0.5=legacy 확률 스케일 중립값). **신 profiling(`matrix_symmetric`, phase0) 필수** — 구 profile hard-fail. severstal/aitex 大 → Colab만.
-
-절차: `matrix_symmetric`은 per-cluster max-norm으로 [0,1]. good 배경에 실 crop을 uniform 배치(rescale-to-fit 재현)하고 **generate_defects의 게이트와 동일한 64px 타일링 + mean-compat**를 재현해, cluster별 tiled mean-compat 분포에서 목표 reject율 R=0.25 percentile을 τ로 잡는다. 재현 스케일이 게이트 `_compat_ok` symmetric 경로와 동일해야 유효(`gd._tile_anchors`·`TILE=64`·`AGG=mean`·`dp._context_cell_key/_extract_context_features`).
-
-**5c-i. per-DS 실행** (아래 5개 셀을 DS마다 순서대로 실행, severstal/mvtec_leather/mtd/aitex 4종 반복):
+두 arm 모두 labelable(dry_run 아니고 bbox 있는 항목) > 0인지 확인하고, **aitex는 AR 폴백 비율을 기록**한다(정직 보고용).
 
 ```python
-# [5c-0] per-DS env 세팅 (DS만 교체하며 아래 5c-1~5c-5 재실행)
-import os
-DS = "severstal"                       # ← 데이터셋마다 교체
-os.environ['DS']          = DS
-os.environ['COMPAT_JSON'] = f"{S('profiling', DS)}/compatibility_matrix.json"
-os.environ['SEL_AROMA']   = S('roi', DS)                 # roi_selected.json 출처 (실 crop 크기)
-os.environ['OUT_DIR']     = S('compat_gate', DS)         # 산출: compat_tau_prescan_{ds}.json
-os.makedirs(os.environ['OUT_DIR'], exist_ok=True)
-# AROMA_REF·DATASET_CONFIG는 STEP 0에서 세팅됨
-for k in ('COMPAT_JSON','SEL_AROMA','OUT_DIR'):
-    print(k, '=', os.environ[k], ' exists:', os.path.exists(os.environ[k]))
+import json
+
+def _live(path):
+    ann = json.load(open(path))
+    return [a for a in ann if not a.get("dry_run") and a.get("bbox")]
+
+print(f"{'dataset':<14} {'aroma':>8} {'random':>8}  note")
+print("-" * 48)
+for DS in DATASETS:
+    a = _live(f"{S('synth_aroma', DS)}/annotations.json")
+    r = _live(f"{S('synth_random', DS)}/annotations.json")
+    with_mask = sum(1 for x in a if x.get("mask_path"))
+    note = f"mask={with_mask}"
+    if DS == "aitex":
+        n_arfb = sum(1 for x in a if x.get("method") == "copy_paste_arfallback")
+        note += f"  ar_fallback={n_arfb} ({100*n_arfb/max(1,len(a)):.0f}%)"
+    print(f"{DS:<14} {len(a):>8} {len(r):>8}  {note}")
+    assert len(a) > 0 and len(r) > 0, f"{DS}: labelable 0 — 생성 실패 (STEP 3/4 로그 확인)"
+print("\n✓ parity OK — 두 arm 모두 labelable > 0")
 ```
 
-```python
-# [5c-1] 로드 — matrix_symmetric + 타일링 헬퍼 (generate_defects 게이트와 동일 경로)
-import os, sys, json, csv, numpy as np, collections, random
-os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', f"{os.environ['AROMA_REF']}/dataset_config.json")
-with open(os.environ['DATASET_CONFIG']) as f: _dscfg = json.load(f)
-os.environ['NORMAL_DIR']   = _dscfg[os.environ['DS']]['image_dir']
-os.environ['ROI_SELECTED'] = f"{os.environ['SEL_AROMA']}/roi_selected.json"
-for k in ('NORMAL_DIR','ROI_SELECTED','COMPAT_JSON'):
-    print(k, '=', os.environ[k], ' exists:', os.path.exists(os.environ[k]))
-
-sys.path.insert(0, f"{os.environ['AROMA_REF']}/scripts")
-sys.path.insert(0, f"{os.environ['AROMA_REF']}/scripts/aroma")
-import distribution_profiling as dp
-import generate_defects as gd
-_tile_anchors = gd._tile_anchors; TILE = gd._COMPAT_TILE; AGG = gd._COMPAT_TILE_AGG
-print(f"tiling: TILE={TILE} AGG={AGG}")
-
-compat = json.load(open(os.environ['COMPAT_JSON']))
-msym = compat.get('matrix_symmetric')
-if msym is None:
-    raise SystemExit("matrix_symmetric 없음 — 구 profile. distribution_profiling 재실행 필요.")
-bin_edges = compat['bin_edges']; FEATS = dp.CONTEXT_FEATURES
-clusters = [c for c, r in msym.items() if r]
-print(f"clusters(비어있지않음)={clusters}")
-for c in clusters:
-    r = msym[c]; print(f"  cluster {c}: {len(r)} cells compat[{min(r.values()):.3f},{max(r.values()):.3f}]")
-```
-
-```python
-# [5c-2] 실 crop 크기(roi_selected defect_bbox) + good 이미지 샘플
-import cv2
-from pathlib import Path
-IMG_EXTS = {'.png','.jpg','.jpeg','.bmp','.tif','.tiff'}
-sel = json.load(open(os.environ['ROI_SELECTED']))
-crop_sizes = [(int(e['defect_bbox'][2]), int(e['defect_bbox'][3])) for e in sel
-              if isinstance(e.get('defect_bbox'), (list,tuple)) and len(e['defect_bbox'])==4
-              and int(e['defect_bbox'][2])>0 and int(e['defect_bbox'][3])>0]
-assert crop_sizes, "roi_selected defect_bbox 크기 없음"
-_cw=np.array([c[0] for c in crop_sizes]); _ch=np.array([c[1] for c in crop_sizes])
-print(f"실 crop n={len(crop_sizes)} w[{_cw.min()}/{int(np.median(_cw))}/{_cw.max()}] h[{_ch.min()}/{int(np.median(_ch))}/{_ch.max()}]")
-
-N_GOOD, M_POS, SEED = 60, 40, 42
-rng = random.Random(SEED)
-good_paths = sorted(str(p) for p in Path(os.environ['NORMAL_DIR']).rglob('*') if p.suffix.lower() in IMG_EXTS)
-if len(good_paths) > N_GOOD: good_paths = rng.sample(good_paths, N_GOOD)
-print(f"good 이미지: {len(good_paths)}")
-```
-
-```python
-# [5c-3] 타일링 mean-compat 분포 (게이트 재현: rescale-to-fit + 64px 타일)
-_cell_cache = {}
-def _cell_at(gray, gi, ax, ay):
-    key=(gi,ax,ay); v=_cell_cache.get(key)
-    if v is None:
-        v = dp._context_cell_key(dp._extract_context_features(gray[ay:ay+TILE, ax:ax+TILE]), bin_edges)
-        _cell_cache[key]=v
-    return v
-
-footprints=[]
-for gi, gp in enumerate(good_paths):
-    g = cv2.imread(gp, cv2.IMREAD_GRAYSCALE)
-    if g is None: continue
-    H,W = g.shape[:2]
-    for _ in range(M_POS):
-        cw,ch = crop_sizes[rng.randrange(len(crop_sizes))]
-        if cw>W or ch>H:                       # rescale-to-fit 재현 (generate_defects 0.95 margin)
-            s=min(W/cw,H/ch)*0.95; cw,ch=max(1,int(cw*s)),max(1,int(ch*s))
-        px,py = rng.randint(0,max(0,W-cw)), rng.randint(0,max(0,H-ch))
-        cells=[_cell_at(g,gi,ax,ay) for ay in _tile_anchors(py,ch,H,TILE) for ax in _tile_anchors(px,cw,W,TILE)]
-        if cells: footprints.append(cells)
-print(f"footprint 샘플={len(footprints)} (cell 캐시={len(_cell_cache)})")
-
-def _agg(cells,row):
-    vals=[float(row.get(c,0.5)) for c in cells]
-    return min(vals) if AGG=='min' else sum(vals)/len(vals)
-agg_by_cluster={c: np.array([_agg(cells,msym[c]) for cells in footprints]) for c in clusters}
-```
-
-```python
-# [5c-4] 목표 reject율 R=0.25 → τ (percentile). R20/R30은 민감도 참고만.
-R_PRIMARY=0.25                       # 채택값 (수치 보기 전 고정)
-def _tau_at(a,R): return float(np.percentile(a, R*100.0))
-print(f"[τ 사전스캔] R={R_PRIMARY} AGG={AGG}\n")
-TAU={}
-for c in clusters:
-    a=agg_by_cluster[c]; amin,amed,amax=float(a.min()),float(np.median(a)),float(a.max())
-    neutral=float(np.mean(a==0.5)); tau=_tau_at(a,R_PRIMARY)
-    rej=float(np.mean(a<tau)); acc=1-rej
-    q25,q50=_tau_at(a,0.25),_tau_at(a,0.50); degen=abs(q25-q50)<1e-6
-    ok=(amin<=tau<amed) and (not degen) and (abs(tau-0.5)>1e-6)
-    verdict="OK" if ok else ("DEGENERATE" if degen else ("τ≈0.5" if abs(tau-0.5)<=1e-6 else "범위이탈"))
-    TAU[c]={'tau':round(tau,4),'accept':round(acc,3),'reject':round(rej,3),
-            'agg_min':round(amin,4),'agg_med':round(amed,4),'agg_max':round(amax,4),
-            'neutral':round(neutral,3),'verdict':verdict,
-            'tau_R20':round(_tau_at(a,0.20),4),'tau_R30':round(_tau_at(a,0.30),4)}
-    print(f" cluster {c}: τ={tau:.4f} acc={acc*100:4.1f}% rej={rej*100:4.1f}% "
-          f"agg[{amin:.3f}/{amed:.3f}/{amax:.3f}] neutral={neutral*100:4.1f}% → {verdict} "
-          f"(R20={TAU[c]['tau_R20']:.4f} R30={TAU[c]['tau_R30']:.4f})")
-ok_taus=[TAU[c]['tau'] for c in clusters if TAU[c]['verdict']=='OK']
-ds_tau=round(float(np.median(ok_taus)),4) if ok_taus else None
-print(f"\n데이터셋 대표 τ (OK median)={ds_tau} ({len(ok_taus)}/{len(clusters)} OK)")
-```
-
-```python
-# [5c-5] 저장 (step4가 compat_tau_prescan_{ds}.json 의 ds_tau 키를 파일로 소비)
-res={'DS':os.environ['DS'],'mode':'symmetric','agg':AGG,'tile':TILE,'R_primary':R_PRIMARY,
-     'seed':SEED,'n_footprints':len(footprints),'n_good':len(good_paths),'crop_n':len(crop_sizes),
-     'per_cluster':TAU,'ds_tau':ds_tau,'n_ok':len(ok_taus),'n_cluster':len(clusters)}
-out=f"{os.environ['OUT_DIR']}/compat_tau_prescan_{os.environ['DS']}.json"
-json.dump(res, open(out,'w'), indent=2, ensure_ascii=False)
-print("저장:",out,"→ 채택 τ=",ds_tau,"(--compat_mode symmetric --compat_threshold)")
-```
-
-**판정표** (per-cluster verdict 종합):
-
-| 관측 | 판정 | 조치 |
-|---|---|---|
-| 다수 cluster **OK**, ds_tau ∈ (agg_min, median) | τ 확정 성공 | step4에서 `--compat_mode symmetric --compat_threshold <ds_tau>` |
-| 다수 **DEGENERATE** | tiled-compat 한 점 집중 → 무판별 | 해당 DS 게이트 무의미 — 착수 보류 |
-| 다수 **τ≈0.5** | neutral 질량 지배 | patch-gran support·profiling 재점검(τ 교정 불가) |
-| R20/R30 폭 큼 | 분포 평탄 | R=0.25 고정, 사후 변경 금지 |
-
-> **정직 표기**: 위치는 uniform(random+reject 프록시), cell은 cluster-무관이라 crop↔cluster 결합은 2차 효과. crop 크기는 roi_selected `defect_bbox` 전역 분포 + rescale-to-fit 재현.
-
-**5c-ii. τ 확정값 확인** (4종 §10 완료 후):
-
-```python
-import json, os, pathlib
-TAU = {}
-for ds in DATASETS:
-    p = f"{S('compat_gate', ds)}/compat_tau_prescan_{ds}.json"
-    if pathlib.Path(p).exists():
-        TAU[ds] = json.load(open(p)).get('ds_tau')
-    print(f"{'✓' if TAU.get(ds) else '✗'} {ds:14s} ds_tau={TAU.get(ds)}  {p}")
-    assert TAU.get(ds) is None or 0.0 < TAU[ds] < 0.5, f"{ds} τ 이상(0.5 금지) — §10 재확인"
-```
-
-> `verdict`가 다수 DEGENERATE/`τ≈0.5`면 §10.5 판정표대로 조치(게이트 무의미 → 착수 보류, 또는 profiling 재점검). τ는 반드시 (agg_min, median) 구간·τ≠0.5여야 유효.
-
-### aitex 전용 — AR / 텍스처 게이트 임계 사전스캔
-
-aitex는 elongated 결함이 많아 ControlNet 512² squash 왜곡 → AR 초과 ROI는 **copy_paste 폴백**(개수·bbox parity 유지). `controlnet_aroma_arm_execute.md` STEP 5-0/5-0b로 발동률을 CPU 예측 후 임계 확정(발동률 ≤ 50% 권장, 텍스처 거부율 10~50% 밴드). pilot 육안으로 왜곡 최악 케이스 확인.
-
-```python
-# 5-0. AR 분포 스캔 → fallback% 예측 (roi_selected.json defect_bbox만으로 완전 결정)
-import json, numpy as np, os, pathlib
-sel = json.load(open(f"{S('roi','aitex')}/roi_selected.json"))
-ars = [max(e['defect_bbox'][2], e['defect_bbox'][3]) / min(e['defect_bbox'][2], e['defect_bbox'][3])
-       for e in sel if e.get('defect_bbox') and min(e['defect_bbox'][2], e['defect_bbox'][3]) > 0]
-ars = np.array(ars)
-print(f"aitex n={len(ars)} AR med={np.median(ars):.2f} p90={np.percentile(ars,90):.2f} max={ars.max():.1f}")
-for t in (2.0, 2.5, 3.0, 4.0, 6.0, 8.0):
-    print(f"  AR>{t}: fallback {100*(ars>t).mean():.0f}%")
-# 판정: fallback ≤ 50%(이상 ≤ 30%) 되는 최소 임계 선택. 2.5 초과 채택 시 step4 pilot에서 AR 상위 ROI 육안 재검.
-```
-
-```python
-# 5-0b. 텍스처 거리 분포 스캔 → 거부율 예측 (적정 밴드 10~50%)
-import sys, random
-from PIL import Image
-sys.path.insert(0, os.environ['AROMA_SCRIPTS'])
-import generate_defects as gd
-TEX_CAND = [0.15, 0.20, 0.25, 0.30, 0.35]
-prng = random.Random(0)
-normals = gd.load_normal_images(normal_dir('aitex'))
-descs = []
-for e in prng.sample(sel, min(40, len(sel))):
-    bb, mp, ip = e.get("defect_bbox"), e.get("defect_mask_path"), e.get("image_path")
-    if not (bb and mp and ip and pathlib.Path(mp).exists() and pathlib.Path(ip).exists()): continue
-    d = gd._source_bg_descriptor(np.asarray(Image.open(ip).convert("RGB")),
-                                 np.asarray(Image.open(mp).convert("L")), tuple(int(v) for v in bb))
-    if d is not None: descs.append((d, bb))
-dists = []
-for d, bb in descs:
-    for _ in range(5):
-        nim = np.asarray(Image.open(prng.choice(normals)).convert("RGB"))
-        h, w = nim.shape[:2]; bw, bh = min(int(bb[2]), w), min(int(bb[3]), h)
-        x, y = prng.randint(0, max(0, w - bw)), prng.randint(0, max(0, h - bh))
-        dists.append(gd._texture_distance(d, gd._texture_descriptor(nim[y:y+bh, x:x+bw])))
-a = np.array(dists)
-print(f"aitex n_desc={len(descs)} pairs={len(a)} dist med={np.median(a):.3f} p90={np.percentile(a,90):.3f}")
-print("거부율: " + "  ".join(f"@{t}={100*(a>t).mean():.0f}%" for t in TEX_CAND))
-# 판정: 거부율 10~50% 밴드의 임계 선택(0%=무의미, 80%+=fallback 폭주). n_desc 급감 시 게이트 자동통과(0=OFF 동일).
-```
-
-```python
-# 5-0c. 사전스캔 + pilot 육안으로 확정 → JSON 저장 (step4가 파일로 읽어 소비)
-AR_T, TEX_T = 2.5, 0.25   # ← 위 두 스캔/pilot 결과로 교체. 0=OFF
-pathlib.Path(S('compat_gate','aitex')).mkdir(parents=True, exist_ok=True)
-json.dump({'ar_threshold': AR_T, 'tex_threshold': TEX_T},
-          open(f"{S('compat_gate','aitex')}/ar_tex_prescan_aitex.json", 'w'), indent=2)
-print(f"aitex AR_T={AR_T} TEX_T={TEX_T} → {S('compat_gate','aitex')}/ar_tex_prescan_aitex.json 저장")
-```
-
-> **확정값은 step4가 파일로 소비**: τ=`compat_tau_prescan_{ds}.json`(키 `ds_tau`), aitex AR/TEX=`ar_tex_prescan_aitex.json`(키 `ar_threshold`·`tex_threshold`). 문서(세션) 분리 → 파일 인터페이스 필수. 3종(severstal/mvtec_leather/mtd)은 AR/텍스처 게이트 미사용(`_SPEC §3 step4`: aitex 전용).
-> aitex fallback이 매우 높으면(과거 임계 2.5에서 98% 실측) aroma-sym 대부분이 copy_paste가 되어 "ControlNet 생성 기여 제한"으로 정직 보고 — 폴백 자체는 parity를 해치지 않는다. 임계를 무리하게 올려(왜곡 허용) fallback을 낮추는 것은 pilot 육안 통과 없이 금지.
+> - **aitex `ar_fallback` 비율을 반드시 기록**한다. 이 비율이 높으면(예: >80%) aroma-sym의 대부분이 copy_paste 폴백이 되어 "ControlNet 생성 기여 측정 제한" 데이터셋으로 정직 보고한다(폴백은 개수·클래스·bbox parity를 유지하므로 downstream은 정상 동작). ControlNet 생성 비중 = `1 - ar_fallback비율`.
+> - labelable이 exp*의 `synth_ratio=1.0` cap을 못 채우면(random arm n_synth_train 미만) `--n_per_roi`를 올려 해당 STEP을 재실행 — sidecar 캐시로 기존 생성분은 skip되고 부족분만 추가된다.
 
 ---
 
-## 확인 — best_model 산출
+## 무결성 / 정직 (`_SPEC §5`)
 
-step4 진입 전, 4종 모두 `$CN_MODELS/{ds}/best_model/`이 존재해야 한다(step4 선결 assert).
-
-```python
-for ds in DATASETS:
-    bm = pathlib.Path(f"{os.environ['CN_MODELS']}/{ds}/best_model")
-    ok = bm.exists() and any(bm.iterdir())
-    print(f"{'✓' if ok else '✗'} {ds:14s} best_model: {bm}")
-```
-
-> ✓가 아니면 step4(생성)로 넘어가지 말 것 — `generate_defects --controlnet_path $CN_MODELS/$DS/best_model`가 선결 assert에서 실패한다.
-
----
-
-## 공통 무결성 / 정직 (`_SPEC §5`)
-
-- **사후 튜닝 금지**: epochs·augment·grayscale·patience(학습)와 τ·AR·TEX(사전스캔)는 확정값을 그대로 쓰고, 결과 보고 후 변경하지 않는다.
-- **prescan 필수**: τ·AR·텍스처 임계는 CPU 사전스캔 확정값(τ는 목표 R=0.25 percentile, **τ=0.5 금지**). mtd 값을 aitex에 무검증 일괄 적용 금지 — aitex는 tiled/single 준용이 규약으로 확정된 것이며, 임의 전용이 아니다.
+- **step5는 소비만 — 재사전스캔 금지**: τ·AR·TEX는 전부 step4 사전스캔 확정값. step5에서 다시 스캔하거나 τ=0.5로 폴백하지 않는다(aitex 98% 폴백 사후 교훈).
+- **사후 튜닝 금지**: τ·seed·n_per_roi·blend/게이트 설정을 결과 보고 후 변경하지 않는다. fallback이 과다해도 step5에서 임계를 손대지 말고 step4 사전스캔을 재검한다.
+- **AR 폴백 정직 보고**: aitex aroma-sym의 ControlNet 생성 비중을 `1 - ar_fallback비율`로 병기한다(생성 novelty 기여 vs copy_paste 재조합 분리). 이 값을 임의로 높이려고 AR 임계를 올려 왜곡물을 허용하는 것은 pilot 육안 통과(step4) 없이 금지.
+- **clean-bg 게이트 대칭**: AROMA·random 두 arm에 동일 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`)를 적용해야 비교가 공정하다.
+- ⚠️ **step5 재실행(합성 재생성) 시 exp5/exp6 임베딩 캐시 무효화**: exp5(PRDC)·exp6(kNN)의 DINOv2 임베딩 캐시 키는 **경로/파일명 기반**이라, 재생성이 동일 파일명(`syn_00000_00.jpg`)으로 내용만 덮어쓰면 **stale 임베딩이 재사용**된다. 재합성한 데이터셋은 exp5/exp6 실행 전 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행한다(상세: exp5/exp6_execute.md).
 - **aitex는 tile-level·single-class** → 절대값을 타 데이터셋과 직접 비교 금지, Δ만 유효.
+- **`--local_staging`**: random(CPU)에는 사용 가능, **ControlNet 생성(AROMA arm)에는 미사용**(sidecar 캐시 Drive 직결 필요).
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 Colab 실행으로.
-- **`--local_staging` 미사용**: ControlNet 경로는 sidecar 캐시가 Drive 직결이어야 세션 재개 시 살아남는다. 학습(5b)도 Drive 직결 output_dir을 유지한다.
-- **시간 실측·처리량 벤치 미수행** (load-test policy).
+- **시간 실측·처리량 벤치 미수행**(load-test policy).

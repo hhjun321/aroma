@@ -4,13 +4,13 @@
 
 **목적**: aroma vs random 합성의 real 결함 manifold 커버리지 비교 — **외부 임베딩 좌표계(DINOv2)** 에서 ROI 선택 가치를 반증 가능하게 검증 (저비용 L2 증거, `low_compute_validation_plan.md` 1순위).
 
-**AROMA arm 정의**: 여기서 비교되는 aroma 합성은 **aroma-sym**(step4 = `generate_defects --method controlnet` + `--compat_mode symmetric` + clean-bg 게이트 + seamless 블렌딩)의 산출물이다. random arm은 동일 clean-bg 게이트를 통과한 `generate_random.py` 통제군이다. 두 arm 모두 `S('synth_aroma')`·`S('synth_random')`(step4 산출)에서 읽는다.
+**AROMA arm 정의**: 여기서 비교되는 aroma 합성은 **aroma-sym**(step5 = `generate_defects --method controlnet` + `--compat_mode symmetric` + clean-bg 게이트 + seamless 블렌딩)의 산출물이다. random arm은 동일 clean-bg 게이트를 통과한 `generate_random.py` 통제군이다. 두 arm 모두 `S('synth_aroma')`·`S('synth_random')`(step5 산출)에서 읽는다.
 
 **데이터셋 (v2-1 확정 4종)**: `severstal · mvtec_leather · aitex · mtd`. **aitex = tiled(256×256/stride128, single-class)**.
 
 **런타임**: 임베딩 추출 T4 데이터셋당 1–3분(캐시 후 0), PRDC·permutation은 CPU. **전체 30분 이내**.
 
-**전제**: step4까지 완료되어 4종의 aroma(`S('synth_aroma',ds)/annotations.json`)·random(`S('synth_random',ds)/annotations.json`) 합성이 존재한다. mvtec_leather aroma 미생성 시 해당 데이터셋 skip 로그 후 제외(step4 생성 후 재실행).
+**전제**: step5까지 완료되어 4종의 aroma(`S('synth_aroma',ds)/annotations.json`)·random(`S('synth_random',ds)/annotations.json`) 합성이 존재한다. mvtec_leather aroma 미생성 시 해당 데이터셋 skip 로그 후 제외(step5 생성 후 재실행).
 
 ---
 
@@ -41,7 +41,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
@@ -57,8 +57,8 @@ def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (
 `--aroma_synthetic_dir`/`--random_synthetic_dir`는 **루트만** 넘기고 스크립트가 `/{ds}`를 붙인다(`{root}/{ds}/annotations.json`). `colab-execution.md` 규약대로 `S()` 값을 환경변수로 고정한 뒤 `!python` 셀에서 `$VAR`로 참조한다.
 
 ```python
-os.environ['AROMA_SYNTH_DIR']  = S('synth_aroma')    # step4 산출 (aroma-sym)
-os.environ['RANDOM_SYNTH_DIR']  = S('synth_random')   # step4 산출 (통제)
+os.environ['AROMA_SYNTH_DIR']  = S('synth_aroma')    # step5 산출 (aroma-sym)
+os.environ['RANDOM_SYNTH_DIR']  = S('synth_random')   # step5 산출 (통제)
 os.environ['EMBED_CACHE_DIR']  = S('embed_cache')    # exp5·exp6 공유 캐시
 os.environ['EXP5_OUT']         = S('exp5')
 
@@ -67,7 +67,7 @@ for k in ('AROMA_SYNTH_DIR', 'RANDOM_SYNTH_DIR', 'EMBED_CACHE_DIR', 'EXP5_OUT'):
 ```
 
 > `EMBED_CACHE_DIR = S('embed_cache')`는 **exp6(knn·rare)가 재사용**하는 공유 캐시 — 통상 삭제하지 말 것.
-> ⚠️ **단, 합성 재생성 후에는 반드시 무효화**: 캐시 키가 경로 기반(sha256 of image_path 목록)이라, step4 재실행이 **동일 파일명**(`syn_00000_00.jpg`)으로 내용을 덮어쓰면 stale 임베딩이 재사용된다. 재합성한 데이터셋은 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행.
+> ⚠️ **단, 합성 재생성 후에는 반드시 무효화**: 캐시 키가 경로 기반(sha256 of image_path 목록)이라, step5 재실행이 **동일 파일명**(`syn_00000_00.jpg`)으로 내용을 덮어쓰면 stale 임베딩이 재사용된다. 재합성한 데이터셋은 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행.
 
 ### 전제 확인 (합성 존재)
 
@@ -79,7 +79,7 @@ for ds in DATASETS:
     print(f"{ds:14s} aroma={'✓' if a.exists() else '✗'}  random={'✓' if r.exists() else '✗'}")
 ```
 
-> aroma가 ✗인 데이터셋은 step4 미완 — exp5는 자동 skip 로그를 남기며, step4 생성 후 재실행한다.
+> aroma가 ✗인 데이터셋은 step5 미완 — exp5는 자동 skip 로그를 남기며, step5 생성 후 재실행한다.
 
 ---
 

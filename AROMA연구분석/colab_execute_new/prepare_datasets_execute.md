@@ -5,7 +5,7 @@
 > **실행 환경**: CPU (severstal context prototypes만 CLIP → T4 권장).
 > **위치**: 이 문서는 파이프라인 **step -1**(phase0 앞). 4종 모두 ✓여야 `phase0_execute.md`로 진입.
 
-파이프라인 체인: **prepare_datasets(이 문서) → phase0 → step1 → step2 → step3 → step5 → step4 → exp\***
+파이프라인 체인: **prepare_datasets(이 문서) → phase0 → step1 → step2 → step3 → step4 → step5 → exp\***
 
 ---
 

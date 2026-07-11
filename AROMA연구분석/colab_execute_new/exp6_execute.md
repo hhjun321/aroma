@@ -4,7 +4,7 @@
 
 **목적**: exp5(PRDC)와 함께 저비용 L2 증거 완성 — ① `--mode knn`: held-out val 결함까지의 최근접 거리로 **커버리지 기제** 측정, ② `--mode rare`: 독립 k-means 모드에서 **rare-mode 타겟팅** 검증 (`low_compute_validation_plan.md` 2·3순위).
 
-**AROMA arm 정의**: knn 모드가 비교하는 aroma 합성은 **aroma-sym**(step4 = `generate_defects --method controlnet` + `--compat_mode symmetric` + clean-bg 게이트 + seamless 블렌딩)의 산출물이며, random arm은 동일 clean-bg 게이트를 통과한 `generate_random.py` 통제군이다(둘 다 `S('synth_aroma')`·`S('synth_random')`에서 읽음). rare 모드는 합성 산출이 아니라 **step3 ROI 선택 산출**(`S('roi',ds)/roi_selected.json`+`roi_candidates.json`)을 직접 평가한다.
+**AROMA arm 정의**: knn 모드가 비교하는 aroma 합성은 **aroma-sym**(step5 = `generate_defects --method controlnet` + `--compat_mode symmetric` + clean-bg 게이트 + seamless 블렌딩)의 산출물이며, random arm은 동일 clean-bg 게이트를 통과한 `generate_random.py` 통제군이다(둘 다 `S('synth_aroma')`·`S('synth_random')`에서 읽음). rare 모드는 합성 산출이 아니라 **step3 ROI 선택 산출**(`S('roi',ds)/roi_selected.json`+`roi_candidates.json`)을 직접 평가한다.
 
 **데이터셋 (v2-1 확정 4종)**: `severstal · mvtec_leather · aitex · mtd`. **aitex = tiled(256×256/stride128, single-class)**.
 
@@ -41,7 +41,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
@@ -57,8 +57,8 @@ def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (
 knn은 `--aroma_synthetic_dir`/`--random_synthetic_dir`(루트, 스크립트가 `/{ds}` 부착), rare는 `--roi_dir_root`(스크립트가 `{root}/{ds}/roi_*.json` 조회). `embed_cache_dir`는 **exp5와 공유**(`S('embed_cache')`). `colab-execution.md` 규약대로 `$VAR`로 참조.
 
 ```python
-os.environ['AROMA_SYNTH_DIR']  = S('synth_aroma')    # step4 산출 (aroma-sym) — knn
-os.environ['RANDOM_SYNTH_DIR']  = S('synth_random')   # step4 산출 (통제)      — knn
+os.environ['AROMA_SYNTH_DIR']  = S('synth_aroma')    # step5 산출 (aroma-sym) — knn
+os.environ['RANDOM_SYNTH_DIR']  = S('synth_random')   # step5 산출 (통제)      — knn
 os.environ['ROI_DIR_ROOT']     = S('roi')            # step3 산출            — rare
 os.environ['EMBED_CACHE_DIR']  = S('embed_cache')    # exp5·exp6 공유 캐시
 os.environ['EXP6_OUT']         = S('exp6')
@@ -69,7 +69,7 @@ for k in ('AROMA_SYNTH_DIR', 'RANDOM_SYNTH_DIR', 'ROI_DIR_ROOT', 'EMBED_CACHE_DI
 
 > ⚠️ **재합성 후 캐시 무효화**(exp5 규약 동일): 합성/ROI 재생성 시 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행. 캐시 키가 경로 기반이라 동일 파일명 덮어쓰기 시 stale 임베딩 재사용.
 > ⚠️ **부분 재실행 주의**: 같은 모드를 `--dataset_keys` 일부만으로 재실행하면 그 모드 노드가 **통째로 교체**되어 다른 데이터셋 결과가 사라진다 — 재실행 시 항상 전체 4종을 지정하거나 fresh `--output_dir` 사용.
-> ⚠️ **quality gate 정합**(rare): step3/step4에서 clean-bg·`--min_quality` 게이트를 켠 경우, null의 표본공간(`roi_candidates`)이 실제 random 생성과 같은 gated 풀인지 확인 — aroma/random/null 셋 다 동일 게이트여야 공정([[quality-gate-fairness 규약]]).
+> ⚠️ **quality gate 정합**(rare): step3/step5에서 clean-bg·`--min_quality` 게이트를 켠 경우, null의 표본공간(`roi_candidates`)이 실제 random 생성과 같은 gated 풀인지 확인 — aroma/random/null 셋 다 동일 게이트여야 공정([[quality-gate-fairness 규약]]).
 
 ---
 
@@ -188,7 +188,7 @@ print("Δ:", neg["delta_AR"]["delta"], " p:", neg["delta_AR"]["p_boot_one_sided"
 - `too_few_crops`: 후보 unique crop < max(k) — 소형 데이터셋은 `--kmeans_k`를 낮춰 재실행(예: aitex `--kmeans_k 8 10`).
 - `no_rare_modes`: 모드 빈도가 균등해 p25 컷이 비거나 val 미등장 — 해당 셀 skip 표기(정상). 전 셀 skip이면 rare_quantile 상향 검토(사유 명시).
 - `⚠few-imgs`(knn): val 이미지 < 10 — bootstrap 신뢰 낮음, aggregate 보조로만.
-- mvtec_leather aroma 합성 부재 시 knn은 skip — step4 합성 후 재실행.
+- mvtec_leather aroma 합성 부재 시 knn은 skip — step5 합성 후 재실행.
 
 ## 공통 무결성 / 정직 (`_SPEC §5`)
 

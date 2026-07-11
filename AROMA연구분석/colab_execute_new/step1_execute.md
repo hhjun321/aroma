@@ -4,7 +4,7 @@
 > **실행 환경**: **CPU**. `--local_staging`으로 Drive CSV I/O를 로컬로 스테이징 → 데이터셋당 ~1–2분.
 > **전제**: phase0(`distribution_profiling.py`) 완료 — 각 데이터셋 `S('profiling',ds)/morphology_features.csv` 존재.
 > ⚠️ **phase0 재실행 시 step1도 반드시 재실행**: phase0 재실행은 GMM 클러스터링을 **재계산**해 `morphology_features.csv`의 `cluster_id`·`image_id`가 바뀐다. step1의 MCI/CCI·정책은 이 클러스터에 종속되므로, 구 complexity를 그대로 두면 신 profiling과 **조용히 불일치**한다(오류 없이 다운스트림 mAP로만 드러남). 구/신 혼용 금지 — phase0를 다시 돌렸으면 step1→step2→step3까지 연쇄 재실행한다.
-> **실행 순서 체인**: phase0 → **step1** → step2 → step3 → step5(ControlNet 학습) → step4(생성) → exp3/exp4v2/exp5/exp6.
+> **실행 순서 체인**: phase0 → **step1** → step2 → step3 → step4(ControlNet 학습) → step5(생성) → exp3/exp4v2/exp5/exp6.
 > **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex는 tiled(single-class) — phase0에서 자동 해소된 프로파일링을 그대로 소비.
 
 ---
@@ -23,7 +23,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p

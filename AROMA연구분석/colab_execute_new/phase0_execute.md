@@ -5,7 +5,7 @@
 > **전제**: 저장소는 commit `6c8658f` 이상(신규 키를 emit하는 코드)이어야 한다. **추가로 `b1bb497` 이상**이면 `context_features.csv`가 이미지 실제 dim(`image_w`/`image_h`) 컬럼을 방출하고(step3.5 정밀 배치·스케일의 전제), `31ee0aa` 이상이면 `image_id`가 **클래스-고유키**(`{defect_type}_{stem}`, good=`_{stem}`)로 생성된다(MVTec leather stem 충돌 해소). aitex는 tiled 데이터셋(`aitex_tiled/train/good`, single-class)이 이미 준비되어 있어야 하며 `dataset_config.json`의 `image_dir`가 이를 가리키므로 자동 해소된다.
 >
 > **로컬 재검증(2026-07-11, mtd 20-ROI, `AROMA연구분석/local_revalidation_mtd20_20260711.md`)**: 신 코드로 4-stage end-to-end 무결 동작 확인 — `image_w/image_h`로 patch-격자 dim 과소추정(mean 63.2px)이 **0px으로 완전 폐쇄**(956/956), step3.5 위치 소비 clamp-free 40/40.
-> **실행 순서 체인**: **phase0 → step1 → step2 → step3 → step5(ControlNet 학습) → step4(생성) → exp3/exp4v2/exp5/exp6**. 본 문서는 체인의 최상류.
+> **실행 순서 체인**: **phase0 → step1 → step2 → step3 → step4(ControlNet 학습) → step5(생성) → exp3/exp4v2/exp5/exp6**. 본 문서는 체인의 최상류.
 > **경로 주의**: `distribution_profiling.py`는 `scripts/`(루트)에 있다 — `$AROMA_REF/scripts/...`로 호출한다. (`compute_complexity.py`/`prompt_generation.py`만 `scripts/aroma/`.)
 
 ---
@@ -24,7 +24,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p

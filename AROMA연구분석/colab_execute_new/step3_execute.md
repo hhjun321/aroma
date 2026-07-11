@@ -11,11 +11,11 @@
 ## 실행 순서 (체인)
 
 ```
-phase0(profiling) → step1(complexity) → step2(prompts) → [step3(roi_selection)] → step5(CN 학습) → step4(생성) → exp4v2/exp3/exp5/exp6
+phase0(profiling) → step1(complexity) → step2(prompts) → [step3(roi_selection)] → step4(CN 학습) → step5(생성) → exp4v2/exp3/exp5/exp6
 ```
 
 step3은 step2 완료 후 실행한다. step3 산출(`roi_candidates.json` / `roi_selected.json`)은
-step5(ControlNet 학습·`build_train_jsonl.py`)와 step4(생성·random arm)의 공통 입력이다.
+step4(ControlNet 학습·`build_train_jsonl.py`)와 step5(생성·random arm)의 공통 입력이다.
 
 ## 전제 (실행 전 확인)
 
@@ -40,7 +40,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
@@ -153,11 +153,11 @@ for DS in DATASETS:
 | 파일 | 내용 |
 |------|------|
 | `roi_candidates.json` | 전체 스코어링 결과 (image_id, cluster_id, cell_key, roi_score, deficit, prompt, quality_score) |
-| `roi_selected.json` | 선택된 top_k ROI 목록 (step4 생성·step5 CN 학습 입력) |
+| `roi_selected.json` | 선택된 top_k ROI 목록 (step5 생성·step4 CN 학습 입력) |
 | `roi_summary.md` | 마크다운 테이블 |
 
-> `roi_candidates.json`은 step5 `build_train_jsonl.py --roi_candidates`가, `roi_selected.json`(및 후보)은
-> step4 `generate_defects.py --roi_dir $(S('roi',ds))` / `generate_random.py --candidates_json .../roi_candidates.json`이 소비한다.
+> `roi_candidates.json`은 step4 `build_train_jsonl.py --roi_candidates`가, `roi_selected.json`(및 후보)은
+> step5 `generate_defects.py --roi_dir $(S('roi',ds))` / `generate_random.py --candidates_json .../roi_candidates.json`이 소비한다.
 >
 > ⚠️ **`roi_candidates.json`은 전체 후보 풀이라 대용량**(로컬 mtd 실측 ~13MB vs `roi_selected.json` ~15KB, 약 889×). 그러나 **삭제/미생성 불가** — random arm(`generate_random.py`는 selected가 아니라 **candidates 풀에서 무작위 샘플**), ControlNet train jsonl(`build_train_jsonl`), exp1/2/6 품질·커버리지 메트릭이 재소비한다. copy_paste 전용 경로만 쓰는 경우엔 미참조지만, 4종 파이프라인 전체에서는 필수. (슬림 스키마화는 별도 최적화 과제.)
 

@@ -2,16 +2,16 @@
 
 > 이 문서는 `colab_execute_new/_SPEC.md`를 **정본**으로 따른다. STEP 0 환경 셀은 `_SPEC §1`을 그대로 복사한 것이며, 명령은 `_SPEC §3 exp4v2`만 사용한다. env·output 루트 규약을 재발명하지 않는다.
 
-**목적**: sym_final 파이프라인(step4 산출 `synth_aroma`/`synth_random`)을 downstream **지도학습 결함 검출기**(YOLOv8n)로 평가한다. `baseline`(real만) / `random`(real + random 합성) / `aroma`(real + AROMA-symmetric 합성) 3조건의 mAP50을 비교해 **AROMA ROI 선택·배치가 검출기 학습에 기여하는가**를 판정한다.
+**목적**: sym_final 파이프라인(step5 산출 `synth_aroma`/`synth_random`)을 downstream **지도학습 결함 검출기**(YOLOv8n)로 평가한다. `baseline`(real만) / `random`(real + random 합성) / `aroma`(real + AROMA-symmetric 합성) 3조건의 mAP50을 비교해 **AROMA ROI 선택·배치가 검출기 학습에 기여하는가**를 판정한다.
 
 **설계 — fresh 전조건 학습**: legacy exp4(PaDiM 등 unsupervised AD)를 **폐기**하고 exp4v2(YOLOv8n supervised detection)로 대체한다. 세 조건 모두 **COCO pretrained에서 처음부터(scratch) 독립 학습** — baseline/random/aroma가 서로의 weight를 재사용하지 않으며(graft 미사용), 합성 결함을 **지도학습 레이블 데이터**로 사용한다. 평가셋은 **항상 real 결함 이미지만**(합성은 train에만).
 
-**실행 순서 체인**: `phase0 → step1 → step2 → step3 → step5(CN 학습+τ) → step4(생성) → **exp4v2(이 문서)**`.
+**실행 순서 체인**: `phase0 → step1 → step2 → step3 → step4(CN 학습+τ) → step5(생성) → **exp4v2(이 문서)**`.
 
 **환경**: YOLO 학습은 **GPU 필수** (Colab Pro A100 권장). 판정·집계는 CPU.
 
-**전제 (step4 완료)**: 데이터셋별로 아래가 존재해야 한다.
-- AROMA arm: `S('synth_aroma', ds)/annotations.json` (+ `images/`) — step4 생성 위치. exp4v2엔 루트 `S('synth_aroma')`만 넘기고 스크립트가 `/{ds}`를 붙여 이 경로를 찾는다.
+**전제 (step5 완료)**: 데이터셋별로 아래가 존재해야 한다.
+- AROMA arm: `S('synth_aroma', ds)/annotations.json` (+ `images/`) — step5 생성 위치. exp4v2엔 루트 `S('synth_aroma')`만 넘기고 스크립트가 `/{ds}`를 붙여 이 경로를 찾는다.
 - Random arm: `S('synth_random', ds)/annotations.json` (+ `images/`) — 동일 규약(루트 `S('synth_random')` + `/{ds}`).
 
 **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex = tiled(256×256/stride128, single-class).
@@ -46,7 +46,7 @@ os.environ['AROMA_DATA']     = f"{os.environ['DRIVE']}"
 os.environ['DATASET_CONFIG'] = os.environ.get('DATASET_CONFIG', '/content/AROMA/dataset_config.json')
 # ===== 단일 버전 루트 (stage-first: {stage}/{ds}) =====
 os.environ['SYM_ROOT'] = f"{os.environ['AROMA_OUT']}/sym_final"
-os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step5 산출, step4 소비)
+os.environ['CN_MODELS'] = f"{os.environ['SYM_ROOT']}/controlnet_models"   # ControlNet 학습본(step4 산출, step5 소비)
 def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
@@ -70,7 +70,7 @@ for k in ('SYNTH_AROMA', 'SYNTH_RANDOM', 'EXP4V2_OUT', 'YOLO_CACHE', 'AROMA_DATA
     print(f"{k:<14} {os.environ[k]}")
 ```
 
-### 전제 확인 (step4 산출 — 모두 ✓여야 진행)
+### 전제 확인 (step5 산출 — 모두 ✓여야 진행)
 
 ```python
 import pathlib, json
@@ -93,7 +93,7 @@ for ds in DATASETS:
 print("\nMISSING (labelable=0):", need)
 ```
 
-> 4종 모두 `aroma_ann > 0` **및** `random_ann > 0`이어야 유효하다. `0`이면 해당 데이터셋의 step4(생성)를 먼저 완료한다.
+> 4종 모두 `aroma_ann > 0` **및** `random_ann > 0`이어야 유효하다. `0`이면 해당 데이터셋의 step5(생성)를 먼저 완료한다.
 
 ---
 
@@ -114,7 +114,7 @@ print("\nMISSING (labelable=0):", need)
 
 ## 운영 노트 — synth_ratio 스윕 & arm parity 범위
 
-**① synth_ratio 스윕은 재생성 불요(한 번 크게 생성 → ratio만 변경)**: exp4v2는 로드된 합성 풀에서 `cap=int(n_real_train*synth_ratio)`만큼 **동일 seed 결정적 subsample**한다(`exp4_v2_supervised_detection.py:2418-2434`). 따라서 step4(`generate_defects`)를 **최대 ratio(≥1.0)를 채울 만큼 크게** 한 번 생성(`--n_per_roi` 상향)해두면, `--synth_ratio`만 바꿔 여러 번 실행하면 된다. 주의: **ratio마다 `--output_dir` 분리**(같은 dir이면 `--resume` skip에 걸려 재학습 안 됨), `--seed`·`--val_frac` 고정.
+**① synth_ratio 스윕은 재생성 불요(한 번 크게 생성 → ratio만 변경)**: exp4v2는 로드된 합성 풀에서 `cap=int(n_real_train*synth_ratio)`만큼 **동일 seed 결정적 subsample**한다(`exp4_v2_supervised_detection.py:2418-2434`). 따라서 step5(`generate_defects`)를 **최대 ratio(≥1.0)를 채울 만큼 크게** 한 번 생성(`--n_per_roi` 상향)해두면, `--synth_ratio`만 바꿔 여러 번 실행하면 된다. 주의: **ratio마다 `--output_dir` 분리**(같은 dir이면 `--resume` skip에 걸려 재학습 안 됨), `--seed`·`--val_frac` 고정.
 
 ```python
 for R in ["1.0", "0.8", "0.6", "0.4"]:
@@ -242,7 +242,7 @@ for ds in [d for d in ORDER if d in results] + [d for d in results if d not in O
 |---|---|
 | aroma > random 전 seed **and** > baseline | 개선이 downstream 이득 (H1 벽 넘음). 단 near-ceiling 데이터셋은 천장 고려 |
 | aroma ≈ random ≈ baseline (**flat**) | near-ceiling(예: mtd baseline~0.90)이면 placement 이득 **측정 불가** — 개선 무효 결론 **금지**. 기제(fallback률·positive 로그)만 확인하고 headroom 있는 데이터셋을 arbiter로 삼는다 |
-| aroma < random/baseline | **회귀** — 개선이 해로움(조합다양성 과축소? τ 과대?) → step5 τ 사전스캔·step4 fallback률 재점검 |
+| aroma < random/baseline | **회귀** — 개선이 해로움(조합다양성 과축소? τ 과대?) → step4 τ 사전스캔·step5 fallback률 재점검 |
 
 > **near-ceiling 주의**: mtd는 baseline mAP50이 높아 flat이 흔하다 — mtd 단독으로 개선 성패를 headline 삼지 말 것. headroom 있는 데이터셋이 arbiter.
 > **aitex는 tile-level·single-class**: 절대값을 3종(multi)과 직접 비교하지 않는다. Δ(aroma−random)만 유효.

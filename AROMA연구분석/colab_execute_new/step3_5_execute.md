@@ -1,8 +1,8 @@
 # Step 3.5 — `clean_bg_selection.py` (clean-bg 사전 선정) Colab 실행
 
-> **목적**: 원본 good을 생성 시점에 재스캔하지 않고, **프로파일링 파생 파일**(`context_features.csv`·`compatibility_matrix.json`)과 `roi_selected.json`으로 clean-background를 **사전 선정**한다. `roi_selection`(profiling→`roi_selected.json`)과 대칭인 신규 단계로, `clean_bg_selected.json`을 산출하고 step4(`generate_defects`)가 소비한다.
+> **목적**: 원본 good을 생성 시점에 재스캔하지 않고, **프로파일링 파생 파일**(`context_features.csv`·`compatibility_matrix.json`)과 `roi_selected.json`으로 clean-background를 **사전 선정**한다. `roi_selection`(profiling→`roi_selected.json`)과 대칭인 신규 단계로, `clean_bg_selected.json`을 산출하고 step5(`generate_defects`)가 소비한다.
 > **실행 환경**: **CPU**. GPU·픽셀 재스캔 불요(셀 정보는 이미 context_features에 있음).
-> **체인 위치**: phase0 → step1 → step2 → **step3(roi_selection)** → **step3.5(clean_bg_selection, 본 문서)** → step4(generate_defects) → exp*.
+> **체인 위치**: phase0 → step1 → step2 → **step3(roi_selection)** → **step3.5(clean_bg_selection, 본 문서)** → step5(generate_defects) → exp*.
 > **경로 주의**: `clean_bg_selection.py`는 `scripts/aroma/`에 있다.
 
 ---
@@ -40,13 +40,13 @@ DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]
 
 ## STEP 1 — clean_bg_selection 실행 (DATASETS 루프)
 
-`roi_selection`(step3) 산출 `roi/{ds}/roi_selected.json`이 있어야 한다. 출력은 같은 `roi/{ds}`에 쓴다(step4가 자동 로드).
+`roi_selection`(step3) 산출 `roi/{ds}/roi_selected.json`이 있어야 한다. 출력은 같은 `roi/{ds}`에 쓴다(step5가 자동 로드).
 
 ```python
 for DS in DATASETS:
     os.environ['DS']   = DS
     os.environ['PROF'] = S('profiling', DS)     # context_features.csv, compatibility_matrix.json
-    os.environ['ROI']  = S('roi', DS)           # roi_selected.json (step3 출력) — step3/step4와 동일 경로 규약
+    os.environ['ROI']  = S('roi', DS)           # roi_selected.json (step3 출력) — step3/step5와 동일 경로 규약
     print(f"\n===== clean_bg_selection: {DS} =====")
     !python $AROMA_SCRIPTS/clean_bg_selection.py \
         --profiling_dir  $PROF \
@@ -55,15 +55,15 @@ for DS in DATASETS:
         --emit_random_arm
 ```
 
-> `--emit_random_arm`: 대칭 대조군용 `clean_bg_random_arm.json`(동일 ROI 집합, random 배경)을 함께 생성. **AROMA arm vs random arm이 배경 정체성만 다르고 배치/블렌딩은 동일**해지는 계측기(step4에서 `--clean_bg_json`으로 선택).
+> `--emit_random_arm`: 대칭 대조군용 `clean_bg_random_arm.json`(동일 ROI 집합, random 배경)을 함께 생성. **AROMA arm vs random arm이 배경 정체성만 다르고 배치/블렌딩은 동일**해지는 계측기(step5에서 `--clean_bg_json`으로 선택).
 >
 > **선택 인자**:
-> - `--geometry_prior` — **Phase 3(E2 레버)**: 클래스별 실제 결함 기하(edge/surface/span prior)를 morphology bbox+실제 dim에서 유도해, 배정 배경 위 **paste 위치를 precompute**(`position`/`topk_positions`). step4가 이 위치를 소비(clamp-free, 아래 §STEP1 주의). 기본 OFF(mAP 효과 GPU-TBD). ON 시 배치가 배경 정체성뿐 아니라 위치까지 결정 → 배경 대칭대조(random arm)와는 별개의 **배치-정책 실험**(AROMA-geo vs AROMA-nogeo)용.
+> - `--geometry_prior` — **Phase 3(E2 레버)**: 클래스별 실제 결함 기하(edge/surface/span prior)를 morphology bbox+실제 dim에서 유도해, 배정 배경 위 **paste 위치를 precompute**(`position`/`topk_positions`). step5가 이 위치를 소비(clamp-free, 아래 §STEP1 주의). 기본 OFF(mAP 효과 GPU-TBD). ON 시 배치가 배경 정체성뿐 아니라 위치까지 결정 → 배경 대칭대조(random arm)와는 별개의 **배치-정책 실험**(AROMA-geo vs AROMA-nogeo)용.
 > - `--pool_k <int>` — per-ROI 배경 풀 크기 상한(기본: 데이터-유도 P95). 명시 시 고정.
 > - `--void_frac_max <float>` — void 컷 상한(기본: 데이터-유도 P90). 명시 시 고정.
 > - `--no_reject_clean_bg` — void/품질 선행 필터 비활성(전 good 유지).
 >
-> **실제 dim 전제(`b1bb497`)**: phase0가 `context_features.csv`에 `image_w/image_h`를 방출하면 위치·`scale_factor`(size-fit)가 **실제 이미지 dim** 기준으로 계산된다(patch-격자 추정 fallback 대비 edge-flush가 실제 가장자리에 정확히 부착, 위치 clamp 제거). 컬럼 없으면 자동 grid fallback(무오류, 정밀도만 저하). 로컬 mtd 20-ROI 재검증(`local_revalidation_mtd20_20260711.md`): step4 위치 소비 **40/40 clamp-free**, dim gap 63.2px→0.
+> **실제 dim 전제(`b1bb497`)**: phase0가 `context_features.csv`에 `image_w/image_h`를 방출하면 위치·`scale_factor`(size-fit)가 **실제 이미지 dim** 기준으로 계산된다(patch-격자 추정 fallback 대비 edge-flush가 실제 가장자리에 정확히 부착, 위치 clamp 제거). 컬럼 없으면 자동 grid fallback(무오류, 정밀도만 저하). 로컬 mtd 20-ROI 재검증(`local_revalidation_mtd20_20260711.md`): step5 위치 소비 **40/40 clamp-free**, dim gap 63.2px→0.
 
 ---
 
@@ -113,7 +113,7 @@ for DS in DATASETS:
 
 ---
 
-## STEP 3 — step4(generate_defects) 소비 (참고 — 상세는 step4 문서)
+## STEP 3 — step5(generate_defects) 소비 (참고 — 상세는 step5 문서)
 
 `generate_defects`가 `roi_dir/clean_bg_selected.json`을 **자동 로드**한다. 별도 인자 불요:
 
@@ -141,15 +141,15 @@ for DS in DATASETS:
 
 - [ ] STEP 1: 3종 `clean_bg_selected.json` + `clean_bg_random_arm.json` 생성
 - [ ] STEP 2-2: **E1 재현 PASS**(mtd~0.50 / aitex~0.89 / severstal~0.62, ±0.05) — 배포 하드 게이트
-- [ ] STEP 3: step4 로그에 `clean_bg assignment ON` 확인, random arm 별도 생성
+- [ ] STEP 3: step5 로그에 `clean_bg assignment ON` 확인, random arm 별도 생성
 
-통과 시 → **step4**(생성) → exp4v2에서 **AROMA arm vs random-arm(대칭 대조)** 비교. GPU 학습 후에야 mAP 판정(현재 TBD).
+통과 시 → **step5**(생성) → exp4v2에서 **AROMA arm vs random-arm(대칭 대조)** 비교. GPU 학습 후에야 mAP 판정(현재 TBD).
 
 ---
 
 ## 무결성 / 정직
 
-- 원본 good 픽셀 재스캔 금지 — 선정은 profiling 파생 파일에서만. (paste 픽셀은 step4가 배정된 normal만 연다.)
+- 원본 good 픽셀 재스캔 금지 — 선정은 profiling 파생 파일에서만. (paste 픽셀은 step5가 배정된 normal만 연다.)
 - 임계·pool은 데이터-유도(P90/P95/P1), magic number 금지. 유도값은 summary에 기록.
 - **severstal/mtd는 매칭 신호 약함**(E1) → "context 배치가 mAP를 올린다" 무검증 주장 금지. 대칭 대조군은 "통하는지 측정"하는 계측기.
 - **leather는 phase0 고유키 재실행 후** 추가(현재 제외). Phase 2(3-기준 class/bg-type)·Phase 3(bg-type per-image + 기하 prior)은 후속 dev_note 범위.
