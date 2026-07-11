@@ -327,7 +327,7 @@ def _morph_worker(task: dict) -> Optional[dict]:
                 logger.warning(f"[morph_worker] mask save failed {mask_out_path}: {mexc}")
 
         return {
-            "image_id": image_path.stem,
+            "image_id": f"{defect_type}_{image_path.stem}",
             "image_path": str(image_path),
             "defect_type": defect_type,
             "domain": domain,
@@ -354,6 +354,7 @@ def _context_worker(task: dict) -> List[dict]:
         image_path = Path(task["image_path"])
         mask_path_str = task.get("mask_path")
         image_type = task.get("image_type", "good")
+        defect_type = task.get("defect_type", "")
         gs = task.get("grid_size", GRID_SIZE)
 
         img = safe_imread(str(image_path), cv2.IMREAD_GRAYSCALE)
@@ -377,7 +378,7 @@ def _context_worker(task: dict) -> List[dict]:
                 patch = img[y1:y2, x1:x2]
                 feats = _extract_context_features(patch)
                 feats.update({
-                    "image_id": image_path.stem,
+                    "image_id": f"{defect_type}_{image_path.stem}",
                     "image_type": image_type,
                     "patch_xy": f"{x1}_{y1}",
                 })
