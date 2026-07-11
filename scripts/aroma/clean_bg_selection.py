@@ -384,6 +384,37 @@ def _size_ok(defect_wh: Tuple[int, int], bg_dim: Tuple[int, int]) -> bool:
     return cw > 0 and ch > 0 and cw <= bw and ch <= bh
 
 
+# Fit-rescale margin — MUST match generate_defects.copy_paste_synthesis (the 0.95
+# factor at the `crop_w > bw_norm or crop_h > bh_norm` branch). This is a plumbing
+# constant kept in lockstep with generation, NOT a tuned threshold (the size gate
+# weight itself is data-derived). If generation's factor changes, change it here.
+_FIT_MARGIN = 0.95
+
+
+def _scale_to_fit(defect_wh: Tuple[int, int], bg_dim: Tuple[int, int]) -> float:
+    """Rescale factor generation will apply so the crop fits the background:
+    1.0 when it already fits (no distortion), <1 when it must shrink. Mirrors
+    generate_defects exactly so precomputed positions stay valid post-rescale.
+    Doubles as the Option-1 size-fit signal (higher = less distortion)."""
+    cw, ch = defect_wh
+    bw, bh = bg_dim
+    if cw <= 0 or ch <= 0 or bw <= 0 or bh <= 0:
+        return 1.0
+    if cw <= bw and ch <= bh:
+        return 1.0
+    return min(bw / float(cw), bh / float(ch)) * _FIT_MARGIN
+
+
+def _effective_wh(defect_wh: Tuple[int, int], bg_dim: Tuple[int, int]) -> Tuple[int, int]:
+    """Crop (w,h) AFTER generation's fit-rescale — the size the paste position must
+    be computed against so it isn't clamped at generation time (Option 2)."""
+    s = _scale_to_fit(defect_wh, bg_dim)
+    if s >= 1.0:
+        return defect_wh
+    cw, ch = defect_wh
+    return (max(1, int(cw * s)), max(1, int(ch * s)))
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 (§E2) — class-conditioned geometry prior for the paste POSITION
 # ---------------------------------------------------------------------------
@@ -537,6 +568,7 @@ def build_and_rank(
     per_roi: List[Dict[str, Any]] = []
     lifts_src: List[float] = []
     lifts_cls: List[float] = []
+    lifts_size: List[float] = []
     src_ceilings: List[float] = []
     for roi_idx, r in enumerate(roi):
         axis, cls_val = _roi_class_axis(r, multi_class)
@@ -544,17 +576,22 @@ def build_and_rank(
         cls_dv = class_hist.get(str(r.get("class_key") or ""), {})
         bbox = _parse_bbox(r.get("defect_bbox"))
         wh = (bbox[2], bbox[3]) if bbox else (0, 0)
-        cand = []  # (normal_id, src_fit, class_fit, size_ok)
-        s_scores, c_scores = [], []
+        cand = []  # (normal_id, src_fit, class_fit, size_ok, size_fit)
+        s_scores, c_scores, z_scores = [], [], []
         for iid in valid_ids:
             sf = _hist_intersection(good_hist[iid], src_dv)
             cf = _hist_intersection(good_hist[iid], cls_dv)
             so = _size_ok(wh, good_dim[iid]) if wh != (0, 0) else True
-            cand.append((iid, sf, cf, so))
-            s_scores.append(sf); c_scores.append(cf)
+            # Option 1: size-fit signal = fit-rescale factor (1.0=no distortion,
+            # <1=shrink). Constant across same-size backgrounds → 0 lift → 0 weight
+            # (auto-downweighted); varies only when backgrounds differ in size.
+            zf = _scale_to_fit(wh, good_dim[iid]) if wh != (0, 0) else 1.0
+            cand.append((iid, sf, cf, so, zf))
+            s_scores.append(sf); c_scores.append(cf); z_scores.append(zf)
         if s_scores:
             lifts_src.append(max(s_scores) - float(np.median(s_scores)))
             lifts_cls.append(max(c_scores) - float(np.median(c_scores)))
+            lifts_size.append(max(z_scores) - float(np.median(z_scores)))
             src_ceilings.append(max(s_scores))
         per_roi.append({"roi_idx": roi_idx, "axis": axis, "cls_val": cls_val,
                         "cluster_id": r.get("cluster_id"), "cell_key": r.get("cell_key", ""),
@@ -566,21 +603,23 @@ def build_and_rank(
     # ---- Data-derived weights from mean lift (normalized) ----
     w_src = float(np.mean(lifts_src)) if lifts_src else 0.0
     w_cls = float(np.mean(lifts_cls)) if lifts_cls else 0.0
-    tot = w_src + w_cls
-    if tot <= 0:                       # both signals flat → fall back to per-source
-        w_src, w_cls = 1.0, 0.0
+    w_size = float(np.mean(lifts_size)) if lifts_size else 0.0
+    lift_src_m, lift_cls_m, lift_size_m = w_src, w_cls, w_size
+    tot = w_src + w_cls + w_size
+    if tot <= 0:                       # all signals flat → fall back to per-source
+        w_src, w_cls, w_size = 1.0, 0.0, 0.0
     else:
-        w_src, w_cls = w_src / tot, w_cls / tot
+        w_src, w_cls, w_size = w_src / tot, w_cls / tot, w_size / tot
 
     # ---- Pass 2: combine, rank, assign ----
     selected: List[Dict[str, Any]] = []
     pool_sizes: List[int] = []
     for pr in per_roi:
         src_key = pr["src_key"]
-        scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok)
-        for iid, sf, cf, so in pr["cand"]:
-            comb = w_src * sf + w_cls * cf
-            scored.append((comb + _bg_jitter(src_key, iid), iid, sf, cf, so))
+        scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok, size_fit)
+        for iid, sf, cf, so, zf in pr["cand"]:
+            comb = w_src * sf + w_cls * cf + w_size * zf
+            scored.append((comb + _bg_jitter(src_key, iid), iid, sf, cf, so, zf))
         scored.sort(key=lambda t: t[0], reverse=True)
         if scored:
             if pool_k:
@@ -600,16 +639,20 @@ def build_and_rank(
         # real edge/surface tendency (want_edge = class more edge-bound than the
         # global rate). Position depends on (bg dim, crop wh); deterministic
         # jitter for diversity. None (position at generation) when geometry off.
+        # Option 2: compute against the EFFECTIVE (post fit-rescale) crop size so
+        # the position stays valid — not clamped — when generation shrinks an
+        # oversized crop to fit the background.
         def _pos_for(nid):
             if not geometry_prior or not pr["bbox"]:
                 return None
-            wh = (pr["bbox"][2], pr["bbox"][3])
+            dim = good_dim.get(nid, (0, 0))
+            wh = _effective_wh((pr["bbox"][2], pr["bbox"][3]), dim)
             want_edge = class_edge.get(str(pr["cls_val"]), global_edge) > global_edge
             j = (_bg_jitter(src_key, nid) / 1e-7)  # blake2b frac in [0,1)
-            return _place_position(wh, good_dim.get(nid, (0, 0)), want_edge, j)
+            return _place_position(wh, dim, want_edge, j)
 
         if top:
-            comb_j, best_id, sf, cf, so = top[0]
+            comb_j, best_id, sf, cf, so, zf = top[0]
             selected.append(dict(base,
                                  assigned_normal_id=best_id,
                                  topk_pool=[t[1] for t in top],
@@ -618,20 +661,25 @@ def build_and_rank(
                                  score=round(comb_j - _bg_jitter(src_key, best_id), 6),
                                  hist_intersection=round(sf, 6),   # per-source (E1-comparable)
                                  class_fit=round(cf, 6),           # class-conditioned (Phase 2)
-                                 size_ok=bool(so), n_valid_bg=len(pr["cand"])))
+                                 size_ok=bool(so),
+                                 size_fit=round(zf, 4),            # Option 1 signal (1=no distortion)
+                                 scale_factor=round(zf, 4),        # Option 2: generation's fit-rescale
+                                 n_valid_bg=len(pr["cand"])))
         else:
             selected.append(dict(base, assigned_normal_id=None, topk_pool=[],
                                  topk_positions=[], position=None,
                                  score=0.0, hist_intersection=0.0, class_fit=0.0,
-                                 size_ok=False, n_valid_bg=0))
+                                 size_ok=False, size_fit=0.0, scale_factor=0.0,
+                                 n_valid_bg=0))
 
     derived = {
         "pool_cut": "p95" if not pool_k else ("k=%d" % pool_k),
         "mean_pool_size": float(np.mean(pool_sizes)) if pool_sizes else 0.0,
         "multi_class": float(multi_class),
-        "w_src": round(w_src, 4), "w_class": round(w_cls, 4),
-        "lift_src": round(float(np.mean(lifts_src)), 4) if lifts_src else 0.0,
-        "lift_class": round(float(np.mean(lifts_cls)), 4) if lifts_cls else 0.0,
+        "w_src": round(w_src, 4), "w_class": round(w_cls, 4), "w_size": round(w_size, 4),
+        "lift_src": round(lift_src_m, 4),
+        "lift_class": round(lift_cls_m, 4),
+        "lift_size": round(lift_size_m, 4),
         # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
         "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
         "geometry_prior": float(geometry_prior),
@@ -693,19 +741,22 @@ def _build_summary(selected, derived_pool, derived_void, strategy) -> str:
         f"multi_class={bool(derived_pool['multi_class'])}",
         f"- signal weights (data-derived from lift): "
         f"w_src={derived_pool.get('w_src')}  w_class={derived_pool.get('w_class')}  "
-        f"(lift_src={derived_pool.get('lift_src')}, lift_class={derived_pool.get('lift_class')})",
+        f"w_size={derived_pool.get('w_size')}  "
+        f"(lift_src={derived_pool.get('lift_src')}, lift_class={derived_pool.get('lift_class')}, "
+        f"lift_size={derived_pool.get('lift_size')})",
         f"- src_fit_ceiling_mean={derived_pool.get('src_fit_ceiling_mean')}  "
         f"(E1 reproduction gate — compare to E1 sim_best)",
         "",
         "## Sample assignments (top 30)",
         "",
-        "| roi_idx | class | assigned_bg | hist∩ | pool | size_ok |",
-        "|---------|-------|-------------|-------|------|---------|",
+        "| roi_idx | class | assigned_bg | hist∩ | pool | size_ok | scale |",
+        "|---------|-------|-------------|-------|------|---------|-------|",
     ]
     for s in selected[:30]:
         lines.append(
             f"| {s['roi_idx']} | {s['class_value']} | {s['assigned_normal_id']} "
-            f"| {s['hist_intersection']:.4f} | {len(s['topk_pool'])} | {s['size_ok']} |"
+            f"| {s['hist_intersection']:.4f} | {len(s['topk_pool'])} | {s['size_ok']} "
+            f"| {s.get('scale_factor', 1.0)} |"
         )
     return "\n".join(lines)
 
