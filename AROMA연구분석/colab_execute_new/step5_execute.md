@@ -154,7 +154,9 @@ print("\n✓ 선결 OK — TAU_BY_DS =", {k: round(v, 4) for k, v in TAU_BY_DS.i
 
 ---
 
-## STEP 3 — AROMA arm 생성 (ControlNet + symmetric 게이트, GPU)
+## STEP 3 — AROMA arm 생성 (ControlNet + symmetric 게이트, GPU) — 2차 (reviewer 대응)
+
+> **이 단계는 2차**다. 1차(무학습 copy_paste = STEP 3B)로 AROMA vs random을 먼저 확정하고, reviewer가 "생성형 대비 무학습의 기여"를 물을 때 이 ControlNet arm을 추가 생성해 나란히 비교한다. 선결로 step4b(ControlNet 학습, GPU)가 완료돼야 한다. 1차만 진행 중이면 이 STEP은 건너뛴다.
 
 `_SPEC §3 step5`. 4종 공통 명령에 **데이터셋별 추가 플래그**만 붙는다.
 
@@ -212,29 +214,30 @@ for DS in DATASETS_GEN:
 
 ---
 
-## STEP 3B — AROMA arm 생성 (copy_paste, 무학습·CPU) — 대안 경로
+## STEP 3B — AROMA arm 생성 (copy_paste, 무학습·CPU) — ★ 1차 주 경로
 
-copy-paste 피벗(무학습 기판)용 경로. ControlNet 생성 대신 **결함 crop을 clean-bg에 직접 합성**한다. STEP 3(controlnet)과 **동일한 clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비**를 쓰되, 생성 방식만 copy_paste다.
+> **진행 순서(계획)**: **1차 = 이 STEP 3B(copy_paste)** 로 AROMA arm 생성 → STEP 4 random arm과 함께 exp4v2에서 **AROMA(copy_paste) vs random** 비교. **2차 = reviewer report 대응 시 STEP 3(controlnet)** 로 AROMA arm을 추가 생성해 "무학습 vs 생성형" 비교. 1차는 GPU·ControlNet 학습(step4b) 불요.
 
-- **선결이 더 가볍다**: ControlNet 학습(step4b, GPU) **불요**. phase0·step1~3·step3.5 + (compat 쓰면) step4c τ만 있으면 된다. **GPU 불필요(CPU)**.
+copy-paste 피벗(무학습 기판). ControlNet 생성 대신 **결함 crop을 clean-bg에 직접 합성**한다. STEP 3(controlnet)과 **동일한 clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비**를 쓰되, 생성 방식만 copy_paste다.
+
+- **선결이 가볍다**: ControlNet 학습(step4b, GPU) **불요**. phase0·step1~3·step3.5 + (compat 쓰면) step4c τ만 있으면 된다. **GPU 불필요(CPU)**.
 - **공통**: `--method copy_paste` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <…>`(positive placement, method-무관) + `--blend_mode seamless`(또는 `alpha`) + `--n_per_roi 3 --seed 42`.
 - **CN 전용 인자 미사용**: `--controlnet_path`·`--morphology_csv`·`--context_features`(CN conditioning), `--cn_ar_threshold`·`--cn_no_grayscale`(ControlNet squash/그레이스케일 전용)는 **넣지 않는다**(copy_paste는 squash가 없어 AR 폴백 자체가 없음).
-- **⚠️ `--config $PROF/recommended_config.yaml`는 필수(compat 사용 시)**: compat 게이트는 `--compat_matrix_json` **그리고 `--config`**(bin_edges/context 이산화)를 **둘 다** 요구한다. `--config`가 없으면 `compat gate: … requires --compat_matrix_json AND --config — gate disabled` 경고와 함께 **placement 게이트가 조용히 꺼진다**(clean_bg 배경 소비는 유지되나 위치 게이트 무효). 로컬 검증: `--config` 포함 시 `compat gate ON` + `placement-gate active=40`, 누락 시 `active=0`.
+- **`--config` 불요**: compat 게이트의 `bin_edges`는 `--compat_matrix_json`(compatibility_matrix.json)에 이미 들어있어 **matrix JSON만으로 자기완결**한다(코드 `299c5b0`). `--config`를 넣어도 무해하나 copy_paste엔 불필요. (구버전 코드는 `--config`를 요구했으니 저장소가 `299c5b0` 이상인지 확인.)
 - **aitex 텍스처 게이트만** 선택 적용: `--texture-dist-threshold $TEX_T`(텍스처 이질 배치 거부는 method-무관). AR 게이트는 미적용.
 - **`--local_staging` 사용 가능**(CPU 경로).
-- **출력**: controlnet과 **택일**이면 `S('synth_aroma', DS)`. 두 방법을 **비교**하려면 output_dir을 분리(예: `S('synth_aroma_cp', DS)`)해 exp*에서 각각 `--aroma_synthetic_dir`로 지정.
+- **출력**: 1차 copy_paste는 `S('synth_aroma', DS)`. 2차에 controlnet과 **비교**하려면 각각 `S('synth_aroma_cp', DS)`·`S('synth_aroma_cn', DS)`로 분리해 exp*에서 `--aroma_synthetic_dir`로 지정.
 
 ```python
 DATASETS_GEN = DATASETS   # 세션 분리 시 좁힘
 
 for DS in DATASETS_GEN:
     os.environ['DS']     = DS
-    os.environ['PROF']   = S('profiling', DS)
     os.environ['ROI']    = S('roi', DS)
     os.environ['NORMAL'] = normal_dir(DS)
-    os.environ['OUT']    = S('synth_aroma', DS)     # controlnet과 비교 시 별도 dir(예: 'synth_aroma_cp')
+    os.environ['OUT']    = S('synth_aroma', DS)      # 2차 controlnet과 비교 시 'synth_aroma_cp'
     os.environ['COMPAT'] = f"{S('profiling', DS)}/compatibility_matrix.json"
-    os.environ['TAU']    = str(TAU_BY_DS[DS])        # step4c 확정 τ (compat_mode symmetric일 때)
+    os.environ['TAU']    = str(TAU_BY_DS[DS])         # step4c 확정 τ (compat_mode symmetric일 때)
     os.environ['EXTRA']  = f"--texture-dist-threshold {TEX_T}" if DS == "aitex" else ""  # 텍스처 게이트만
     print(f"\n===== AROMA copy_paste gen {DS}  (τ={os.environ['TAU']}) =====")
     !python $AROMA_SCRIPTS/generate_defects.py \
@@ -242,7 +245,6 @@ for DS in DATASETS_GEN:
         --normal_dir  $NORMAL \
         --output_dir  $OUT \
         --method      copy_paste \
-        --config      $PROF/recommended_config.yaml \
         --n_per_roi 3 --seed 42 --blend_mode seamless \
         --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
         --compat_mode symmetric --compat_threshold $TAU \
@@ -251,9 +253,9 @@ for DS in DATASETS_GEN:
         $EXTRA
 ```
 
-> **compat 없이(순수 clean_bg 배치)** 돌리려면 `--compat_mode`·`--compat_threshold`·`--compat_matrix_json`·`--config`를 모두 빼면 된다(그러면 step4c τ도 불요 → phase0·step1~3·step3.5만으로 완결). 단 exp에서 controlnet arm과 비교할 때는 **placement 게이트를 맞춰야** 공정하다.
-> **활성 확인(로그)**: STEP 3과 동일하게 `clean_bg assignment ON` + `clean_bg resolve used/fallback/mismatch` 확인. `placement-gate stats: fallback=M%`도 동일 적용. `controlnet stats`·`ar_fallback`은 copy_paste에선 나오지 않는다(정상).
-> **정직성**: copy_paste는 생성 novelty가 없다(원본 crop 재조합). exp3(FID/생성품질)에서 controlnet arm과 절대비교하지 말고, AROMA ROI-선택·배치 기여(exp4v2 mAP)로 판정한다.
+> **compat 없이(순수 clean_bg 배치)** 돌리려면 `--compat_mode`·`--compat_threshold`·`--compat_matrix_json`을 빼면 된다(그러면 step4c τ도 불요 → phase0·step1~3·step3.5만으로 완결). 단 2차에서 controlnet arm과 비교할 때는 **placement 게이트를 맞춰야** 공정하다.
+> **활성 확인(로그)**: `clean_bg assignment ON` + `clean_bg resolve used/fallback/mismatch`(U≈T, F·M≈0) + `compat gate ON: threshold=… mode=symmetric` + `placement-gate stats: active=N compat=N fallback=M%`. `--config` 없이도 `compat gate ON`이 떠야 정상(로컬 mtd 20-ROI: active=40 fallback=0, clean_bg used=40/40). `controlnet stats`·`ar_fallback`은 copy_paste에선 안 나온다(정상).
+> **정직성**: copy_paste는 생성 novelty가 없다(원본 crop 재조합). AROMA ROI-선택·배치 기여를 exp4v2 mAP로 판정한다. exp3(FID/생성품질)에서 2차 controlnet arm과 절대비교하지 않는다.
 
 ---
 
