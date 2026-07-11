@@ -96,8 +96,15 @@ for DS in DATASETS:
     # 데이터-유도 3-신호 가중(w_src/w_class/w_size)도 함께 표기 — 정직성/재현
     w = re.search(r'w_src=([0-9.]+)\s+w_class=([0-9.]+)\s+w_size=([0-9.]+)', sm)
     wtxt = f" | weights src={w.group(1)} class={w.group(2)} size={w.group(3)}" if w else ""
-    print(f"{DS:10s} src_fit_ceiling {ceil:.3f}  vs E1 {ref}  → {'PASS' if ok else 'DRIFT(조사)'}{wtxt}")
+    # image_id 매칭율 — <1.0이면 stale roi/profiling 불일치(src 신호 전멸의 진짜 원인)
+    mf = re.search(r'src_match_frac=([0-9.]+)', sm)
+    frac = float(mf.group(1)) if mf else 1.0
+    flag = "" if frac >= 0.999 else f"  ⚠️ image_id 매칭율 {frac:.0%} — 구 roi/신 profiling 혼용! step3 재실행 필요"
+    print(f"{DS:10s} src_fit_ceiling {ceil:.3f}  vs E1 {ref}  → {'PASS' if ok else 'DRIFT(조사)'}{wtxt}{flag}")
+    assert frac >= 0.999, f"[{DS}] src_match_frac={frac} — roi_selected.json이 이 profiling 산출이 아님. step3(roi_selection)를 동일 profiling으로 재실행."
 ```
+
+> **`src_fit_ceiling=0.0` + `hist∩ mean 0.0` + distinct backgrounds 소수(예: 200 ROI→6)** 조합이 나오면 거의 확실히 **구 `roi_selected.json` × 신 `context_features.csv` 혼용**이다(phase0 image_id 고유키 재실행 후 step3를 안 돌린 경우). `src_match_frac`이 이를 즉시 드러낸다 → **step3(roi_selection)를 신 profiling으로 재실행** 후 step3.5 재실행.
 
 > **3-신호 데이터-유도 가중(no-hardcoding)**: `w_src`(per-source hist) + `w_class`(클래스-조건부 hist, Phase 2) + `w_size`(크기 fit, 옵션1). 각 신호의 관측 lift에 비례하며 정규화. **배경 크기가 균일한 셋은 `w_size≈0`으로 자동 downweight**(변별 불가 신호 자동 억제), 크기 편차 있는 셋(mtd)은 `w_size>0`. 로컬 실측: mtd `src=0.559 class=0.282 size=0.160`(20-ROI 재검증). 값이 데이터셋별로 다른 것이 정상.
 
