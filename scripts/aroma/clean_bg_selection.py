@@ -195,6 +195,14 @@ def load_inputs(profiling_dir: str, roi_dir: str) -> Dict[str, Any]:
     roi = load_json(str(rd / "roi_selected.json"))
     names, bin_edges = _load_discretizer(compat)
 
+    # image_id → defect_type for the CLASS axis (Phase 2 class-conditioned dv).
+    # morphology_features covers ALL defect images (not just the selected subset),
+    # so the per-class background aggregate is complete. Optional: absent → class
+    # signal simply unavailable (w_class derives to 0).
+    iid_to_class: Dict[str, str] = {}
+    for m in _read_csv_rows(pd / "morphology_features.csv"):
+        iid_to_class[m.get("image_id", "")] = m.get("defect_type", "")
+
     good_by_img: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     defect_rows: List[Dict[str, str]] = []
     for r in ctx_rows:
@@ -212,6 +220,7 @@ def load_inputs(profiling_dir: str, roi_dir: str) -> Dict[str, Any]:
         "roi": roi,
         "good_by_img": dict(good_by_img),
         "defect_rows": defect_rows,
+        "iid_to_class": iid_to_class,
     }
 
 
@@ -326,9 +335,23 @@ def _image_hist(rows: List[Dict[str, str]], names, bin_edges,
     return {c: n / total for c, n in counts.items()}
 
 
-# NOTE: class-conditioned dv histograms (aggregate defect patches BY class) are a
-# Phase-2 upgrade (§1-a.1). Phase 1 uses per-source-image dv (E1-faithful, see
-# build_and_rank), so no class aggregation helper is defined here yet.
+def _class_bg_hist(defect_rows: List[Dict[str, str]], names, bin_edges,
+                   var_floor: float, edge_floor: float,
+                   iid_to_class: Dict[str, str]) -> Dict[str, Dict[str, float]]:
+    """Phase 2 (§1-a.1) — class-conditioned source background histograms:
+    aggregate ALL defect-image patches BY class → {class: {cell: frac}}. Offline
+    analogue of _dv_bg_hist generalized to the class axis. Profiling already
+    excludes defect tiles (_context_worker); void tiles skipped (data floors)."""
+    counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    total: Dict[str, int] = defaultdict(int)
+    for r in defect_rows:
+        cls = iid_to_class.get(r.get("image_id", ""))
+        if not cls or _patch_void(r, var_floor, edge_floor):
+            continue
+        counts[cls][_cell_key(r, names, bin_edges)] += 1
+        total[cls] += 1
+    return {cls: {c: n / (total[cls] or 1) for c, n in cc.items()}
+            for cls, cc in counts.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -386,31 +409,32 @@ def build_and_rank(
     edge_floor: float,
     pool_k: Optional[int],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, float]]:
-    """Score each (ROI x valid good image) by class-conditioned histogram
-    intersection, apply the size-fit hard gate, and assign a ranked top-K pool
-    per ROI. Deterministic (no rng) → symmetric-control friendly."""
+    """Two signals per (ROI x valid good) candidate:
+      src_fit   = hist∩(good, the ROI's SOURCE-image background)  [Phase 1, E1-faithful]
+      class_fit = hist∩(good, the ROI class's aggregate background) [Phase 2, §1-a.1]
+    Combine by DATA-DERIVED weights (no hardcoding): each signal is weighted by
+    its measured discriminative lift (best − median within a ROI, averaged over
+    ROIs) → a signal that is ~flat across backgrounds (weak, e.g. severstal/mtd
+    context) gets ~0 weight; a discriminative one (aitex) dominates. Rank by the
+    combined score; assign a data-cut top pool. Deterministic (no rng)."""
     names, bin_edges = data["names"], data["bin_edges"]
     roi = data["roi"]
     good_by_img = data["good_by_img"]
     defect_rows = data["defect_rows"]
+    iid_to_class = data.get("iid_to_class", {})
 
-    # class axis (multi vs single) — labeling/audit only in Phase 1
     class_keys = {str(r.get("class_key") or "_") for r in roi}
     multi_class = len(class_keys - {"", "_", "defect"}) > 1
 
-    # Phase 1 (extract-first): dv = the SOURCE defect image's own background
-    # histogram — byte-faithful to generate_defects._dv_bg_hist / E1, so the
-    # ranking is directly verifiable against E1's numbers. Class-conditioned dv
-    # (aggregate by class) is the Phase-2 upgrade (§1-a.1), deferred.
+    # per-source dv (Phase 1) + class-conditioned dv (Phase 2)
     defect_by_img: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     for r in defect_rows:
         defect_by_img[r.get("image_id", "")].append(r)
-    src_hist_by_img: Dict[str, Dict[str, float]] = {
-        iid: _image_hist(rows, names, bin_edges, var_floor, edge_floor)
-        for iid, rows in defect_by_img.items()
-    }
+    src_hist_by_img = {iid: _image_hist(rows, names, bin_edges, var_floor, edge_floor)
+                       for iid, rows in defect_by_img.items()}
+    class_hist = _class_bg_hist(defect_rows, names, bin_edges, var_floor, edge_floor,
+                                iid_to_class)
 
-    # precompute per valid good image: hist + dim (once)
     good_hist: Dict[str, Dict[str, float]] = {}
     good_dim: Dict[str, Tuple[int, int]] = {}
     for iid in valid_ids:
@@ -418,29 +442,55 @@ def build_and_rank(
         good_hist[iid] = _image_hist(rows, names, bin_edges, var_floor, edge_floor)
         good_dim[iid] = _image_dim(rows)
 
-    selected: List[Dict[str, Any]] = []
-    pool_sizes: List[int] = []
-
+    # ---- Pass 1: score both signals per (ROI, good); collect per-ROI lift ----
+    per_roi: List[Dict[str, Any]] = []
+    lifts_src: List[float] = []
+    lifts_cls: List[float] = []
+    src_ceilings: List[float] = []
     for roi_idx, r in enumerate(roi):
         axis, cls_val = _roi_class_axis(r, multi_class)
-        dv = src_hist_by_img.get(str(r.get("image_id", "")), {})
+        src_dv = src_hist_by_img.get(str(r.get("image_id", "")), {})
+        cls_dv = class_hist.get(str(r.get("class_key") or ""), {})
         bbox = _parse_bbox(r.get("defect_bbox"))
         wh = (bbox[2], bbox[3]) if bbox else (0, 0)
-        src_key = "%s\x1f%s" % (str(r.get("image_path", "")), str(r.get("defect_bbox", "")))
-
-        # Score every valid good image. size_ok is RECORDED (not a hard exclude):
-        # generate_defects rescales oversized crops, so dropping the ROI here
-        # would only force a fallback. Keep the assignment, flag size_ok.
-        scored: List[Tuple[float, str, bool]] = []  # (jittered_score, normal_id, size_ok)
+        cand = []  # (normal_id, src_fit, class_fit, size_ok)
+        s_scores, c_scores = [], []
         for iid in valid_ids:
-            size_ok = _size_ok(wh, good_dim[iid]) if wh != (0, 0) else True
-            hi = _hist_intersection(good_hist[iid], dv)  # ranking score = E1 metric
-            scored.append((hi + _bg_jitter(src_key, iid), iid, size_ok))
-        scored.sort(key=lambda t: t[0], reverse=True)
+            sf = _hist_intersection(good_hist[iid], src_dv)
+            cf = _hist_intersection(good_hist[iid], cls_dv)
+            so = _size_ok(wh, good_dim[iid]) if wh != (0, 0) else True
+            cand.append((iid, sf, cf, so))
+            s_scores.append(sf); c_scores.append(cf)
+        if s_scores:
+            lifts_src.append(max(s_scores) - float(np.median(s_scores)))
+            lifts_cls.append(max(c_scores) - float(np.median(c_scores)))
+            src_ceilings.append(max(s_scores))
+        per_roi.append({"roi_idx": roi_idx, "axis": axis, "cls_val": cls_val,
+                        "cluster_id": r.get("cluster_id"), "cell_key": r.get("cell_key", ""),
+                        "image_id": str(r.get("image_id", "")), "bbox": bbox,
+                        "src_key": "%s\x1f%s" % (str(r.get("image_path", "")),
+                                                 str(r.get("defect_bbox", ""))),
+                        "cand": cand})
 
-        # Data-driven pool cut (no hardcoding): keep the top decile of this ROI's
-        # scores (>= p95), i.e. the strongest matches, so the pool is bounded and
-        # meaningful for rep-cycling; --pool_k caps it explicitly if passed.
+    # ---- Data-derived weights from mean lift (normalized) ----
+    w_src = float(np.mean(lifts_src)) if lifts_src else 0.0
+    w_cls = float(np.mean(lifts_cls)) if lifts_cls else 0.0
+    tot = w_src + w_cls
+    if tot <= 0:                       # both signals flat → fall back to per-source
+        w_src, w_cls = 1.0, 0.0
+    else:
+        w_src, w_cls = w_src / tot, w_cls / tot
+
+    # ---- Pass 2: combine, rank, assign ----
+    selected: List[Dict[str, Any]] = []
+    pool_sizes: List[int] = []
+    for pr in per_roi:
+        src_key = pr["src_key"]
+        scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok)
+        for iid, sf, cf, so in pr["cand"]:
+            comb = w_src * sf + w_cls * cf
+            scored.append((comb + _bg_jitter(src_key, iid), iid, sf, cf, so))
+        scored.sort(key=lambda t: t[0], reverse=True)
         if scored:
             if pool_k:
                 top = scored[:max(1, pool_k)]
@@ -450,35 +500,33 @@ def build_and_rank(
         else:
             top = []
         pool_sizes.append(len(top))
-
-        base = {
-            "roi_idx": roi_idx,
-            "image_id": str(r.get("image_id", "")),
-            "class_axis": axis,
-            "class_value": cls_val,
-            "cluster_id": r.get("cluster_id"),
-            "cell_key": r.get("cell_key", ""),
-            "defect_bbox": bbox,
-        }
+        base = {"roi_idx": pr["roi_idx"], "image_id": pr["image_id"],
+                "class_axis": pr["axis"], "class_value": pr["cls_val"],
+                "cluster_id": pr["cluster_id"], "cell_key": pr["cell_key"],
+                "defect_bbox": pr["bbox"]}
         if top:
-            best_raw, best_id, best_ok = top[0]
-            hi_best = round(best_raw - _bg_jitter(src_key, best_id), 6)
+            comb_j, best_id, sf, cf, so = top[0]
             selected.append(dict(base,
                                  assigned_normal_id=best_id,
-                                 topk_pool=[iid for _, iid, _ in top],
-                                 hist_intersection=hi_best,
-                                 class_fit=hi_best,   # Phase 1: class_fit == per-source hist
-                                 size_ok=bool(best_ok),
-                                 n_valid_bg=len(scored)))
+                                 topk_pool=[t[1] for t in top],
+                                 score=round(comb_j - _bg_jitter(src_key, best_id), 6),
+                                 hist_intersection=round(sf, 6),   # per-source (E1-comparable)
+                                 class_fit=round(cf, 6),           # class-conditioned (Phase 2)
+                                 size_ok=bool(so), n_valid_bg=len(pr["cand"])))
         else:
             selected.append(dict(base, assigned_normal_id=None, topk_pool=[],
-                                 hist_intersection=0.0, class_fit=0.0,
+                                 score=0.0, hist_intersection=0.0, class_fit=0.0,
                                  size_ok=False, n_valid_bg=0))
 
     derived = {
         "pool_cut": "p95" if not pool_k else ("k=%d" % pool_k),
         "mean_pool_size": float(np.mean(pool_sizes)) if pool_sizes else 0.0,
         "multi_class": float(multi_class),
+        "w_src": round(w_src, 4), "w_class": round(w_cls, 4),
+        "lift_src": round(float(np.mean(lifts_src)), 4) if lifts_src else 0.0,
+        "lift_class": round(float(np.mean(lifts_cls)), 4) if lifts_cls else 0.0,
+        # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
+        "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
     }
     return selected, derived
 
@@ -533,6 +581,11 @@ def _build_summary(selected, derived_pool, derived_void, strategy) -> str:
         f"- pool_cut={derived_pool['pool_cut']}  "
         f"mean_pool_size={derived_pool['mean_pool_size']:.2f}  "
         f"multi_class={bool(derived_pool['multi_class'])}",
+        f"- signal weights (data-derived from lift): "
+        f"w_src={derived_pool.get('w_src')}  w_class={derived_pool.get('w_class')}  "
+        f"(lift_src={derived_pool.get('lift_src')}, lift_class={derived_pool.get('lift_class')})",
+        f"- src_fit_ceiling_mean={derived_pool.get('src_fit_ceiling_mean')}  "
+        f"(E1 reproduction gate — compare to E1 sim_best)",
         "",
         "## Sample assignments (top 30)",
         "",

@@ -78,20 +78,25 @@ for DS in DATASETS:
 
 ### 2-2. E1 재현 하드 게이트 (context_features 소싱 ≡ 픽셀 소싱)
 
-배포 전 필수: 오프라인 히스토그램 매칭이 생성-시점 값을 재현하는지. `clean_bg_selected`의 best `hist_intersection`이 E1의 sim_best와 근접해야 한다.
+배포 전 필수: 오프라인 히스토그램 매칭이 생성-시점 값을 재현하는지. **`src_fit_ceiling_mean`**(per-source 최대매칭 평균, Phase 2 가중과 독립)이 E1의 sim_best와 근접해야 한다. (Phase 2에서 `hist_intersection`은 *배정된* 배경의 per-source fit이므로 조합 랭킹상 ceiling보다 낮을 수 있어, 게이트는 ceiling으로 판정한다 — `clean_bg_summary.md`에 기록됨.)
 
 ```python
-import json, statistics as st
+import re
 # 로컬 검증 기준값 (AROMA연구분석/pivot_local_validation_20260711.md, scripts_local/e1.py)
 E1_SIM_BEST = {"aitex": 0.895, "mtd": 0.502, "severstal": 0.623}
 for DS in DATASETS:
-    sel = json.load(open(f"{os.environ['AROMA_OUT']}/roi/{DS}/clean_bg_selected.json"))
-    hi = [s['hist_intersection'] for s in sel if s.get('assigned_normal_id')]
-    m = st.mean(hi) if hi else 0.0
+    sm = open(f"{os.environ['AROMA_OUT']}/roi/{DS}/clean_bg_summary.md", encoding='utf-8').read()
+    m = re.search(r'src_fit_ceiling_mean=([0-9.]+)', sm)
+    ceil = float(m.group(1)) if m else 0.0
     ref = E1_SIM_BEST.get(DS)
-    ok = ref is None or abs(m - ref) < 0.05
-    print(f"{DS:10s} best hist∩ mean {m:.3f}  vs E1 {ref}  → {'PASS' if ok else 'DRIFT(조사)'}")
+    ok = ref is None or abs(ceil - ref) < 0.05
+    # 데이터-유도 신호 가중(w_src/w_class)도 함께 표기 — 정직성/재현
+    w = re.search(r'w_src=([0-9.]+)\s+w_class=([0-9.]+)', sm)
+    wtxt = f" | weights w_src={w.group(1)} w_class={w.group(2)}" if w else ""
+    print(f"{DS:10s} src_fit_ceiling {ceil:.3f}  vs E1 {ref}  → {'PASS' if ok else 'DRIFT(조사)'}{wtxt}")
 ```
+
+> `w_class`(데이터-유도)는 클래스-조건부 배경 신호의 변별력(lift)에 비례 — leather 제외 3종 로컬: mtd 0.33 / aitex 0.31 / severstal 0.41. 값이 데이터셋별로 다른 것이 정상(no-hardcoding).
 
 > DRIFT 시(±0.05 초과): profiling의 비-overlap truncate 타일링 ↔ generate_defects의 far-edge-inclusive 타일링 **discretization 갭** 조사(설계 §2). 통과 못 하면 배포 보류.
 
