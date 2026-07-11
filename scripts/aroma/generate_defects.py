@@ -770,6 +770,29 @@ _POS_STRIDE = 32
 _POS_TOPK = 8
 _POS_MAX_CAND = 4096
 
+# Image-level background selection by D_v-specific distribution similarity
+# (compat_mode=='symmetric' only — devnote aroma_compat_gate_clean-grounded_
+# redesign, "D_v-specific 배경 분포 유사도" redesign superseding the cluster-
+# aggregate mean-compat ranking). The legacy main loop draws the background
+# uniformly (`rng.choice(normals)`), so WHICH image a defect lands on is
+# unconditioned on the source's background — only the WITHIN-image position was
+# compat-ranked (_positive_place, unchanged). The prior image ranker scored each
+# normal by the MEAN compatibility of its tiles for the defect CLUSTER, but
+# cluster is a defect-morphology grouping (not a background type) and a mean
+# collapses appearance heterogeneity — so similar mean-compat scores did not mean
+# similar-looking backgrounds (devnote 원인2/원인3). This tier instead compares
+# DISTRIBUTIONS: it builds the SOURCE defect image's background cell histogram
+# (`_dv_bg_hist`, defect region excluded) and each clean image's non-void cell
+# histogram (`_cell_hist` over the cached `_normal_tile_cells` tiles), ranks the
+# clean pool by histogram-intersection similarity (`_hist_intersection`, [0,1]),
+# and samples the background from the top-K (diversity preserved — argmax would
+# collapse the pool). p_dv is per-SOURCE (cached by source key); the clean
+# histogram is source-independent (cached ONCE per path); only the intersection +
+# ranking repeats per distinct source.
+_NORMAL_TOPK = 16          # sample the background from the top-K highest-scoring normals
+_NORMAL_SAMPLE_CAP = 64    # max 64px tiles sampled per image (bounds cost on large pools)
+_NORMAL_STRIDE = 64        # tile stride when scanning a normal (auto-coarsened above the cap)
+
 
 def _tile_anchors(start: int, length: int, bound: int, tile: int = 64) -> List[int]:
     """Window start-coordinates that cover footprint [start, start+length) with
@@ -1005,6 +1028,269 @@ def _positive_place(
     # Placement still uses the sampled top-K position for diversity.
     best_nonvoid_mean = float(nonvoid[0][0])
     return chosen_pos, best_nonvoid_mean, len(nonvoid)
+
+
+def _normal_tile_cells(
+    gray: np.ndarray,
+    bin_edges: Dict[str, List[float]],
+    stride: int = _NORMAL_STRIDE,
+    cap: int = _NORMAL_SAMPLE_CAP,
+    min_quality: float = 0.7,
+    blur_threshold: float = 100.0,
+) -> List[Tuple[Optional[str], bool]]:
+    """Tile a normal image into ``(cell, void)`` pairs for image-level compat
+    scoring (``_image_compat_score`` / ``_rank_normals``).
+
+    Slides a full ``_COMPAT_TILE`` (64px) window over ``gray`` (already the SAME
+    grayscale the placement gate uses) with step ``stride``; the step is
+    auto-coarsened until the tile count is under ``cap`` so the samples stay
+    spread across the whole image (never biased to the top-left corner) and the
+    per-image cost is bounded on large pools. For each tile it records:
+
+    - ``cell``: the profiling context cell key (``_extract_context_features`` →
+      ``_context_cell_key``, IDENTICAL to how the compat matrix was built), or
+      ``None`` when the profiling helpers / cv2 are unavailable (scored as a
+      neutral 0.5 downstream).
+    - ``void``: ``not _is_clean_background(tile)`` — a black/flat tile is a void
+      and is excluded from the image's compat score.
+
+    Cluster-independent (neither cell nor void depends on the defect cluster), so
+    the caller computes it ONCE per normal path and reuses it across clusters.
+    Pure / deterministic — no rng.
+    """
+    result: List[Tuple[Optional[str], bool]] = []
+    if gray is None or getattr(gray, "size", 0) == 0:
+        return result
+    h, w = gray.shape[:2]
+    tile = _COMPAT_TILE
+
+    def _anchors(dim: int, st: int) -> List[int]:
+        if dim <= tile:
+            return [0]
+        a = list(range(0, dim - tile + 1, st))
+        if a[-1] != dim - tile:
+            a.append(dim - tile)  # always include the far edge
+        return a
+
+    st = max(1, int(stride))
+    ya = _anchors(h, st)
+    xa = _anchors(w, st)
+    # Coarsen the stride until the tile grid is under the cap — keeps the sample
+    # spread across the image instead of truncating to the first `cap` tiles.
+    while len(ya) * len(xa) > cap and st < max(h, w, 1):
+        st *= 2
+        ya = _anchors(h, st)
+        xa = _anchors(w, st)
+
+    ctx_feat_fn, cell_key_fn = _load_context_cell_helpers()
+    have_cells = ctx_feat_fn is not None and cell_key_fn is not None and HAS_CV2
+
+    for ay in ya:
+        for ax in xa:
+            if len(result) >= cap:
+                return result
+            win = gray[ay:ay + tile, ax:ax + tile]
+            if win.size == 0:
+                continue
+            try:
+                is_void = not _is_clean_background(
+                    win, min_quality=min_quality, blur_threshold=blur_threshold
+                )
+            except Exception:
+                is_void = False
+            cell: Optional[str] = None
+            if have_cells:
+                try:
+                    cell = cell_key_fn(ctx_feat_fn(win), bin_edges)
+                except Exception:
+                    cell = None
+            result.append((cell, is_void))
+    return result
+
+
+def _image_compat_score(
+    cells_voids: List[Tuple[Optional[str], bool]],
+    compat_row: Optional[Dict[str, float]],
+) -> float:
+    """Compat score of one normal image for a defect cluster: the MEAN
+    compatibility of its non-void tiles (``compat_row.get(cell, 0.5)`` — an
+    unobserved / ``None`` cell is neutral 0.5, matching the gate's soft match).
+
+    Returns ``-1.0`` when the image has NO non-void tile (fully black/flat →
+    excluded from ranking by ``_rank_normals``). Pure / deterministic.
+    """
+    row = compat_row or {}
+    vals = [float(row.get(cell, 0.5)) for cell, void in cells_voids if not void]
+    if not vals:
+        return -1.0
+    return sum(vals) / len(vals)
+
+
+def _rank_normals(
+    scored: List[Tuple[float, str]],
+    rng: random.Random,
+    topk: int = _NORMAL_TOPK,
+) -> Optional[str]:
+    """Pick one normal path from ``scored`` ``[(score, path)]`` by compat rank.
+
+    Drops excluded images (``score < 0`` → all-void, ``_image_compat_score``
+    returned -1.0), sorts the rest by score descending (stable → ties keep input
+    order for determinism), and samples ONE path from the top-``topk`` (``rng``
+    → per-selection diversity under a fixed seed; argmax would collapse the pool
+    to a single background). Returns ``None`` when nothing qualifies so the
+    caller can fall back to the uniform draw. Pure given ``rng`` — exactly one
+    rng draw when a path is returned, zero when ``None``.
+    """
+    valid = [(s, p) for s, p in scored if s >= 0.0]
+    if not valid:
+        return None
+    valid.sort(key=lambda t: t[0], reverse=True)
+    k = max(1, min(int(topk), len(valid)))
+    return rng.choice(valid[:k])[1]
+
+
+def _cell_hist(cells_voids: List[Tuple[Optional[str], bool]]) -> Dict[str, float]:
+    """Normalized distribution over the NON-VOID context-cell keys of one image.
+
+    Consumes the ``[(cell, void)]`` tiles produced by ``_normal_tile_cells``
+    (clean images) and turns them into a probability histogram: count non-void
+    tiles per cell (``None`` cells — profiling helpers unavailable — are
+    skipped), then divide by the non-void total so the values sum to 1.0.
+    Returns ``{}`` when there is no usable non-void cell (fully black/flat →
+    scored -1.0 / dropped by the caller). Pure / deterministic — no rng.
+    """
+    counts: Dict[str, int] = {}
+    total = 0
+    for cell, void in cells_voids:
+        if void or cell is None:
+            continue
+        counts[cell] = counts.get(cell, 0) + 1
+        total += 1
+    if total == 0:
+        return {}
+    return {c: n / total for c, n in counts.items()}
+
+
+def _dv_bg_hist(
+    gray: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    bbox: Optional[Tuple[int, int, int, int]] = None,
+    bin_edges: Optional[Dict[str, List[float]]] = None,
+    stride: int = _NORMAL_STRIDE,
+    cap: int = _NORMAL_SAMPLE_CAP,
+) -> Dict[str, float]:
+    """Normalized BACKGROUND cell histogram of a SOURCE defect image (``D_v``).
+
+    Slides a 64px window over ``gray`` (step ``stride``, auto-coarsened under
+    ``cap`` exactly like ``_normal_tile_cells`` so the sample stays spread
+    across the image and the cost stays bounded on large pools), EXCLUDES every
+    tile that lies on the defect, and maps each surviving background tile to a
+    profiling cell key (``_extract_context_features`` → ``_context_cell_key`` —
+    the SAME discretization the compat matrix and the clean histogram use). The
+    result is the normalized ``{cell: fraction}`` distribution of the defect
+    image's background.
+
+    Defect exclusion (mirrors distribution_profiling._context_worker):
+      - ``mask`` given (full-frame binary, gray resolution — resized nearest if
+        it differs): skip a tile whose defect-pixel fraction exceeds 0.5
+        (``mask[tile].mean() > 0.5``), IDENTICAL to ``_context_worker``.
+      - else ``bbox`` (x, y, w, h) given: skip a tile whose area-overlap with
+        the bbox exceeds half the tile (fallback when no mask is persisted).
+
+    Returns ``{}`` when no background tile survives, or when the profiling
+    helpers / cv2 / ``bin_edges`` are unavailable. Pure / deterministic — no rng.
+    """
+    if gray is None or getattr(gray, "size", 0) == 0:
+        return {}
+    ctx_feat_fn, cell_key_fn = _load_context_cell_helpers()
+    if ctx_feat_fn is None or cell_key_fn is None or not HAS_CV2 or bin_edges is None:
+        return {}
+    h, w = gray.shape[:2]
+    tile = _COMPAT_TILE
+
+    # Full-frame defect mask (bool, gray resolution) — matches _context_worker's
+    # `raw > 0`. Resize nearest when a downscaled GT mask is passed.
+    dmask: Optional[np.ndarray] = None
+    if mask is not None and getattr(mask, "size", 0) > 0:
+        m = mask
+        if m.shape[:2] != (h, w):
+            try:
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+            except Exception:
+                m = None
+        if m is not None:
+            dmask = m > 0
+
+    bx = by = bw_box = bh_box = None
+    if dmask is None and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        try:
+            bx, by, bw_box, bh_box = (int(v) for v in bbox)
+        except (TypeError, ValueError):
+            bx = None
+
+    def _anchors(dim: int, st: int) -> List[int]:
+        if dim <= tile:
+            return [0]
+        a = list(range(0, dim - tile + 1, st))
+        if a[-1] != dim - tile:
+            a.append(dim - tile)  # always include the far edge
+        return a
+
+    st = max(1, int(stride))
+    ya = _anchors(h, st)
+    xa = _anchors(w, st)
+    while len(ya) * len(xa) > cap and st < max(h, w, 1):
+        st *= 2
+        ya = _anchors(h, st)
+        xa = _anchors(w, st)
+
+    half_area = 0.5 * tile * tile
+    counts: Dict[str, int] = {}
+    total = 0
+    for ay in ya:
+        for ax in xa:
+            y2, x2 = ay + tile, ax + tile
+            if dmask is not None:
+                if float(dmask[ay:y2, ax:x2].mean()) > 0.5:
+                    continue  # majority-defect tile
+            elif bx is not None:
+                ix1, iy1 = max(ax, bx), max(ay, by)
+                ix2 = min(x2, bx + bw_box)
+                iy2 = min(y2, by + bh_box)
+                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                if inter > half_area:
+                    continue  # tile mostly inside the defect bbox
+            win = gray[ay:y2, ax:x2]
+            if win.size == 0:
+                continue
+            # void/flat exclusion — mirror p_clean's rule (_normal_tile_cells
+            # drops void tiles). Without this, the source's void tiles inject
+            # cells absent from every clean histogram and bias the intersection
+            # down / distort the ranking (review MEDIUM). Same defaults as
+            # _normal_tile_cells (min_quality 0.7, blur 100.0).
+            if not _is_clean_background(win, min_quality=0.7, blur_threshold=100.0):
+                continue
+            try:
+                cell = cell_key_fn(ctx_feat_fn(win), bin_edges)
+            except Exception:
+                continue
+            counts[cell] = counts.get(cell, 0) + 1
+            total += 1
+    if total == 0:
+        return {}
+    return {c: n / total for c, n in counts.items()}
+
+
+def _hist_intersection(p: Dict[str, float], q: Dict[str, float]) -> float:
+    """Histogram-intersection similarity of two normalized cell distributions:
+    ``sum_cell min(p[cell], q[cell])`` over shared cells. Ranges [0, 1] (1.0 =
+    identical distribution, 0.0 = disjoint supports). Returns 0.0 when either
+    distribution is empty. Pure / deterministic — iterates the smaller dict."""
+    if not p or not q:
+        return 0.0
+    if len(p) > len(q):
+        p, q = q, p
+    return sum(min(v, q[c]) for c, v in p.items() if c in q)
 
 
 def _paste_and_finalize(
@@ -2628,6 +2914,113 @@ def run(
     gate_agg = {"active": 0, "repick": 0, "fallback": 0,
                 "texture_active": 0, "compat_active": 0}
 
+    # Image-level background selection by D_v-specific distribution similarity
+    # (symmetric mode only). When ON, the main loop replaces the uniform
+    # `rng.choice(normal_images)` with a top-K sample over the clean pool ranked
+    # by histogram-intersection similarity between the SOURCE defect image's
+    # background cell histogram (`_dv_bg_hist`) and each clean image's non-void
+    # cell histogram (`_cell_hist`). Clean tile lists AND their histograms are
+    # cached per path (`normal_cells_cache` / `normal_hist_cache`, both
+    # source-independent → computed once); each source's p_dv and its ranking
+    # over the pool are cached per source key (`dv_hist_cache` / `dv_scored_cache`
+    # / `dv_pool_cache`) so a large pool (e.g. mtd 956) is tiled once and every
+    # later ROI/rep sharing a source is a cheap dict lookup. Gate OFF ⇒ the
+    # uniform draw and rng stream are byte-identical to legacy.
+    image_rank_on = (
+        compat_matrix is not None
+        and compat_bin_edges is not None
+        and compat_mode == "symmetric"
+        and compat_threshold > 0.0   # explicit: keep threshold=0 byte-identical even if matrix load decouples from threshold later
+        and HAS_CV2
+    )
+    if image_rank_on:
+        _irk_feat, _irk_cell = _load_context_cell_helpers()
+        if _irk_feat is None or _irk_cell is None:
+            image_rank_on = False  # profiling helpers unavailable → ranking off
+        else:
+            logger.info("image-level D_v-distribution ranking ON (symmetric): "
+                        "top-%d of %d normals by background histogram-intersection, "
+                        "cap=%d tiles/img, stride=%d",
+                        _NORMAL_TOPK, len(normal_images),
+                        _NORMAL_SAMPLE_CAP, _NORMAL_STRIDE)
+    normal_cells_cache: Dict[str, List[Tuple[Optional[str], bool]]] = {}
+    normal_hist_cache: Dict[str, Dict[str, float]] = {}
+    dv_hist_cache: Dict[str, Dict[str, float]] = {}
+    dv_scored_cache: Dict[str, List[Tuple[float, str]]] = {}
+    dv_pool_cache: Dict[str, List[str]] = {}
+
+    def _normal_cells_for(_p: str) -> List[Tuple[Optional[str], bool]]:
+        """Load a normal, grayscale it exactly as the placement gate does (cv2
+        RGB2GRAY), and return its cached [(cell, void)] tiles."""
+        try:
+            _arr = np.asarray(_PILImage.open(_p).convert("RGB"))
+        except Exception:
+            return []
+        if HAS_CV2 and _arr.ndim == 3:
+            _g = cv2.cvtColor(_arr, cv2.COLOR_RGB2GRAY)
+        else:
+            _g = _arr if _arr.ndim == 2 else _arr[..., 0]
+        return _normal_tile_cells(
+            _g, compat_bin_edges, stride=_NORMAL_STRIDE, cap=_NORMAL_SAMPLE_CAP,
+            min_quality=min_bg_quality, blur_threshold=bg_blur_threshold,
+        )
+
+    def _normal_hist_for(_p: str) -> Dict[str, float]:
+        """Cached non-void cell histogram (p_clean) for a normal path. Reuses the
+        `normal_cells_cache` [(cell, void)] tiles → `_cell_hist`."""
+        _h = normal_hist_cache.get(_p)
+        if _h is None:
+            _cells = normal_cells_cache.get(_p)
+            if _cells is None:
+                _cells = _normal_cells_for(_p)
+                normal_cells_cache[_p] = _cells
+            _h = _cell_hist(_cells)
+            normal_hist_cache[_p] = _h
+        return _h
+
+    def _dv_hist_for(_re: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, float]]:
+        """Background histogram (p_dv) for a roi_entry's SOURCE defect image,
+        cached by source key. Excludes the defect region via the full-frame GT
+        mask (defect_mask_path) when present, else the defect_bbox. Returns
+        (dv_key, p_dv); p_dv is {} when the source is missing/unreadable or no
+        background tile survives."""
+        _dpath = _re.get("image_path", "")
+        if not _dpath or not Path(_dpath).exists():
+            return None, {}
+        _mpath = _re.get("defect_mask_path") or ""
+        _bbox = _re.get("defect_bbox")
+        _has_mask = bool(_mpath) and Path(_mpath).exists()
+        # Key: mask-mode is bbox-independent (full-frame mask excludes all
+        # defects) → key by mask; bbox-mode keys by the specific bbox.
+        if _has_mask:
+            _dv_key = f"{_dpath}|m:{_mpath}"
+        else:
+            _bb = list(_bbox) if isinstance(_bbox, (list, tuple)) else None
+            _dv_key = f"{_dpath}|b:{_bb}"
+        _p = dv_hist_cache.get(_dv_key)
+        if _p is None:
+            try:
+                _arr = np.asarray(_PILImage.open(_dpath).convert("RGB"))
+            except Exception:
+                dv_hist_cache[_dv_key] = {}
+                return _dv_key, {}
+            if HAS_CV2 and _arr.ndim == 3:
+                _g = cv2.cvtColor(_arr, cv2.COLOR_RGB2GRAY)
+            else:
+                _g = _arr if _arr.ndim == 2 else _arr[..., 0]
+            _m = None
+            if _has_mask:
+                try:
+                    _m = np.asarray(_PILImage.open(_mpath).convert("L"))
+                except Exception:
+                    _m = None
+            _bb_arg = _bbox if (_m is None and isinstance(_bbox, (list, tuple))
+                                and len(_bbox) == 4) else None
+            _p = _dv_bg_hist(_g, mask=_m, bbox=_bb_arg, bin_edges=compat_bin_edges,
+                             stride=_NORMAL_STRIDE, cap=_NORMAL_SAMPLE_CAP)
+            dv_hist_cache[_dv_key] = _p
+        return _dv_key, _p
+
     drive_img_dir = Path(output_dir) / "images"
     drive_mask_dir = Path(output_dir) / "masks"
 
@@ -2666,9 +3059,45 @@ def run(
                 n_ok += 1
                 continue
 
-            normal_path = rng.choice(normal_images)
             compat_row = (compat_matrix.get(str(roi_entry.get("cluster_id")), {})
                           if compat_matrix is not None else None)
+            # Background selection. Symmetric mode: rank the clean pool by
+            # histogram-intersection similarity between this ROI's SOURCE
+            # background distribution (p_dv) and each clean image's non-void
+            # distribution (p_clean), then top-K sample the background; the
+            # stage-2 re-pick pool is narrowed to the top-K ranked normals so
+            # escapes also stay rank-based. Clean images with no non-void cell
+            # (empty p_clean) score -1.0 → dropped by `_rank_normals`, matching
+            # the old all-void exclusion. Every other case (defect / legacy /
+            # threshold=0 / empty p_dv) keeps the uniform draw — exactly one
+            # rng.choice, byte-identical stream. compat_row is still passed to
+            # synthesis for the WITHIN-image _positive_place (unchanged).
+            stage2_pool = normal_images
+            if image_rank_on:
+                _dv_key, _p_dv = _dv_hist_for(roi_entry)
+                if _p_dv:
+                    _scored = dv_scored_cache.get(_dv_key)
+                    if _scored is None:
+                        _scored = []
+                        for _npath in normal_images:
+                            _p_clean = _normal_hist_for(_npath)
+                            _sim = (_hist_intersection(_p_dv, _p_clean)
+                                    if _p_clean else -1.0)
+                            _scored.append((_sim, _npath))
+                        dv_scored_cache[_dv_key] = _scored
+                        _ranked = sorted((_t for _t in _scored if _t[0] >= 0.0),
+                                         key=lambda _t: _t[0], reverse=True)
+                        dv_pool_cache[_dv_key] = [_p for _, _p in _ranked[:_NORMAL_TOPK]]
+                    _sel = _rank_normals(_scored, rng, _NORMAL_TOPK)
+                    if _sel is not None:
+                        normal_path = _sel
+                        stage2_pool = dv_pool_cache[_dv_key] or normal_images
+                    else:
+                        normal_path = rng.choice(normal_images)
+                else:
+                    normal_path = rng.choice(normal_images)
+            else:
+                normal_path = rng.choice(normal_images)
             meta = synthesis_fn(
                 roi_entry=roi_entry,
                 normal_image_path=normal_path,
@@ -2680,7 +3109,7 @@ def run(
                 reject_clean_bg=reject_clean_bg,
                 min_bg_quality=min_bg_quality,
                 blur_threshold=bg_blur_threshold,
-                normal_pool=normal_images,
+                normal_pool=stage2_pool,
                 texture_dist_threshold=texture_dist_threshold,
                 compat_row=compat_row,
                 bin_edges=compat_bin_edges,
