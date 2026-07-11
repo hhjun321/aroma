@@ -2713,6 +2713,7 @@ def run(
     compat_threshold: float = 0.0,
     compat_matrix_json: Optional[str] = None,
     compat_mode: str = "defect",
+    clean_bg_json: Optional[str] = None,
     controlnet_path: Optional[str] = None,
     sd_base: str = "runwayml/stable-diffusion-v1-5",
     cn_steps: int = 30,
@@ -3024,6 +3025,39 @@ def run(
     drive_img_dir = Path(output_dir) / "images"
     drive_mask_dir = Path(output_dir) / "masks"
 
+    # --- Step 3.5 clean-bg assignment (optional, precomputed & data-driven) ---
+    # When clean_bg_selection.py has emitted an assignment, background identity is
+    # looked up from it (which normal + ranked pool) instead of re-ranking the raw
+    # pool at generation time. Deterministic rep→pool indexing consumes ZERO
+    # selection rng draws, so AROMA and its random-arm control (each reading their
+    # own clean-bg json) share an IDENTICAL downstream placement/feather stream —
+    # a clean symmetric control. Missing/invalid → legacy selection (below).
+    clean_bg_map: Optional[Dict[int, Dict[str, Any]]] = None
+    _cbg_path = (Path(clean_bg_json) if clean_bg_json
+                 else Path(roi_dir) / "clean_bg_selected.json")
+    _stem2path: Dict[str, str] = {}
+    for _p in normal_images:
+        _s = Path(_p).stem
+        _stem2path.setdefault(_s, _p)
+        _stem2path.setdefault(_s.lstrip("_"), _p)  # tolerate good-image "_{stem}" ids
+
+    def _resolve_bg(_id: Any) -> Optional[str]:
+        if not _id:
+            return None
+        return _stem2path.get(str(_id)) or _stem2path.get(str(_id).lstrip("_"))
+
+    if normal_images and _cbg_path.exists():
+        try:
+            _cbg = load_json(str(_cbg_path))
+            clean_bg_map = {int(e["roi_idx"]): e for e in _cbg
+                            if e.get("roi_idx") is not None}
+            logger.info("clean_bg assignment ON: %s (%d ROIs)",
+                        _cbg_path.name, len(clean_bg_map))
+        except Exception as _cbg_exc:
+            logger.warning("clean_bg json load failed (%s) — legacy selection",
+                           _cbg_exc)
+            clean_bg_map = None
+
     for roi_idx, roi_entry in enumerate(selected):
         for rep_idx in range(n_per_roi):
             fname = f"syn_{roi_idx:05d}_{rep_idx:02d}.jpg"
@@ -3073,7 +3107,15 @@ def run(
             # rng.choice, byte-identical stream. compat_row is still passed to
             # synthesis for the WITHIN-image _positive_place (unchanged).
             stage2_pool = normal_images
-            if image_rank_on:
+            _cbg_entry = clean_bg_map.get(roi_idx) if clean_bg_map else None
+            _cbg_pool = ([p for p in
+                         (_resolve_bg(i) for i in (_cbg_entry.get("topk_pool") or []))
+                         if p] if _cbg_entry else [])
+            if _cbg_pool:
+                # Precomputed identity → deterministic rep→pool index (no rng draw).
+                normal_path = _cbg_pool[rep_idx % len(_cbg_pool)]
+                stage2_pool = _cbg_pool
+            elif image_rank_on:
                 _dv_key, _p_dv = _dv_hist_for(roi_entry)
                 if _p_dv:
                     _scored = dv_scored_cache.get(_dv_key)
@@ -3226,6 +3268,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Synthesis method (default: copy_paste)")
     p.add_argument("--n_per_roi",   type=int, default=3,
                    help="Synthetic images per ROI (default: 3)")
+    p.add_argument("--clean_bg_json", default=None,
+                   help="Precomputed clean-bg assignment (Step 3.5 "
+                        "clean_bg_selection.py). Default: auto-load "
+                        "<roi_dir>/clean_bg_selected.json if present. Pass "
+                        "clean_bg_random_arm.json to run the symmetric control arm. "
+                        "Missing → legacy generation-time background selection.")
     p.add_argument("--blend_mode",  default="alpha",
                    choices=["alpha", "seamless"],
                    help="Blending mode for copy_paste: 'alpha' (default) or "
@@ -3343,6 +3391,7 @@ def main(argv=None) -> None:
         texture_dist_threshold=args.texture_dist_threshold,
         compat_threshold=args.compat_threshold,
         compat_matrix_json=args.compat_matrix_json,
+        clean_bg_json=args.clean_bg_json,
         compat_mode=args.compat_mode,
         controlnet_path=args.controlnet_path,
         sd_base=args.sd_base,
