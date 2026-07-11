@@ -3,6 +3,7 @@
 > **목적**: phase0 프로파일링 + step1 complexity 출력을 읽어, 형태학 클러스터 × 컨텍스트 빈 조합별 자연어 프롬프트를 생성한다. 입력 `S('profiling',ds)`+`S('complexity',ds)` → 출력 `S('prompts',ds)`.
 > **실행 환경**: **CPU**.
 > **전제**: step1(`compute_complexity.py`) 완료 — 각 데이터셋 `S('complexity',ds)/complexity_report.json` 존재.
+> ⚠️ **phase0/step1 재실행 시 step2도 반드시 재실행**: 프롬프트는 `cluster_id × context_cell` 조합 키(`{cluster_id}_{cell_key}`)로 생성된다. phase0 재실행으로 `cluster_id`가 바뀌면 구 prompts는 신 clustering과 **키 의미가 어긋난다**(스키마는 같아 조용히 진행). step3가 이 prompts를 조인하므로 반드시 함께 재실행.
 > **실행 순서 체인**: phase0 → step1 → **step2** → step3 → step5(ControlNet 학습) → step4(생성) → exp3/exp4v2/exp5/exp6.
 > **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex는 tiled(single-class).
 

@@ -21,6 +21,7 @@ step5(ControlNet 학습·`build_train_jsonl.py`)와 step4(생성·random arm)의
 
 - phase0 완료 — `S('profiling', ds)`에 `compatibility_matrix.json`(matrix_symmetric 포함), `morphology_features.csv`, `context_features.csv` 존재.
 - step2 완료 — `S('prompts', ds)`에 `prompts.json` 존재.
+- ⚠️ **phase0를 재실행했다면 step1·step2를 모두 재실행한 뒤 step3를 돌린다.** step3의 `image_id`(phase0 고유키 종속)·`cluster_id`(step1 GMM 종속)·`prompts`(step2 종속)가 삼중으로 상류에 종속된다. 하나라도 구버전이면 roi_selected.json이 신 profiling과 어긋나 **step3.5에서 `src_match_frac<1.0`으로 발각**된다(그 전에 예방할 것).
 - 데이터셋 v2-1 4종: `severstal · mvtec_leather · mtd · aitex`. **aitex = tiled(256×256/stride128, single-class)**.
 
 ---

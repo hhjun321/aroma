@@ -191,7 +191,7 @@ for DS in DATASETS_GEN:
 ```
 
 > **활성 확인(로그)**:
-> - `clean_bg assignment ON: clean_bg_selected.json (N ROIs)` — step3.5 사전선정 배경 소비(파일 없으면 legacy 생성-시점 선정으로 자동 fallback, 무해).
+> - `clean_bg assignment ON: clean_bg_selected.json (N ROIs)` — step3.5 사전선정 배경 소비. **파일이 없으면 legacy 생성-시점 선정으로 자동 fallback되는데, 이는 "무해"가 아니다**: legacy는 원본 good 픽셀 재스캔 휴리스틱이라 step3.5의 profiling-파생 배경 선정과 **배경 히스토그램 분포가 다르다** → aroma arm의 배경이 의도와 달라지고 exp4v2 aroma/random 대조의 공정성이 저하될 수 있다. **`clean_bg assignment ON`이 반드시 떠야** 하며, 안 뜨면 step3.5 산출(`S('roi',ds)/clean_bg_selected.json`) 존재·경로를 먼저 확인한다(fallback 상태로 생성 금지).
 > - `clean_bg resolve: used=U fallback=F mismatch=M / T (roi,rep)` — **U가 T에 근접(F·M≈0)해야 정상**. `<90%` 시 WARNING(경로 불일치/staleness). 로컬 mtd 20-ROI 재검증: used=40 fallback=0 mismatch=0.
 > - (step3.5를 `--geometry_prior`로 실행한 경우) precompute된 `position`을 소비해 클래스 기하대로 배치. phase0가 `image_w/image_h`를 방출하면 **clamp-free**(로컬 40/40 정확); 없으면 grid 추정이라 edge-flush가 실제 가장자리보다 안쪽에 놓일 수 있음.
 > - `compat gate ON: threshold=… mode=symmetric` — symmetric 게이트 활성(matrix_symmetric 없으면 hard-fail).
@@ -262,6 +262,7 @@ print("\n✓ parity OK — 두 arm 모두 labelable > 0")
 - **사후 튜닝 금지**: τ·seed·n_per_roi·blend/게이트 설정을 결과 보고 후 변경하지 않는다. fallback이 과다해도 step4에서 임계를 손대지 말고 step5 사전스캔을 재검한다.
 - **AR 폴백 정직 보고**: aitex aroma-sym의 ControlNet 생성 비중을 `1 - ar_fallback비율`로 병기한다(생성 novelty 기여 vs copy_paste 재조합 분리). 이 값을 임의로 높이려고 AR 임계를 올려 왜곡물을 허용하는 것은 pilot 육안 통과(step5) 없이 금지.
 - **clean-bg 게이트 대칭**: AROMA·random 두 arm에 동일 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`)를 적용해야 비교가 공정하다.
+- ⚠️ **step4 재실행(합성 재생성) 시 exp5/exp6 임베딩 캐시 무효화**: exp5(PRDC)·exp6(kNN)의 DINOv2 임베딩 캐시 키는 **경로/파일명 기반**이라, 재생성이 동일 파일명(`syn_00000_00.jpg`)으로 내용만 덮어쓰면 **stale 임베딩이 재사용**된다. 재합성한 데이터셋은 exp5/exp6 실행 전 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행한다(상세: exp5/exp6_execute.md).
 - **aitex는 tile-level·single-class** → 절대값을 타 데이터셋과 직접 비교 금지, Δ만 유효.
 - **`--local_staging`**: random(CPU)에는 사용 가능, **ControlNet 생성(AROMA arm)에는 미사용**(sidecar 캐시 Drive 직결 필요).
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 Colab 실행으로.

@@ -12,7 +12,7 @@
 - 히스토그램 매칭의 변별력은 **도메인-조건부**: aitex는 강한 신호(로컬 검증 best hist∩ 0.89), **severstal/mtd는 랜덤 배경과 사실상 구분 불가**(E1, `pivot_local_validation_20260711.md`).
 - 본 단계의 **확실한 가치 = 재현성 + 대칭 대조군(random arm에 동일 배경 배정) + per-seed 배치 분산 제거**. **일반적 mAP 향상은 주장하지 않는다**(GPU 검증 별도).
 - **data-driven(no-hardcoding)**: void 컷·pool 컷은 관측 분포에서 유도(void_frac_max=P90, pool=P95, void floor=P1). 유도값은 `clean_bg_summary.md`에 기록.
-- **leather 제외**: `mvtec_leather`는 `image_id` stem-collision(dev_note `aroma_phase0_image-id-unique-key.md`) 때문에 context_features 조인이 무효 → **phase0 재실행(고유키) 후에만** 유효. Phase 1은 severstal/mtd/aitex.
+- **leather 포함 조건**: `mvtec_leather`는 과거 `image_id` stem-collision으로 context_features 조인이 무효였으나, **고유키 수정(`31ee0aa`)을 반영한 phase0 재실행 후에는 정상**이다(dev_note `aroma_phase0_image-id-unique-key.md`). → phase0를 `31ee0aa` 이상으로 재실행했으면 **아래 DATASETS에 leather 포함**(4종). 구 profiling만 있으면 제외(3종). STEP 2-2의 `src_match_frac` assert가 혼용을 즉시 잡는다.
 
 ---
 
@@ -31,8 +31,9 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-# Phase 1: leather 제외 (phase0 고유키 재실행 후 추가)
-DATASETS = ["severstal", "mtd", "aitex"]
+# phase0를 31ee0aa(image_id 고유키) 이상으로 재실행했으면 leather 포함(4종).
+# 구 profiling(고유키 이전)만 있으면 leather 제외(3종) — src_match_frac assert가 혼용 검출.
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]
 ```
 
 ---
