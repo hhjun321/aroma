@@ -117,6 +117,7 @@ def run(
     seed: int = 42,
     local_staging: bool = False,
     reject_clean_bg: bool = False,
+    random_placement: bool = True,
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
     blend_mode: str = "alpha",
@@ -136,6 +137,18 @@ def run(
         local_staging:          Copy inputs to /content/tmp (Colab Drive optimization).
         reject_clean_bg:        Forward black/flat-background gate to
                                 generate_defects.run() (default OFF).
+        random_placement:       Naive placement baseline (default ON — the
+                                random arm is a naive standard baseline BY
+                                DESIGN). Forwarded to generate_defects.run():
+                                bypasses ALL placement grounding (compat/
+                                _positive_place, foreground constraint, clean-bg/
+                                void gate) so defects land at uniform-random
+                                positions. This is the intentional placement
+                                asymmetry that isolates AROMA's smart-placement
+                                contribution — NOT an unfair comparison. Set
+                                --no-random-placement to restore the grounded
+                                path. ROI-selection randomness (select_random)
+                                is unaffected.
         min_bg_quality:         Min background quality for the gate (default 0.7).
         bg_blur_threshold:      Laplacian blur threshold for the gate (default 100.0).
         blend_mode:             Blending mode forwarded to generate_defects.run()
@@ -203,6 +216,7 @@ def run(
         seed=seed,
         local_staging=local_staging,
         reject_clean_bg=reject_clean_bg,
+        random_placement=random_placement,
         min_bg_quality=min_bg_quality,
         bg_blur_threshold=bg_blur_threshold,
         blend_mode=blend_mode,
@@ -239,6 +253,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    action="store_true",
                    help="Reject black/flat (void) backgrounds at generation time "
                         "(default OFF)")
+    p.add_argument("--no-random-placement", dest="random_placement",
+                   action="store_false", default=True,
+                   help="Disable naive random placement (restore grounded "
+                        "path). Default: naive ON — the random arm is a naive "
+                        "baseline by design.")
     p.add_argument("--min-bg-quality",   dest="min_bg_quality",
                    type=float, default=0.7,
                    help="Min background quality 0..1 for the clean-bg gate "
@@ -270,6 +289,7 @@ def main(argv=None) -> None:
         seed=args.seed,
         local_staging=args.local_staging,
         reject_clean_bg=args.reject_clean_bg,
+        random_placement=args.random_placement,
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
         blend_mode=args.blend_mode,

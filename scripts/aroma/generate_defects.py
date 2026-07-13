@@ -1315,6 +1315,7 @@ def _paste_and_finalize(
     compat_threshold: float = 0.0,
     compat_tile: bool = False,
     forced_xy: Optional[Tuple[int, int]] = None,
+    random_placement: bool = False,
 ) -> Dict[str, Any]:
     """Shared placement + blending + GT-mask tail used by every synthesis method.
 
@@ -1397,6 +1398,19 @@ def _paste_and_finalize(
         pilot images: 24-34% foreground), so a fallback-only texture gate
         would silently bypass exactly the mismatch it exists to catch."""
         nrgb = np.asarray(nrm.convert("RGB"))
+
+        if random_placement:
+            # Naive baseline (--random-placement): the random arm is
+            # intentionally un-grounded — bypass EVERY placement decision
+            # (forced_xy geometry prior, compat/_positive_place, foreground
+            # constraint, clean-bg/void gate) and paste at a uniform-random
+            # valid top-left. This ablates AROMA's entire smart-placement
+            # framework (its contribution) to isolate it. One deterministic
+            # _random_paste_position draw per paste (rng.randint x2 on the
+            # seeded stream) → reproducible under a fixed seed. gate_ok=True
+            # so there is no stage-2 re-pick.
+            return nrgb, _random_paste_position(
+                nrm.size, defect_crop.size, rng), True
 
         if forced_xy is not None:
             # Phase 3 (clean_bg geometry prior): paste at the PRECOMPUTED position
@@ -1661,6 +1675,7 @@ def copy_paste_synthesis(
     bin_edges: Optional[Dict[str, List[float]]] = None,
     compat_threshold: float = 0.0,
     compat_tile: bool = False,
+    random_placement: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Paste the defect region from roi_entry onto the normal image.
@@ -1802,6 +1817,7 @@ def copy_paste_synthesis(
             bin_edges=bin_edges,
             compat_threshold=compat_threshold,
             compat_tile=compat_tile,
+            random_placement=random_placement,
         )
 
     except Exception as exc:
@@ -2759,6 +2775,7 @@ def run(
     seed: int = 42,
     local_staging: bool = False,
     reject_clean_bg: bool = False,
+    random_placement: bool = False,
     min_bg_quality: float = 0.7,
     bg_blur_threshold: float = 100.0,
     texture_dist_threshold: float = 0.0,
@@ -2800,6 +2817,13 @@ def run(
                           once at load) and the random-placement fallback
                           position. Default False (legacy). cv2 missing →
                           gate auto-disabled.
+        random_placement: Naive baseline (copy_paste only). Bypass ALL
+                          placement grounding — forced_xy geometry prior,
+                          compat/_positive_place, foreground constraint, and
+                          the clean-bg/void gate — and paste at a uniform-
+                          random valid top-left. Ablates AROMA's smart-
+                          placement framework. Default False (grounded path
+                          unchanged; used ON only by the random arm).
         min_bg_quality:   Minimum background quality (0..1). CASDA default 0.7.
         bg_blur_threshold: Laplacian-variance blur gate threshold. CASDA
                            default 100.0.
@@ -3255,6 +3279,11 @@ def run(
                 # 64px footprint tiling only in symmetric mode; defect mode keeps
                 # the legacy crop-size query byte-identical (devnote §finding E).
                 compat_tile=(compat_mode == "symmetric"),
+                # Naive baseline flag (default False). copy_paste_synthesis
+                # threads it to the placement closure; controlnet_synthesis
+                # absorbs it in **kwargs and stays grounded (random arm never
+                # uses controlnet).
+                random_placement=random_placement,
             )
             if meta:
                 n_ok += 1
@@ -3398,6 +3427,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    action="store_true",
                    help="Reject black/flat (void) backgrounds at generation time "
                         "(normal pool + random-placement fallback). Default OFF.")
+    p.add_argument("--random-placement", dest="random_placement",
+                   action="store_true",
+                   help="Naive baseline (copy_paste only; ignored under "
+                        "--method controlnet, which stays grounded): bypass all "
+                        "placement grounding (forced_xy/compat/foreground/"
+                        "clean-bg gate), paste at uniform-random position. "
+                        "Default OFF.")
     p.add_argument("--min-bg-quality", dest="min_bg_quality",
                    type=float, default=0.7,
                    help="Min background quality 0..1 for the clean-bg gate "
@@ -3494,6 +3530,7 @@ def main(argv=None) -> None:
         seed=args.seed,
         local_staging=args.local_staging,
         reject_clean_bg=args.reject_clean_bg,
+        random_placement=args.random_placement,
         min_bg_quality=args.min_bg_quality,
         bg_blur_threshold=args.bg_blur_threshold,
         texture_dist_threshold=args.texture_dist_threshold,

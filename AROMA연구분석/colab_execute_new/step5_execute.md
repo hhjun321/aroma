@@ -6,7 +6,7 @@
 
 - **AROMA arm — ControlNet** (STEP 3, `--method controlnet` + `--compat_mode symmetric`, **GPU**): ControlNet 생성 + SGM matrix_symmetric + 64px 타일링 query + positive placement + clean-bg 게이트 + seamless. → `S('synth_aroma', ds)` (또는 비교 시 `synth_aroma_cn`).
 - **AROMA arm — copy_paste** (STEP 3B, `--method copy_paste`, **CPU·무학습**): 원본 crop을 clean-bg에 직접 합성. **동일한** clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비. ControlNet 학습 불요. → 비교 시 `S('synth_aroma_cp', ds)`.
-- **random arm** (STEP 4, `generate_random.py`, 통제군): 동일 clean-bg 게이트. → `S('synth_random', ds)`.
+- **random arm** (STEP 4, `generate_random.py`, naive baseline): naive 배치(placement grounding·게이트 없음 — compat/foreground/clean-bg·void 모두 미적용, uniform-random 위치). → `S('synth_random', ds)`.
 
 > **두 방법 대응(reviewer)**: 논문 피벗은 무학습 copy_paste가 주 방법, ControlNet은 생성형 대조(future-work 근거). reviewer가 "생성형 대비 무학습의 기여"를 물으면 **동일 ROI·동일 clean_bg·동일 placement 게이트** 하에 두 arm을 각각 생성해 exp4v2/exp3에서 나란히 보고한다(placement 게이트를 맞춰야 공정). AROMA ROI-선택·배치 기여는 두 방법 공통이고, ControlNet은 여기에 생성 novelty만 더한다.
 
@@ -261,7 +261,7 @@ for DS in DATASETS_GEN:
 
 ## STEP 4 — random arm 생성 (통제군, CPU)
 
-`_SPEC §3 step5 random`. AROMA arm과 **동일 clean-bg 게이트**·동일 `top_k`/`n_per_roi`/`seed`. positive placement·compat 게이트는 미적용(무변경 통제군). CPU라 `--local_staging` 사용 가능(`_SPEC §5`).
+`_SPEC §3 step5 random`. random arm은 **naive copy-paste baseline**(무검사 무작위 위치)이다 — AROMA arm과 동일 `top_k`/`n_per_roi`/`seed`(ROI-선택 무작위성 동일)를 쓰되, **placement grounding·게이트는 의도적으로 없다**: compat/positive placement, foreground 제약, clean-bg/void 게이트 모두 미적용. 이것이 **의도된 placement 비대칭**으로, AROMA의 smart-placement 프레임워크(올바른 ROI·context·void 제외 랭킹)라는 기여를 격리 측정하는 정당한 ablation이다(naive random-position copy-paste는 문헌의 표준 증강 baseline). CPU라 `--local_staging` 사용 가능(`_SPEC §5`).
 
 ```python
 for DS in DATASETS:
@@ -275,11 +275,10 @@ for DS in DATASETS:
         --normal_dir      $NORMAL \
         --output_dir      $OUT_R \
         --top_k 200 --n_per_roi 3 --seed 42 \
-        --local_staging \
-        --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0
+        --local_staging
 ```
 
-> random은 개선(positive placement·compat) 무관이지만 clean-bg 게이트는 AROMA와 대칭이어야 비교가 공정하다. 출력 `--output_dir`은 반드시 `S('synth_random', DS)`.
+> **random arm은 naive placement가 기본 ON**이다(`generate_random.py`의 `random_placement` 기본값 True → `generate_defects`에 전달). 따라서 `--reject-clean-bg`/`--min-bg-quality`/`--bg-blur-threshold`(clean-bg 게이트)를 **넘기지 않는다** — naive 분기가 모든 placement grounding(compat/`_positive_place`, foreground 제약, void/clean-bg 게이트)을 우회하고 uniform-random 위치에 붙인다. `--reject-clean-bg`를 다시 켜면 `load_normal_images()` **pool 게이트**가 void normal을 풀에서 제거해(=grounding) 대비가 흐려지므로 넣지 않는다. grounded 경로로 되돌리려면 `--no-random-placement`(디버그용). 출력 `--output_dir`은 반드시 `S('synth_random', DS)`.
 
 ---
 
@@ -311,6 +310,7 @@ print("\n✓ parity OK — 두 arm 모두 labelable > 0")
 
 > - **aitex `ar_fallback` 비율을 반드시 기록**한다. 이 비율이 높으면(예: >80%) aroma-sym의 대부분이 copy_paste 폴백이 되어 "ControlNet 생성 기여 측정 제한" 데이터셋으로 정직 보고한다(폴백은 개수·클래스·bbox parity를 유지하므로 downstream은 정상 동작). ControlNet 생성 비중 = `1 - ar_fallback비율`.
 > - labelable이 exp*의 `synth_ratio=1.0` cap을 못 채우면(random arm n_synth_train 미만) `--n_per_roi`를 올려 해당 STEP을 재실행 — sidecar 캐시로 기존 생성분은 skip되고 부족분만 추가된다.
+> - **naive 배치 검증(재실행 후)**: (1) random 로그에 `placement-gate stats …`가 **찍히지 않아야** 한다 — naive 분기가 compat/positive placement·foreground·void 게이트를 전부 우회한 증거(AROMA arm에서는 계속 출력됨). (2) random 합성물을 육안 확인하면 결함이 **검은/void/edge 영역에 착지**하는 사례가 섞여 있어야 정상이다(AROMA arm은 grounded라 그렇지 않다). (3) 재합성·재평가 후 **AROMA vs random mAP 격차가 벌어지는** 방향이 기대값이다(placement grounding 기여가 격리되어 드러남). 근거·설계 의도: `.claude/.dev_note/aroma_naive-random-placement.md`. exp4v2 YOLO 학습은 사용자 명시 요청 시에만 실행(load-test policy).
 
 ---
 
@@ -319,7 +319,7 @@ print("\n✓ parity OK — 두 arm 모두 labelable > 0")
 - **step5는 소비만 — 재사전스캔 금지**: τ·AR·TEX는 전부 step4 사전스캔 확정값. step5에서 다시 스캔하거나 τ=0.5로 폴백하지 않는다(aitex 98% 폴백 사후 교훈).
 - **사후 튜닝 금지**: τ·seed·n_per_roi·blend/게이트 설정을 결과 보고 후 변경하지 않는다. fallback이 과다해도 step5에서 임계를 손대지 말고 step4 사전스캔을 재검한다.
 - **AR 폴백 정직 보고**: aitex aroma-sym의 ControlNet 생성 비중을 `1 - ar_fallback비율`로 병기한다(생성 novelty 기여 vs copy_paste 재조합 분리). 이 값을 임의로 높이려고 AR 임계를 올려 왜곡물을 허용하는 것은 pilot 육안 통과(step4) 없이 금지.
-- **clean-bg 게이트 대칭**: AROMA·random 두 arm에 동일 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`)를 적용해야 비교가 공정하다.
+- **placement 비대칭(의도) — 옛 "게이트 대칭=공정" 지침 supersede**: AROMA arm = grounded smart placement(compat/positive placement + clean-bg·void 게이트, `--reject-clean-bg` 등), random arm = naive baseline(게이트·grounding OFF, `random_placement` 기본 ON). 이 비대칭이 **AROMA의 기여(placement 프레임워크 전체)를 격리하는 정당한 ablation**이며, 숨기는 역전이 아니라 의도된 대비다(naive random-position copy-paste는 표준 증강 baseline). 이전 문서의 "random에도 동일 clean-bg 게이트를 걸어야 공정하다"는 지침은 이 프레이밍으로 대체된다. (단 STEP 3 vs STEP 3B의 controlnet↔copy_paste 비교는 **둘 다 AROMA arm**의 생성 novelty ablation이므로 placement 게이트를 맞추는 것이 여전히 옳다 — L11/L256 유지.)
 - ⚠️ **step5 재실행(합성 재생성) 시 exp5/exp6 임베딩 캐시 무효화**: exp5(PRDC)·exp6(kNN)의 DINOv2 임베딩 캐시 키는 **경로/파일명 기반**이라, 재생성이 동일 파일명(`syn_00000_00.jpg`)으로 내용만 덮어쓰면 **stale 임베딩이 재사용**된다. 재합성한 데이터셋은 exp5/exp6 실행 전 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행한다(상세: exp5/exp6_execute.md).
 - **aitex는 tile-level·single-class** → 절대값을 타 데이터셋과 직접 비교 금지, Δ만 유효.
 - **`--local_staging`**: random(CPU)에는 사용 가능, **ControlNet 생성(AROMA arm)에는 미사용**(sidecar 캐시 Drive 직결 필요).
