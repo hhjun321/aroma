@@ -11,7 +11,7 @@
 
 - 히스토그램 매칭의 변별력은 **도메인-조건부**: aitex는 강한 신호(로컬 검증 best hist∩ 0.89), **severstal/mtd는 랜덤 배경과 사실상 구분 불가**(E1, `pivot_local_validation_20260711.md`).
 - 본 단계의 **확실한 가치 = 재현성 + 대칭 대조군(random arm에 동일 배경 배정) + per-seed 배치 분산 제거**. **일반적 mAP 향상은 주장하지 않는다**(GPU 검증 별도).
-- **data-driven(no-hardcoding)**: void 컷·pool 컷은 관측 분포에서 유도(void_frac_max=P90, pool=P95, void floor=P1). 유도값은 `clean_bg_summary.md`에 기록.
+- **data-driven(no-hardcoding)**: void 컷·pool 컷은 관측 분포에서 유도(void_frac_max=0.5[과반-void 경계], pool=P95, void floor=P15). 유도값은 `clean_bg_summary.md`에 기록.
 - **leather 포함 조건**: `mvtec_leather`는 과거 `image_id` stem-collision으로 context_features 조인이 무효였으나, **고유키 수정(`31ee0aa`)을 반영한 phase0 재실행 후에는 정상**이다(dev_note `aroma_phase0_image-id-unique-key.md`). → phase0를 `31ee0aa` 이상으로 재실행했으면 **아래 DATASETS에 leather 포함**(4종). 구 profiling만 있으면 제외(3종). STEP 2-2의 `src_match_frac` assert가 혼용을 즉시 잡는다.
 
 ---
@@ -60,7 +60,9 @@ for DS in DATASETS:
 > **선택 인자**:
 > - `--geometry_prior` — **Phase 3(E2 레버)**: 클래스별 실제 결함 기하(edge/surface/span prior)를 morphology bbox+실제 dim에서 유도해, 배정 배경 위 **paste 위치를 precompute**(`position`/`topk_positions`). step5가 이 위치를 소비(clamp-free, 아래 §STEP1 주의). 기본 OFF(mAP 효과 GPU-TBD). ON 시 배치가 배경 정체성뿐 아니라 위치까지 결정 → 배경 대칭대조(random arm)와는 별개의 **배치-정책 실험**(AROMA-geo vs AROMA-nogeo)용.
 > - `--pool_k <int>` — per-ROI 배경 풀 크기 상한(기본: 데이터-유도 P95). 명시 시 고정.
-> - `--void_frac_max <float>` — void 컷 상한(기본: 데이터-유도 P90). 명시 시 고정.
+> - `--void_frac_max <float>` — void 컷 상한(기본: 0.5 = 과반-void 경계). 명시 시 고정.
+> - `--void_floor_pct <float>` — void floor 유도 percentile(기본 15, dark-void 클러스터 위). 명시 시 고정.
+> - `--var_floor <float>` / `--edge_floor <float>` — void floor 절대 override(기본: `--void_floor_pct` percentile). 데이터셋별 prescan 핀용.
 > - `--no_reject_clean_bg` — void/품질 선행 필터 비활성(전 good 유지).
 >
 > **실제 dim 전제(`b1bb497`)**: phase0가 `context_features.csv`에 `image_w/image_h`를 방출하면 위치·`scale_factor`(size-fit)가 **실제 이미지 dim** 기준으로 계산된다(patch-격자 추정 fallback 대비 edge-flush가 실제 가장자리에 정확히 부착, 위치 clamp 제거). 컬럼 없으면 자동 grid fallback(무오류, 정밀도만 저하). 로컬 mtd 20-ROI 재검증(`local_revalidation_mtd20_20260711.md`): step5 위치 소비 **40/40 clamp-free**, dim gap 63.2px→0.
@@ -150,7 +152,7 @@ for DS in DATASETS:
 ## 무결성 / 정직
 
 - 원본 good 픽셀 재스캔 금지 — 선정은 profiling 파생 파일에서만. (paste 픽셀은 step5가 배정된 normal만 연다.)
-- 임계·pool은 데이터-유도(P90/P95/P1), magic number 금지. 유도값은 summary에 기록.
+- 임계·pool은 데이터-유도(void 0.5[과반]/pool P95/floor P15), magic number 금지. 유도값은 summary에 기록.
 - **severstal/mtd는 매칭 신호 약함**(E1) → "context 배치가 mAP를 올린다" 무검증 주장 금지. 대칭 대조군은 "통하는지 측정"하는 계측기.
 - **leather는 phase0 고유키 재실행 후** 추가(현재 제외). Phase 2(3-기준 class/bg-type)·Phase 3(bg-type per-image + 기하 prior)은 후속 dev_note 범위.
 - 사후 튜닝 금지, pytest 금지(CLAUDE.md) — 검증은 본 셀 실행 + E1 재현.
