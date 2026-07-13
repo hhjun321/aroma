@@ -13,7 +13,7 @@
 3. **Deficit-aware ROI 선택의 한계 규명** — 최고-deficit 조합은 복사할 실 소스 crop이 없어 copy-paste 하에서 구조적으로 무효(deficit ⟂ source availability). 생성 엔진이 있어야 context/deficit-aware 선택이 작동함을 실증.
 4. **ControlNet 주 엔진 + AR 폴백** — SD1.5 backbone freeze, ControlNet만 fine-tune. 3-채널 구조 hint(hint_generator.py)로 color shortcut 차단. bbox 종횡비 > τ_AR인 경우 copy_paste_arfallback으로 안전 폴백.
 5. **엔진·헤드룸 조건부 정직 평가** — 4개 이종 데이터셋(steel/organic/textile/machined-ceramic)에서 cherry-picking 없이 평가. ControlNet 하 Severstal +0.096 mAP@0.5(전 seed 일관), 천장 근접 데이터셋은 random과 수렴.
-6. **단일변수 비교 원칙** — arm 간 차이는 ROI 선택(random vs aroma) 또는 생성법(copy_paste vs controlnet)만. 배치·blend·GT mask·normal 풀·합성 예산(n_synth parity) 고정.
+6. **의도된 placement 비대칭 (AROMA 기여 격리)** — random arm은 **naive 표준 baseline**: 어떤 검사도 없이(compat·foreground·clean-bg/void 게이트 없음) 무작위 위치에 붙인다. AROMA arm은 grounded smart placement(compat symmetric + clean-bg 게이트 + `_positive_place` void-제외 랭킹) 전체를 동원한다. 즉 aroma vs random 차이 = ROI 선택 **+ smart-placement 프레임워크 전체**(=AROMA 기여)이며, 이는 불공정이 아니라 표준 ablation이다. copy_paste vs controlnet 차이는 생성법만(placement 게이트는 두 AROMA 트랙에서 대칭). GT mask·normal 풀·합성 예산(n_synth parity)은 전 arm 고정.
 
 ## 전체 파이프라인
 
@@ -36,7 +36,7 @@ step4   [CN 학습 서브트랙]          build_train_jsonl → train_controlnet
         ▼
 step5   generate_defects           ┌─ AROMA arm: --method controlnet + --compat_mode symmetric
         │  (생성)                   │             + clean-bg 게이트 + seamless blend
-        │                          └─ random arm: generate_random (통제, 동일 clean-bg 게이트)
+        │                          └─ random arm: generate_random (naive 배치 — grounding·게이트 없음, 기본 ON)
         ▼
 exp*    exp3 / exp4v2 / exp5 / exp6  exp4v2 = 헤드라인(YOLO 검출, baseline/random/aroma fresh 학습)
                                      exp3=생성품질(FID) · exp5=PRDC · exp6=임베딩 커버리지

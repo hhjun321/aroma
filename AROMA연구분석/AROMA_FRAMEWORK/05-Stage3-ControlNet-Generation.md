@@ -1,6 +1,6 @@
 # 05 — Stage 3: ControlNet 학습 & 결함 생성
 
-> **Claude 요약:** AROMA 파이프라인에서 가장 큰 스테이지. step4에서 (a) `build_train_jsonl.py`로 실 결함 crop→hint/prompt 학습쌍을 만들고 (b) `train_controlnet.py`로 SD v1.5 + ControlNet(canny init)을 데이터셋별 차등 하이퍼로 fine-tune하며 (c) `compat_gate`의 τ(및 aitex AR/텍스처 임계)를 CPU로 **사전스캔**한다. step5에서 `generate_defects.py --method controlnet`이 이 학습본·τ를 소비해 SGM symmetric 게이트 + clean-bg 게이트 + seamless 블렌딩으로 AROMA arm 합성물을 만들고, `generate_random.py`가 동일 clean-bg 게이트로 통제군(random arm)을 만든다. **τ·seed·epochs는 사후 튜닝 금지**, ControlNet 생성 경로는 `--local_staging` 미사용(sidecar 캐시 Drive 직결 필요).
+> **Claude 요약:** AROMA 파이프라인에서 가장 큰 스테이지. step4에서 (a) `build_train_jsonl.py`로 실 결함 crop→hint/prompt 학습쌍을 만들고 (b) `train_controlnet.py`로 SD v1.5 + ControlNet(canny init)을 데이터셋별 차등 하이퍼로 fine-tune하며 (c) `compat_gate`의 τ(및 aitex AR/텍스처 임계)를 CPU로 **사전스캔**한다. step5에서 `generate_defects.py --method controlnet`이 이 학습본·τ를 소비해 SGM symmetric 게이트 + clean-bg 게이트 + seamless 블렌딩으로 AROMA arm 합성물을 만들고, `generate_random.py`가 naive baseline(placement grounding·게이트 없이 무작위 배치, 46700af)으로 random arm을 만든다. **τ·seed·epochs는 사후 튜닝 금지**, ControlNet 생성 경로는 `--local_staging` 미사용(sidecar 캐시 Drive 직결 필요).
 
 ---
 
@@ -210,9 +210,9 @@ for DS in DATASETS_GEN:
 
 ---
 
-## step5: generate_random.py (random arm / 통제)
+## step5: generate_random.py (random arm / naive baseline)
 
-무변경 통제군. AROMA arm과 **동일 clean-bg 게이트**·동일 `top_k`/`n_per_roi`/`seed`. positive placement·compat 게이트는 미적용. CPU라 `--local_staging` 사용 가능.
+**naive 표준 baseline (BY DESIGN, `random_placement=True` 기본 ON, 46700af)**. AROMA arm과 동일 `top_k`/`n_per_roi`/`seed`·동일 ROI 후보 풀 무작위 샘플이되, **placement grounding을 전부 우회**한다 — compat/`_positive_place`, foreground 제약, clean-bg/void 게이트, geometry prior 없이 uniform-random 유효 top-left에 붙인다(결함이 검은/void/edge에 착지 가능). 이것이 AROMA smart-placement 프레임워크(=기여) 전체의 ablation이다. `--no-random-placement`로 grounded 경로 복원. CPU라 `--local_staging` 사용 가능.
 
 ```python
 for DS in DATASETS:
@@ -223,9 +223,10 @@ for DS in DATASETS:
         --normal_dir      $NORMAL \
         --output_dir      $OUT_R \
         --top_k 200 --n_per_roi 3 --seed 42 \
-        --local_staging \
-        --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0
+        --local_staging
 ```
+
+> ⚠️ clean-bg 게이트 플래그(`--reject-clean-bg` 등)를 **넘기지 않는다** — naive baseline은 grounding 게이트가 없어야 한다(46700af). `random_placement`는 기본 ON.
 
 | 인자 | 값 | 역할 |
 |------|-----|------|
@@ -235,11 +236,12 @@ for DS in DATASETS:
 | `--top_k` | 200 | 선택 ROI 수(aroma와 동일값이어야 공정) |
 | `--n_per_roi` | 3 | ROI당 변형 수(aroma와 동일) |
 | `--seed` | 42 | 결정론 |
-| `--reject-clean-bg`·`--min-bg-quality 0.7`·`--bg-blur-threshold 100.0` | on | **AROMA와 대칭인 clean-bg 게이트**(비교 공정성) |
-| `--blend-mode` | 기본 alpha | aroma가 seamless면 `--blend-mode seamless`로 맞춤(대칭) |
+| `random_placement` | **기본 ON** | naive 무작위 배치. `--no-random-placement`로 grounded 복원(escape hatch) |
+| clean-bg 게이트 플래그 | **미지정** | naive baseline은 grounding 게이트 없음(넘기면 pool 게이트가 켜져 naive 아님) |
+| `--blend-mode` | 기본 alpha | aroma가 seamless면 `--blend-mode seamless`로 맞춤(블렌딩은 placement와 별개 축 → 여전히 대칭) |
 | `--min_quality` | 0(OFF) | aroma `roi_selection --min_quality`와 동일값 지정 시 동일 게이트 풀 |
 
-> random은 개선(positive placement·compat)과 무관하지만 clean-bg 게이트·blend_mode는 AROMA와 대칭이어야 exp4v2 대조가 공정하다.
+> random은 naive 표준 baseline(BY DESIGN): placement grounding(compat·positive·clean-bg/void 게이트)을 **의도적으로 OFF**해 AROMA의 smart-placement 기여를 격리한다. 숨기는 역전이 아니라 의도된 대비. blend_mode·n_synth parity·ROI 후보 풀은 여전히 AROMA와 맞춘다.
 
 ---
 
@@ -269,7 +271,7 @@ step5 파이프라인(ROI → 합성 이미지):
 3. **ControlNet 추론** — hint(R=shape/G=structure/B=texture) + technical prompt → SD v1.5 + ControlNet(canny-init 학습본), `cn_steps 30`, `cn_cond_scale 0.7`, 512². grayscale 강제(leather 제외). aitex는 AR 초과 ROI → copy_paste 폴백(`copy_paste_arfallback`).
 4. **블렌딩(seamless)** — Reinhard local-bg 색 통계 이전 후 `cv2.seamlessClone`으로 경계 봉합(cv2 없으면 alpha feather 폴백).
 
-random arm은 1(clean-bg 게이트)만 공유하고 2·3·4의 개선은 미적용.
+random arm(naive)은 1·2·4를 **전부 우회**하고 3(생성)도 copy_paste이므로, ROI 후보 풀·`top_k`/`n_per_roi`/`seed`·blend_mode·n_synth parity만 AROMA와 공유한다 — placement grounding·clean-bg 게이트는 의도적 미적용(AROMA 기여 격리).
 
 ---
 

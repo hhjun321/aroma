@@ -90,10 +90,10 @@ step3와 대칭인 **clean-background 사전 선정** 단계(`clean_bg_selection
 ```
 
 - **랭킹 신호(데이터-유도 가중)**: `w_src`(per-source hist∩) + `w_class`(class-조건부 hist∩) + `w_size`(bbox size-fit). 각 신호의 관측 lift(best − median)에 비례해 정규화 → 변별 불가 신호는 자동 downweight(예: 크기 균일 셋은 `w_size≈0`).
-- **void/품질 사전필터**: `local_variance`·`edge_density`의 P1을 void floor로, per-image void_frac의 P90을 컷으로 데이터-유도(하드코딩 없음). ALL-reject 시 전체 풀로 fallback(무음 0-출력 방지).
-- **`--emit_random_arm`**: 동일 ROI 집합에 무작위 배경을 배정한 `clean_bg_random_arm.json`(대칭 대조군) 생성 → AROMA arm vs random arm이 **배경 정체성만 다르고 배치/블렌딩은 동일**한 계측기.
+- **void/품질 사전필터**: `local_variance`·`edge_density`의 **P15**(기본, `--void_floor_pct`)를 void floor로 데이터-유도. void_frac 컷은 **절대 majority 컷 `void_frac_max=0.5`**(패치 과반이 void인 "partial plate"만 제거) — 구 상대 P90 컷은 구조상 항상 ~90%를 남겨 void-heavy 이미지를 못 걸렀던 문제 수정(554208e). floor는 P1이 severstal 어두운 경계 클러스터(var~0.2/edge~1.0) 아래에 있어 ~1%만 잡던 것을 P15로 상향해 해소. ALL-reject 시 전체 풀로 fallback(무음 0-출력 방지). 데이터셋별 prescan 핀은 절대 안전밸브 `--var_floor`/`--edge_floor`로 강제.
+- **`--emit_random_arm`**: 동일 ROI 집합에 무작위 배경을 배정한 `clean_bg_random_arm.json`(배경-정체성만 다른 symmetric control) 생성. ⚠️ 이는 exp4v2의 random arm과 **별개 메커니즘**이다 — exp4v2 random arm은 `generate_random.py`의 naive placement(46700af, grounding·게이트 없음)를 쓴다. `clean_bg_random_arm.json`은 배경 배정 변별력 계측 전용이며 naive 대비에는 쓰이지 않는다.
 - **E1 재현 하드 게이트**: `src_fit_ceiling_mean`이 E1 sim_best(aitex~0.89 / mtd~0.50 / severstal~0.62, ±0.05)와 근접해야 배포. `src_match_frac < 1.0`이면 구 `roi_selected.json` × 신 `context_features.csv` 혼용 → **step3 재실행** 필요(즉시 assert).
-- 선택 인자: `--geometry_prior`(Phase 3, 클래스별 edge/surface prior로 paste 위치 precompute, 기본 OFF), `--pool_k`(per-ROI 배경 풀 상한, 기본 P95), `--void_frac_max`(기본 P90), `--no_reject_clean_bg`.
+- 선택 인자: `--geometry_prior`(Phase 3, 클래스별 edge/surface prior로 paste 위치 precompute, 기본 OFF), `--pool_k`(per-ROI 배경 풀 상한, 기본 P95), `--void_frac_max`(**기본 0.5 절대 majority 컷**), `--void_floor_pct`(void floor percentile, 기본 15), `--var_floor`/`--edge_floor`(데이터셋별 prescan 절대 핀), `--no_reject_clean_bg`.
 
 > 정직성: 히스토그램 매칭 변별력은 **도메인-조건부**(aitex 강함, severstal/mtd는 랜덤과 사실상 구분 불가). 본 단계의 확실한 가치는 **재현성 + 대칭 대조군 + per-seed 배치 분산 제거**이며, 일반적 mAP 향상은 주장하지 않는다(GPU 검증 별도).
 

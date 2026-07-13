@@ -60,11 +60,13 @@
 - blend: `--blend_mode alpha|seamless`(seamless=poisson/seamlessClone), `--feather_px`로 경계 페더링.
 - **대칭 호환성 게이트**: `--compat_mode symmetric` + `--compat_threshold τ` + `--compat_matrix_json`(compatibility_matrix.json)로 배치 후보를 scan→rank→place, τ 미달 reject.
 - **clean-bg 게이트**: `--reject-clean-bg` + `--min-bg-quality` + `--bg-blur-threshold` (+ aitex는 `--texture-dist-threshold`)로 검은/평탄 배경 거부.
+- **`--random-placement`**(46700af, copy_paste 전용): naive baseline 스위치. 모든 placement grounding(forced_xy/compat/foreground/clean-bg 게이트)을 우회하고 uniform-random 위치에 paste. 기본 OFF(grounded 경로 byte-identical). `--method controlnet`에서는 무시(grounded 유지). random arm(generate_random)에서만 ON.
 - ControlNet 세부: `--cn_steps`(30) · `--cn_cond_scale`(0.7) · `--cn_resolution`(512) · `--cn_no_grayscale`(컬러 대상) · bbox 종횡비 > `--cn_ar_threshold`(2.5)면 copy_paste AR 폴백(`--cn_no_ar_fallback`으로 해제).
 
-### generate_random.py (step5, random arm)
-- 통제(baseline) arm. roi_candidates.json에서 top_k ROI를 **균등 무작위** 샘플 → roi_selected.json 기록 → `generate_defects.run()`에 위임.
-- 합성 코드는 AROMA arm과 동일 — ROI 선택만 다르게 하여 ROI 모델링 기여를 격리. clean-bg 게이트(`--reject-clean-bg`/`--min-bg-quality`/`--bg-blur-threshold`)는 AROMA arm과 동일하게 적용.
+### generate_random.py (step5, random arm — naive baseline)
+- **naive 표준 baseline (BY DESIGN, 46700af)**. roi_candidates.json에서 top_k ROI를 **균등 무작위** 샘플 → roi_selected.json 기록 → `generate_defects.run(random_placement=True)`에 위임.
+- `random_placement` **기본 ON**: placement grounding(compat/`_positive_place`, foreground, clean-bg/void 게이트, geometry prior)을 전부 우회해 무작위 위치에 paste. AROMA(grounded) 대비 = ROI 선택 + smart-placement 프레임워크 전체(AROMA 기여) 격리. `--no-random-placement`로 grounded 복원(escape hatch).
+- ⚠️ clean-bg 게이트 플래그를 넘기지 말 것 — `--reject-clean-bg`는 pool 게이트도 켜 naive가 아니게 된다. ROI-선택 무작위성(`select_random`)·blend_mode·n_synth parity는 AROMA와 공유.
 
 ### exp3_generation_quality.py (exp3)
 - Cross-domain 생성 품질: random ROI vs AROMA ROI(동일 copy-paste 엔진). `--mode fid|ad|all`로 FID / PaDiM 이상탐지 지표 산출.
@@ -75,10 +77,11 @@
 - Supervised YOLOv8 검출. 3조건 모두 COCO pretrained에서 real labeled defect를 공통 토대로 **fresh 학습**: baseline(real만) · random(real+random synth) · aroma(real+aroma synth).
 - real defect를 seeded로 train/val split(`--val_frac` 기본 0.3) — baseline이 real positive를 학습하고 val은 disjoint real-only 유지. synth는 random/aroma에서만 real 위에 추가.
 - `--model`(yolov8n..m/all) · `--condition`(baseline/random/casda/aroma/all) · `--dataset_keys` · `--seeds`(다중) · `--imgsz` · `--baseline_epochs` · `--rect` · `--synth_ratio` 등. `--resume` 지원.
+- **속도 knob(6c55ed6·2a51686)**: `--workers`(dataloader, 기본 8=미지정 시 동작 불변) · `--compile`(torch.compile inductor, ~14%↑, 미지원 조합 자동 fallback+warn). 처리량 전용 — 학습 결과 불변.
 - 산출: exp4v2_results.json · exp4v2_summary.md · baseline best.pt.
 
 ### exp5_prdc.py (exp5)
-- 외부 임베딩(DINOv2) 좌표계에서 PRDC(Precision/Recall/Density/Coverage) 커버리지 평가. 사전등록 가설: 동일 copy-paste 엔진이므로 Precision/Density는 동등, Recall/Coverage는 aroma > random여야 "ROI 선택의 가치" 입증.
+- 외부 임베딩(DINOv2) 좌표계에서 PRDC(Precision/Recall/Density/Coverage) 커버리지 평가. 사전등록 가설: Precision/Density는 동등, Recall/Coverage는 aroma > random여야 "AROMA ROI 선택 + grounded placement의 가치" 입증(random은 naive 배치, aroma는 grounded).
 - reference = held-out real 결함 패치(exp4v2와 동일 split 규약 복제, `--val_frac` 0.3 / `--split_seed` 42) → synth 소스가 train split ROI에서만 나와 leakage 차단.
 - 조건 간 n을 min-n seeded subsample로 엄격 동일화, `--nearest_k`(기본 3·5·10) sensitivity 전체 보고(주 보고 k=5), `--permutation_reps`(1000) 순열검정. `--embed_cache_dir`로 DINOv2 임베딩 캐시 공유.
 

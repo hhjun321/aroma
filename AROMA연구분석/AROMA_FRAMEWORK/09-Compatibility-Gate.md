@@ -1,6 +1,6 @@
 # 09 — 호환성 게이트 (AROMA 핵심 방법)
 
-> **Claude 요약:** AROMA는 CASDA의 ControlNet 생성 위에 두 개의 게이트를 얹는다 — (1) **symmetric compatibility 게이트**(`--compat_mode symmetric --compat_threshold τ`): 결함이 놓일 배경 셀이 "clean 배경에도 실재하고 해당 결함 클러스터의 배경 분포에도 실재하는" 셀인지를 SGM 대칭 호환도로 판정하여 부적합 배치를 거부·재배치, (2) **clean-bg 게이트**(`--reject-clean-bg`): 검은/평탄(void) 배경을 항상 거부. symmetric 매트릭스(`matrix_symmetric` 등 4키)는 phase0 `distribution_profiling`이 패치 단위로 계산하고, τ는 데이터셋별 CPU 사전스캔으로 확정한다(τ=0.5 금지, 사후 튜닝 금지).
+> **Claude 요약:** AROMA는 CASDA의 ControlNet 생성 위에 두 개의 게이트를 얹는다 — (1) **symmetric compatibility 게이트**(`--compat_mode symmetric --compat_threshold τ`): 결함이 놓일 배경 셀이 "clean 배경에도 실재하고 해당 결함 클러스터의 배경 분포에도 실재하는" 셀인지를 SGM 대칭 호환도로 판정하여 부적합 배치를 거부·재배치, (2) **clean-bg 게이트**(`--reject-clean-bg`): 검은/평탄(void) 배경을 AROMA arm에서 항상 거부(void floor=P15·majority 컷 0.5, 554208e). random arm은 naive baseline이라 이 게이트를 의도적으로 우회한다(46700af). symmetric 매트릭스(`matrix_symmetric` 등 4키)는 phase0 `distribution_profiling`이 패치 단위로 계산하고, τ는 데이터셋별 CPU 사전스캔으로 확정한다(τ=0.5 금지, 사후 튜닝 금지).
 
 ---
 
@@ -9,9 +9,9 @@
 CASDA는 ControlNet으로 결함을 생성한다. AROMA는 그 생성 결과를 **어디에 붙일지**를 통제하기 위해 두 게이트를 추가한다:
 
 - **compat 게이트**: 결함 클러스터별로 "clean 배경 분포와 결함-이미지 배경 분포가 모두 지지하는 컨텍스트 셀"에만 배치를 허용한다. 무정보 재조합(copy-paste 천장)·부적합 배경 배치를 차단한다.
-- **clean-bg 게이트**: 검은/평탄 배경(void)을 거부한다. 이 게이트는 **항상 ON**이며, 프로젝트 실측에서 AROMA의 random 역전(random-reversal) 및 severstal c2 붕괴(collapse)를 해소한 것으로 기록되어 있다.
+- **clean-bg 게이트**: 검은/평탄 배경(void)을 거부한다. **AROMA arm에서 항상 ON**이며, 프로젝트 실측에서 AROMA의 random 역전(random-reversal) 및 severstal c2 붕괴(collapse)를 해소한 것으로 기록되어 있다.
 
-두 게이트는 AROMA arm과 random arm에 **동일하게** 적용되어(clean-bg는 양 arm 공통), 두 arm이 배경 선정/품질 조건에서 대칭(symmetric control)이 되도록 한다.
+두 게이트는 **AROMA arm에만** 적용된다. random arm은 naive 표준 baseline(BY DESIGN, 46700af)이라 두 게이트를 포함한 placement grounding 전체를 **의도적으로 우회**한다 — 이 placement 비대칭이 AROMA smart-placement 프레임워크(=기여)를 격리하는 정당한 ablation이며, "숨기는 역전"이 아니라 표준 대비다. (참고: `clean_bg_selection --emit_random_arm`이 만드는 `clean_bg_random_arm.json`은 배경-배정 변별력만 계측하는 **별개** symmetric control이며, exp4v2 random arm에는 쓰이지 않는다.)
 
 ---
 
@@ -68,8 +68,12 @@ phase0 `distribution_profiling.py`가 `compatibility_matrix.json`에 아래 4개
 - `--reject-clean-bg`: 검은/평탄(void) 배경 거부 게이트 ON. `_is_clean_background`가 이미지·배치 위치를 품질·blur로 평가.
 - `--min-bg-quality 0.7`: 배경 품질 하한(0..1, CASDA 기본 0.7). 이 미만 위치는 void로 간주해 거부.
 - `--bg-blur-threshold 100.0`: Laplacian-variance blur 게이트(CASDA 기본 100.0). 이보다 흐린(평탄) 배경 거부.
-- **항상 ON**: 이 게이트는 AROMA arm·random arm 양쪽에 동일하게 켠다. 프로젝트 실측 기록상 이 게이트가 AROMA의 random 역전과 severstal c2 붕괴를 해소했다(정책: clean-bg gate 항상 ON).
-- clean-bg 사전선정(`clean_bg_selection.py`)은 profiling-유래 파일에서 void 하한(관측 분포 P1)·void_frac 컷(P90)을 **데이터-유래**로 산출하고, 전부 거부되면 전체 풀로 폴백(조용한 0-출력 없음). random arm은 동일 ROI 집합에 균일 무작위 배경을 배정(`--emit_random_arm`)해 대칭 통제를 만든다.
+- **AROMA arm에서 항상 ON**: 이 게이트는 AROMA arm에만 켠다(random arm은 naive라 우회 — 46700af). 프로젝트 실측 기록상 이 게이트가 AROMA의 random 역전과 severstal c2 붕괴를 해소했다(정책: AROMA arm clean-bg gate 항상 ON).
+- clean-bg 사전선정(`clean_bg_selection.py`)은 profiling-유래 파일에서 void 하한을 **데이터-유래 percentile**로 산출한다(554208e로 개선):
+  - **void floor = P15**(기본 `--void_floor_pct 15`, 구 P1). severstal 어두운 경계 void 클러스터(local_variance ~0.2 / edge_density ~1.0)가 P1(var 0.10/edge 0.65) **위**에 있어 ~1%만 걸리던 것을 P15로 상향해 해소(P15는 클러스터 위·유효 강판 var median 61.7 아래에 위치).
+  - **void_frac 컷 = 절대 majority `void_frac_max=0.5`**(구 상대 P90). 상대 P90은 구조상 항상 ~90%를 남겨 void-heavy tail을 못 걸렀다. 0.5 = "패치 과반이 void인 partial plate"만 제거(severstal 기준 최악 ~6.5%만 드롭).
+  - CLI 안전밸브: `--void_floor_pct`(percentile) · `--var_floor`/`--edge_floor`(데이터셋별 prescan 절대 핀) · `--void_frac_max`. 전부 거부되면 전체 풀로 폴백(조용한 0-출력 없음). summary에 `floor_pct`/`floor_source` 기록.
+  - ⚠️ **타 데이터셋(leather/mtd/aitex) 전역 활성화 전 CPU prescan 필수**(임계 발동률 확인 — 메모리 `feedback_prescan_thresholds`).
 
 ---
 
@@ -94,7 +98,8 @@ phase0 `distribution_profiling.py`가 `compatibility_matrix.json`에 아래 4개
 - **사후 튜닝 금지**: τ·seed·synth_ratio·epochs는 결과 보고 후 변경 금지.
 - **mtd의 τ를 aitex에 무검증 재사용 금지**: 각 데이터셋의 τ는 자기 사전스캔 확정값. mtd 값 aitex 전용 금지.
 - `matrix_symmetric` 부재 시 symmetric 모드 hard-fail — 반드시 신 profiling 재실행 또는 `--compat_mode defect` 명시.
-- clean-bg 게이트는 AROMA·random 양 arm 공통(대칭 통제 불변식). 한쪽만 켜면 통제 깨짐.
+- clean-bg 게이트는 **AROMA arm 전용**(46700af). random arm은 naive baseline이라 게이트를 우회하는 것이 의도된 설계 — random에 게이트를 켜면 naive 대비가 깨진다(과거 "양 arm 대칭" 서술은 폐기).
+- clean_bg void floor/컷 임계는 데이터셋별 CPU prescan 후 확정(`--void_floor_pct`/`--var_floor`/`--edge_floor`). 전역 재사용 금지.
 - 테스트 코드 신규 작성·pytest 금지(CLAUDE.md) — 검증은 Colab 실행으로.
 
 ---
