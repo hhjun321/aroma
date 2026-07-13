@@ -6,6 +6,7 @@
       {
         "id": "b1a121ff6c3a984d",
         "type": "tabs",
+        "dimension": 62.69035532994924,
         "children": [
           {
             "id": "90e933a00414237f",
@@ -13,12 +14,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "00-INDEX.md",
+                "file": "07-Scripts-Reference.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "00-INDEX"
+              "title": "07-Scripts-Reference"
             }
           }
         ]
@@ -26,6 +27,7 @@
       {
         "id": "350af2b116019099",
         "type": "tabs",
+        "dimension": 37.309644670050766,
         "children": [
           {
             "id": "cf5661a8e1d362c1",
@@ -201,6 +203,18 @@
   },
   "active": "90e933a00414237f",
   "lastOpenFiles": [
+    "00-INDEX.md.tmp.19852.8d74938305fc",
+    "10-Python-Reference.md.tmp.19852.2fdae2496f3b",
+    "10-Python-Reference.md",
+    "10-Python-Reference.md.tmp.19852.e3757c1fecfa",
+    "06-Experiments.md",
+    "07-Scripts-Reference.md",
+    "08-Datasets.md",
+    "09-Compatibility-Gate.md",
+    "02-Stage0-Prepare-Profiling.md",
+    "03-Stage1-Complexity-Prompts.md",
+    "01-Overview.md",
+    "00-INDEX.md",
     "환영합니다!.md"
   ]
 }

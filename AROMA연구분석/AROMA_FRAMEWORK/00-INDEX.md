@@ -75,6 +75,7 @@ prepare_datasets(step -1) → phase0(profiling) → step1(complexity) → step2(
 | [[05-Stage3-ControlNet-Generation]] | ControlNet 학습(step4) + 결함 생성(step5, AROMA/random arm) | 학습·생성 작업·디버깅 시 |
 | [[06-Experiments]] | exp3/exp4v2/exp5/exp6 다운스트림 평가 | 실험 기록·계획 시 |
 | [[07-Scripts-Reference]] | 전 스크립트 입출력 표 + 핵심 로직 | 코드 수정·파라미터 확인 시 |
+| [[10-Python-Reference]] | 코어 15개 py 파일 **내부 구조**(함수·클래스·제어 흐름·상수·gotcha) | py 파일 코드 레벨 분석·디버깅 시 |
 | [[08-Datasets]] | v2-1 4종 데이터셋 + 데이터셋별 규약 | 데이터셋 구성 파악 시 |
 | [[09-Compatibility-Gate]] | symmetric compat 게이트 + clean-bg 게이트 + τ 사전스캔 (AROMA 핵심 novelty) | 게이트·τ 작업·디버깅 시 |
 
