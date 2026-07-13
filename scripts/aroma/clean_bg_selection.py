@@ -244,11 +244,26 @@ def _patch_void(row: Dict[str, str], var_floor: float, edge_floor: float) -> boo
     return lv <= var_floor and ed <= edge_floor
 
 
-def _derive_void_floors(good_by_img: Dict[str, List[Dict[str, str]]]) -> Tuple[float, float]:
-    """Data-driven void floors: a small low-percentile of the observed
-    local_variance / edge_density distributions (NOT a hardcoded constant). Void
-    tiles cluster at/near zero; the 1st percentile separates them from textured
-    background without a magic threshold."""
+def _derive_void_floors(good_by_img: Dict[str, List[Dict[str, str]]],
+                        floor_pct: float = 15.0) -> Tuple[float, float]:
+    """Data-driven void floors: a RAISED low-percentile (default p15) of the
+    observed local_variance / edge_density distributions (NOT a hardcoded
+    constant — the per-dataset percentile auto-adapts).
+
+    Why p15 and not p1: dark border/void tiles cluster just ABOVE zero, not at
+    it. On severstal the dark-void cluster sits at local_variance ~0.2 /
+    edge_density ~1.0 (measured: the 88%-black normal _9edf820d2 has black-patch
+    median local_variance=0.21, edge_density=0.98). The old p1 floor
+    (var=0.10 / edge=0.65) lands BELOW that cluster and catches only ~1% of the
+    black patches, so _patch_void reports a partial plate as ~0% void and it
+    survives the gate. The pool's own p10 (var=0.48 / edge=3.21) already sits
+    ABOVE the dark cluster yet far BELOW the valid full-plate cluster (var median
+    61.7); p15 covers the full dark-border spread (var up to ~0.25) with margin.
+    local_variance is the binding variable (black edge_density 0.98 is below even
+    pool p5=1.27). Because it is a per-dataset percentile it does not over-flag
+    textured pools (leather/mtd) and is not a severstal-tuned magic number; a
+    dataset whose percentile still undershoots can be pinned via the absolute
+    --var_floor / --edge_floor safety valve in run()."""
     lv, ed = [], []
     for rows in good_by_img.values():
         for r in rows:
@@ -259,8 +274,8 @@ def _derive_void_floors(good_by_img: Dict[str, List[Dict[str, str]]]) -> Tuple[f
                 pass
     if not lv:
         return 0.0, 0.0
-    var_floor = float(np.percentile(lv, 1.0))
-    edge_floor = float(np.percentile(ed, 1.0))
+    var_floor = float(np.percentile(lv, floor_pct))
+    edge_floor = float(np.percentile(ed, floor_pct))
     return var_floor, edge_floor
 
 
@@ -270,6 +285,8 @@ def valid_bg_pool(
     void_frac_max: Optional[float],
     var_floor: float,
     edge_floor: float,
+    floor_pct: float = 15.0,
+    floor_source: str = "percentile",
 ) -> Tuple[List[str], Dict[str, str], Dict[str, float]]:
     """Keep good images whose void_frac is at/below a data-derived cut. ALL-reject
     → fall back to the full pool (never a silent 0-output)."""
@@ -280,10 +297,14 @@ def valid_bg_pool(
         void_frac[iid] = v / n
 
     if void_frac_max is None:
-        # Data-driven cut: the 90th percentile of observed void_frac — images
-        # in the void-heavy tail are dropped, the bulk is kept. No magic number.
-        vals = list(void_frac.values())
-        void_frac_max = float(np.percentile(vals, 90.0)) if vals else 1.0
+        # Absolute majority-void cut: an image is a "partial plate" only when
+        # MORE THAN HALF its patches are void. 0.5 = the majority (over-half)
+        # boundary — a semantic threshold, NOT a dataset-tuned constant, and NOT
+        # the old relative p90 that structurally kept ~90% of the pool no matter
+        # how void-heavy the tail was (so it could never fully drop a partial
+        # plate). severstal ref (with floors fixed): most images ~0% void, cut@0.5
+        # drops only ~6.5% of the pool = just the worst partial plates.
+        void_frac_max = 0.5
 
     reasons: Dict[str, str] = {}
     kept: List[str] = []
@@ -311,6 +332,8 @@ def valid_bg_pool(
     derived = {
         "var_floor": var_floor,
         "edge_floor": edge_floor,
+        "void_floor_pct": float(floor_pct),
+        "floor_source": floor_source,
         "void_frac_max": float(void_frac_max),
         "n_good": float(len(good_by_img)),
         "n_valid": float(len(kept)),
@@ -765,7 +788,9 @@ def _build_summary(selected, derived_pool, derived_void, strategy) -> str:
         "",
         f"- void: var_floor={derived_void['var_floor']:.6g}  "
         f"edge_floor={derived_void['edge_floor']:.6g}  "
-        f"void_frac_max={derived_void['void_frac_max']:.4f}  "
+        f"(floor_pct={derived_void.get('void_floor_pct', 15.0):.1f}, "
+        f"source={derived_void.get('floor_source', 'percentile')})  "
+        f"void_frac_max={derived_void['void_frac_max']:.4f} (majority)  "
         f"→ valid {int(derived_void['n_valid'])}/{int(derived_void['n_good'])} good images",
         f"- pool_cut={derived_pool['pool_cut']}  "
         f"mean_pool_size={derived_pool['mean_pool_size']:.2f}  "
@@ -807,6 +832,9 @@ def run(
     emit_random_arm: bool = False,
     reject_clean_bg: bool = True,
     void_frac_max: Optional[float] = None,
+    void_floor_pct: float = 15.0,
+    var_floor: Optional[float] = None,
+    edge_floor: Optional[float] = None,
     pool_k: Optional[int] = None,
     geometry_prior: bool = False,
 ) -> Dict[str, Any]:
@@ -816,9 +844,25 @@ def run(
         logger.error("Input loading failed: %s", data)
         return data
 
-    var_floor, edge_floor = _derive_void_floors(data["good_by_img"])
+    # Data-driven percentile floors (default p15 — see _derive_void_floors), then
+    # an absolute per-dataset safety valve: if --var_floor / --edge_floor are
+    # passed they REPLACE the derived value (prescan-pinned override, no code
+    # change). floor_source records which path decided each floor for audit.
+    d_var, d_edge = _derive_void_floors(data["good_by_img"], void_floor_pct)
+    var_override, edge_override = var_floor, edge_floor
+    var_floor = d_var if var_override is None else float(var_override)
+    edge_floor = d_edge if edge_override is None else float(edge_override)
+    if var_override is None and edge_override is None:
+        floor_source = "percentile"
+    elif var_override is not None and edge_override is not None:
+        floor_source = "override"
+    else:
+        floor_source = "override_partial"
+    logger.info("Void floors: var_floor=%.6g edge_floor=%.6g (pct=%.1f, source=%s)",
+                var_floor, edge_floor, void_floor_pct, floor_source)
     valid_ids, reasons, derived_void = valid_bg_pool(
-        data["good_by_img"], reject_clean_bg, void_frac_max, var_floor, edge_floor
+        data["good_by_img"], reject_clean_bg, void_frac_max, var_floor, edge_floor,
+        floor_pct=void_floor_pct, floor_source=floor_source,
     )
     logger.info("Valid clean-bg pool: %d / %d good images (void_frac_max=%.4f)",
                 len(valid_ids), len(data["good_by_img"]), derived_void["void_frac_max"])
@@ -881,8 +925,20 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--no_reject_clean_bg", dest="reject_clean_bg", action="store_false",
                    help="Disable the void/quality prefilter (keep all good images)")
     p.add_argument("--void_frac_max", type=float, default=None,
-                   help="Max per-image void fraction to keep. Default: DATA-DRIVEN "
-                        "(P90 of observed void_frac). Override only to pin a value.")
+                   help="Max per-image void fraction to keep. Default: 0.5 "
+                        "(majority-void boundary — an image whose more-than-half "
+                        "patches are void is a partial plate). Override to pin a value.")
+    p.add_argument("--void_floor_pct", type=float, default=15.0,
+                   help="Percentile of observed local_variance/edge_density used to "
+                        "derive the void floors (data-driven, per-dataset). Default 15 "
+                        "sits above the dark-void cluster; raise/lower to tune.")
+    p.add_argument("--var_floor", type=float, default=None,
+                   help="Absolute local_variance void floor. Default: DATA-DRIVEN "
+                        "(--void_floor_pct percentile). Set to REPLACE the derived "
+                        "value (prescan safety valve — pins one dataset without code change).")
+    p.add_argument("--edge_floor", type=float, default=None,
+                   help="Absolute edge_density void floor. Default: DATA-DRIVEN "
+                        "(--void_floor_pct percentile). Set to REPLACE the derived value.")
     p.add_argument("--pool_k", type=int, default=None,
                    help="Per-ROI ranked background pool size. Default: DATA-DRIVEN "
                         "(all size-fit candidates; generate_defects indexes rep→pool). "
@@ -906,6 +962,9 @@ def main(argv=None) -> None:
         emit_random_arm=args.emit_random_arm,
         reject_clean_bg=args.reject_clean_bg,
         void_frac_max=args.void_frac_max,
+        void_floor_pct=args.void_floor_pct,
+        var_floor=args.var_floor,
+        edge_floor=args.edge_floor,
         pool_k=args.pool_k,
         geometry_prior=args.geometry_prior,
     )
