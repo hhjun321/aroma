@@ -1910,6 +1910,8 @@ def _run_yolo_condition(
     batch: int = 16,
     cache: str = "",
     rect: bool = False,
+    workers: int = 8,
+    compile: bool = False,
     seed: int = 42,
     device: int = 0,
     patience: int = 0,
@@ -2113,7 +2115,7 @@ def _run_yolo_condition(
             train_cache = "ram" if _c in ("ram", "true") else ("disk" if _c == "disk" else False)
 
             def _do_train():
-                return model.train(
+                train_kwargs = dict(
                     data=yaml_path,
                     epochs=epochs,
                     imgsz=imgsz,
@@ -2129,7 +2131,23 @@ def _run_yolo_condition(
                     batch=batch,      # 16=Ultralytics default (기존 동작 불변)
                     cache=train_cache,  # ""→False=비캐싱(기존), ram/disk opt-in
                     rect=rect,        # False=정사각 letterbox (기존 동작 불변)
+                    workers=workers,  # 8=Ultralytics default (미지정 시 동작 불변)
                 )
+                # compile 키는 --compile 지정 시에만 주입. 구버전 Ultralytics의
+                # check_dict_alignment 는 미지원 kwargs 를 SyntaxError 로 abort 하므로
+                # 무조건 전달 금지 — 지정 시에만 넣고 실패 시 제거 후 1회 재시도.
+                if compile:
+                    train_kwargs["compile"] = True
+                try:
+                    return model.train(**train_kwargs)
+                except (SyntaxError, TypeError) as exc:
+                    if "compile" in train_kwargs:
+                        logger.warning(
+                            "compile 미지원 Ultralytics(%s) — compile 제거 후 재시도", exc,
+                        )
+                        train_kwargs.pop("compile", None)
+                        return model.train(**train_kwargs)
+                    raise
 
             logger.info(
                 "    fit start: %s / %s  weights=%s  train_imgs=%d (real=%d synth=%d)  "
@@ -2270,6 +2288,8 @@ def _run_detection_mode(
     batch: int = 16,
     cache: str = "",
     rect: bool = False,
+    workers: int = 8,
+    compile: bool = False,
     seed: int = 42,
     existing_results: Optional[Dict[str, Any]] = None,
     output_path: Optional[str] = None,
@@ -2583,6 +2603,8 @@ def _run_detection_mode(
                         batch=batch,
                         cache=cache,
                         rect=rect,
+                        workers=workers,
+                        compile=compile,
                         seed=seed,
                         device=device,
                         patience=patience,
@@ -3059,6 +3081,8 @@ def run(
     batch: int = 16,
     cache: str = "",
     rect: bool = False,
+    workers: int = 8,
+    compile: bool = False,
     seed: int = 42,
     seeds: Optional[List[int]] = None,
     resume: bool = False,
@@ -3126,6 +3150,8 @@ def run(
                 batch=batch,
                 cache=cache,
                 rect=rect,
+                workers=workers,
+                compile=compile,
                 seed=s,
                 existing_results=existing_results,
                 output_path=seed_output_path,
@@ -3281,6 +3307,21 @@ def _parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--workers", type=int, default=8,
+        help=(
+            "dataloader worker 수 (default: 8 = Ultralytics 기본, 미지정 시 동작 불변). "
+            "A100 고vCPU 런타임에서 12 권장."
+        ),
+    )
+    p.add_argument(
+        "--compile", action="store_true",
+        help=(
+            "torch.compile(inductor) 활성 (default: False). ~14%% 속도↑이나 조합마다 "
+            "warmup 비용. torch>=2.0 + 최근 Ultralytics(8.3.x+) 필요. 미지원 시 자동 "
+            "fallback(compile 제거 후 재시도 + warn)."
+        ),
+    )
+    p.add_argument(
         "--class_mode",
         choices=["single", "multi"],
         default="single",
@@ -3358,6 +3399,8 @@ def main(argv=None) -> None:
         batch=args.batch,
         cache=args.cache,
         rect=args.rect,
+        workers=args.workers,
+        compile=args.compile,
         seed=args.seed,
         seeds=seed_list,
         resume=args.resume,

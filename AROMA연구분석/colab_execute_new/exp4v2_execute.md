@@ -129,7 +129,7 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
 
 ## STEP 2 — 3종 실행 (severstal · mvtec_leather · mtd)
 
-**그룹 A 파라미터** (`_SPEC §4`): `--class_mode multi` · `--imgsz 640` · `--rect` · `--baseline_epochs 100` · `--patience 50` · `--seeds 42 1 2`. 공통: `--condition all` · `--val_frac 0.3` · `--synth_ratio 1.0` · `--batch 64` · `--cache ram` · `--resume`.
+**그룹 A 파라미터** (`_SPEC §4`): `--class_mode multi` · `--imgsz 640` · `--rect` · `--baseline_epochs 100` · `--patience 25` · `--seeds 42 1 2`. 공통: `--condition all` · `--val_frac 0.3` · `--synth_ratio 1.0` · `--batch 128` · `--cache ram` · `--workers 12` · `--compile` · `--resume`.
 
 세 조건 모두 COCO pretrained에서 fresh 학습(graft 미사용). 학습량 = 3 ds × 3 seed × 3 cond. `--resume`가 완료된 `(seed, ds, cond)`를 skip하고 중단 지점부터 재개한다.
 
@@ -148,10 +148,12 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
     --val_frac 0.3 \
     --synth_ratio 1.0 \
     --baseline_epochs 100 \
-    --patience 50 \
-    --batch 64 \
+    --patience 25 \
+    --batch 128 \
     --cache ram \
     --rect \
+    --workers 12 \
+    --compile \
     --seeds 42 1 2 \
     --resume
 ```
@@ -163,7 +165,7 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
 
 ## STEP 3 — aitex 실행 (tiled, single-class)
 
-**그룹 B 파라미터** (`_SPEC §4`): `--imgsz 256` · `--baseline_epochs 300` · `--patience 50` · `--seeds 1 2 42`. **`--class_mode` 미지정**(=single, nc=1 'defect') · **`--rect` 미사용**(타일이 정사각 256). 공통 인자는 그룹 A와 동일.
+**그룹 B 파라미터** (`_SPEC §4`): `--imgsz 256` · `--baseline_epochs 300` · `--patience 25` · `--seeds 1 2 42`. **`--class_mode` 미지정**(=single, nc=1 'defect') · **`--rect` 미사용**(타일이 정사각 256). 공통 인자는 그룹 A와 동일(`--batch 128` · `--cache ram` · `--workers 12` · `--compile`).
 
 **동일 `--output_dir`**(`$EXP4V2_OUT`): `--resume`가 이미 완료된 3종을 건드리지 않고 aitex만 추가 학습·집계한다. 데이터셋 키가 다르므로 seed 폴더가 겹쳐도 충돌하지 않는다.
 
@@ -181,9 +183,11 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
     --val_frac 0.3 \
     --synth_ratio 1.0 \
     --baseline_epochs 300 \
-    --patience 50 \
-    --batch 64 \
+    --patience 25 \
+    --batch 128 \
     --cache ram \
+    --workers 12 \
+    --compile \
     --seeds 1 2 42 \
     --resume
 ```
@@ -252,8 +256,8 @@ for ds in [d for d in ORDER if d in results] + [d for d in results if d not in O
 
 ## 무결성 / 정직 (`_SPEC §5`)
 
-- **사후 튜닝 금지**: τ·seed·synth_ratio·epochs·imgsz는 위 그룹별 확정값을 그대로 쓰고, 결과 보고 후 변경하지 않는다. 파라미터를 바꾸면 skip 조건에 걸려 재학습되지 않으니 fresh `--output_dir` 또는 해당 항목 삭제로만 재실행한다.
-- **그룹 파라미터 불변**: 3종 = multi·640·rect·100ep·seeds 42 1 2 / aitex = single·256·no-rect·300ep·seeds 1 2 42. 두 그룹을 섞으면 비교 불가.
+- **사후 튜닝 금지**: τ·seed·synth_ratio·epochs·imgsz·**batch·patience**는 위 그룹별 확정값을 그대로 쓰고, 결과 보고 후 변경하지 않는다. (patience 25는 early-stop을 통해 보고 metric에 영향을 주므로 frozen 대상이다. batch 128도 고정.) 파라미터를 바꾸면 skip 조건에 걸려 재학습되지 않으니 fresh `--output_dir` 또는 해당 항목 삭제로만 재실행한다.
+- **그룹 파라미터 불변**: 3종 = multi·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2 / aitex = single·256·no-rect·300ep·**batch 128·patience 25**·seeds 1 2 42. 공통 속도 인자(`--workers 12`·`--compile`·`--cache ram`)도 3조건 동일 적용. 두 그룹을 섞으면 비교 불가.
 - **fresh 전조건**: baseline/random/aroma 모두 COCO에서 독립 학습. graft(전학습 weight 재사용) 미사용. 합성은 train에만, test/defect는 항상 real.
 - **aitex는 tile-level·single-class** → 절대값 타 데이터셋 직접 비교 금지, Δ만 유효.
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 Colab 실행으로.
