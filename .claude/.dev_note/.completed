@@ -49,3 +49,4 @@ aroma_controlnet-arm_aitex-integration.md
 aroma_placement_aware_score_redesign.md
 aroma_exp4v2_class-key-propagation.md
 aroma_phase0_image-id-unique-key.md
+aroma_exp4v2_localcache-mask-nrm-skip.md

@@ -1314,9 +1314,9 @@ def _local_cache_for_yolo(
     cache_ds = Path(cache_base) / ds
     real_dir = cache_ds / "real"
     real_imgs = real_dir / "images"
-    real_masks = real_dir / "masks"
-    for d in (real_imgs, real_masks):
-        d.mkdir(parents=True, exist_ok=True)
+    # NOTE: real masks are no longer copied to /tmp (kept on Drive, see the
+    # mask_map block below), so only the images dir is pre-created.
+    real_imgs.mkdir(parents=True, exist_ok=True)
 
     # counts mutated ONLY in the main thread (no shared-state race). _stage_one
     # returns a status string; the rewritten path is derived from the dst the
@@ -1368,19 +1368,21 @@ def _local_cache_for_yolo(
         local_tn = [str(d) for d in tn_dsts]
         local_td = [str(d) for d in td_dsts]
 
-        # mask_map: rewrite keys lockstep with test_defect
+        # mask_map: rewrite KEYS lockstep with test_defect, but KEEP VALUES on
+        # Drive (no copy). Merged masks are read at most ONCE — at label-build
+        # time (_get_real_test_images_and_labels -> _mask_to_bboxes), which runs
+        # once per dataset OUTSIDE the model loop and caches the labels to
+        # yolo_cache; on a cache hit the masks are never read at all. Staging
+        # them to /tmp therefore accelerates no per-epoch read (the training
+        # loop reads image + label.txt only), so copying them is net-negative.
+        # We read the Drive path once instead. KEY rewrite is still required so
+        # downstream lookups by the /tmp image path resolve (_split_defects,
+        # _get_real_test_images_and_labels). Same policy the per-class
+        # class_mask_map below already uses (values stay on Drive).
         local_mask_map: Dict[str, str] = {}
-        mask_futs = {}  # local_p -> (future, mask_dst)
-        for i, (orig_p, local_p) in enumerate(zip(lists["test_defect"], local_td)):
+        for orig_p, local_p in zip(lists["test_defect"], local_td):
             if orig_p in lists["mask_map"]:
-                mdst = real_masks / f"mask_{i:05d}.png"
-                mask_futs[local_p] = (
-                    ex.submit(_stage_one, lists["mask_map"][orig_p], str(mdst)),
-                    mdst,
-                )
-        for local_p, (fut, mdst) in mask_futs.items():
-            counts[fut.result()] += 1
-            local_mask_map[local_p] = str(mdst)
+                local_mask_map[local_p] = lists["mask_map"][orig_p]
 
         # class_mask_map (severstal multi mode): rewrite keys lockstep with
         # test_defect so per-class lookups by /tmp image path resolve. Without
@@ -1417,20 +1419,31 @@ def _local_cache_for_yolo(
             for j, ann in enumerate(anns):
                 img_dst = cond_imgs / f"syn_{j:05d}{Path(ann['image_path']).suffix}"
                 f_img = ex.submit(_stage_one, ann["image_path"], str(img_dst))
-                f_norm = None
-                norm_dst = None
-                if ann.get("normal_image"):
-                    norm_dst = cond_imgs / f"nrm_{j:05d}{Path(ann['normal_image']).suffix}"
-                    f_norm = ex.submit(_stage_one, ann["normal_image"], str(norm_dst))
                 # GT mask (exact-bbox path) — stage to local cache too, else the
                 # rewritten image_path points at /tmp while mask stays on Drive
                 # (loses /tmp acceleration and breaks if Drive unmounts mid-run).
+                # Kept staged (NOT dropped like the real masks) because synth
+                # labels are rebuilt per (model x condition) inside the training
+                # loop, so this mask can be read more than once and stays exposed
+                # for the whole run.
                 f_mask = None
                 mask_dst = None
                 mask_src = ann.get("mask_path")
-                if mask_src and Path(mask_src).exists():
+                has_mask = bool(mask_src and Path(mask_src).exists())
+                if has_mask:
                     mask_dst = cond_imgs / f"msk_{j:05d}{Path(mask_src).suffix}"
                     f_mask = ex.submit(_stage_one, mask_src, str(mask_dst))
+                # normal_image (clean bg) is read ONLY as a bbox fallback in
+                # _write_yolo_labels when the annotation has NO usable mask. With
+                # a mask present it is never read, so skip staging it (the
+                # original path is kept in the annotation for provenance / class
+                # parsing). Mask-less synth (legacy / CASDA copy-paste) still
+                # stages it so the _extract_defect_bboxes fallback works.
+                f_norm = None
+                norm_dst = None
+                if ann.get("normal_image") and not has_mask:
+                    norm_dst = cond_imgs / f"nrm_{j:05d}{Path(ann['normal_image']).suffix}"
+                    f_norm = ex.submit(_stage_one, ann["normal_image"], str(norm_dst))
                 futs_list.append((ann, f_img, img_dst, f_norm, norm_dst, f_mask, mask_dst))
             new_anns = []
             for ann, f_img, img_dst, f_norm, norm_dst, f_mask, mask_dst in futs_list:
@@ -1464,7 +1477,9 @@ def _local_cache_for_yolo(
         counts["copied"] + counts["skipped"] + counts["failed"], num_workers,
     )
     logger.info(
-        "[LocalCache] %s ready: %.1fs (train_normal=%d defect=%d masks=%d random=%d casda=%d aroma=%d)",
+        "[LocalCache] %s ready: %.1fs (train_normal=%d defect=%d masks_ondrive=%d "
+        "random=%d casda=%d aroma=%d) "
+        "[real masks + mask-covered synth normals kept on Drive, not copied]",
         ds, elapsed, len(local_tn), len(local_td), len(local_mask_map),
         len(new_synth_by_cond.get("random", [])),
         len(new_synth_by_cond.get("casda", [])),
