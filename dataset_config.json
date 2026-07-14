@@ -163,7 +163,8 @@
       "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/cut_lead",
       "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/damaged_case",
       "/content/drive/MyDrive/data/Aroma/mvtec/transistor/test/misplaced"
-    ]
+    ],
+    "class_mode": "single"
   },
   "mvtec_wood": {
     "domain": "mvtec",
@@ -187,7 +188,8 @@
       "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/rough",
       "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/split_teeth",
       "/content/drive/MyDrive/data/Aroma/mvtec/zipper/test/squeezed_teeth"
-    ]
+    ],
+    "class_mode": "multi"
   },
   "visa_candle": {
     "domain": "visa",
