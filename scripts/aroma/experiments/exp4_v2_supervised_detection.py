@@ -489,11 +489,12 @@ def _get_image_lists(
             test_defect.extend(_glob_images(str(d)))
         mask_map = _resolve_masks_generic(test_defect, root)
 
-    elif dataset_key in ("aitex", "mtd"):
+    elif dataset_key in ("aitex", "mtd", "kolektor"):
         # Config-driven MVTec-style prepared layouts (prepare_aitex.py /
-        # prepare_mtd.py): <root>/train/good + test/{defect_type}/ +
+        # prepare_mtd.py / prepare_kolektor.py): <root>/train/good + test/{defect_type}/ +
         # ground_truth/{defect_type}/{stem}_mask.png. dataset_config.json's
         # image_dir points at .../<root>/train/good (source of truth for root).
+        # kolektor: single-class 'defect' surface (KolektorSDD v1), same layout.
         entry = _load_dataset_config().get(dataset_key)
         if not entry or not entry.get("image_dir"):
             logger.warning("%s not in dataset_config: run prepare first", dataset_key)
