@@ -81,6 +81,48 @@ for ds in DATASETS:
 
 > aroma가 ✗인 데이터셋은 step5 미완 — exp5는 자동 skip 로그를 남기며, step5 생성 후 재실행한다.
 
+### 경로 정규화 (baked stale prefix 보정 — exp5 전 필수)
+
+⚠️ 합성 `annotations.json` 은 생성 시점 **절대경로**를 baking 한다. 이후 dir 이 재명명·이동되면(예: `*/synth_random_F` → `*/synth_random`) `image_path`/`mask_path` 가 실제 위치와 어긋나 exp5 가 crop 을 **전량 skip**한다(`mask=0 bbox=0 skipped=N/N` → PRDC n=0). 아래 셀이 **각 annotations 의 경로를 그 파일이 실제 위치한 dir 기준으로 정규화**한다(어떤 stale prefix 든 basename 만 취해 `{현재 dir}/{images|masks}/{basename}` 로 재작성). idempotent — 여러 번 실행해도 안전.
+
+```python
+import json, pathlib, os
+
+def _normalize_synth_paths(root, ds):
+    ap = pathlib.Path(f"{root}/{ds}/annotations.json")
+    if not ap.exists():
+        return None
+    anns = json.load(open(ap))
+    base = f"{root}/{ds}"
+    n_fix = 0
+    for a in anns:
+        for key, sub in (('image_path', 'images'), ('mask_path', 'masks')):
+            v = a.get(key)
+            if v:
+                fixed = f"{base}/{sub}/{pathlib.Path(v).name}"
+                if fixed != v:
+                    a[key] = fixed; n_fix += 1
+    json.dump(anns, open(ap, 'w'))
+    # 정규화 후 실제 존재 검증
+    miss = sum(1 for a in anns
+               if a.get('image_path') and not pathlib.Path(a['image_path']).exists())
+    return len(anns), n_fix, miss
+
+for label, root in (('aroma', os.environ['AROMA_SYNTH_DIR']),
+                    ('random', os.environ['RANDOM_SYNTH_DIR'])):
+    for ds in DATASETS:
+        res = _normalize_synth_paths(root, ds)
+        if res is None:
+            print(f"  {label:6s} {ds:14s} annotations 없음(skip)")
+        else:
+            n, fixed, miss = res
+            flag = '⚠️ 이미지 부재' if miss else '✓'
+            print(f"  {label:6s} {ds:14s} n={n} rewrote={fixed} missing_img={miss} {flag}")
+```
+
+> `missing_img > 0` 이면 정규화해도 그 dir 에 이미지가 **실제로 없다**는 뜻 → 해당 arm/데이터셋 step5 재생성 필요(정규화만으론 해결 불가). `missing_img=0` 이면 exp5 정상 로드된다.
+> 이 정규화는 exp3(FID)·exp6(knn)도 동일 annotations 를 읽으므로 함께 이득. `EMBED_CACHE` 는 경로 기반 키이므로, 정규화로 image_path 가 바뀌면 **캐시 무효화**됨(`!rm -rf $EMBED_CACHE_DIR/{ds}` 권장).
+
 ---
 
 ## STEP 1 — 패키지 설치
