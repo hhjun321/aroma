@@ -275,6 +275,43 @@
 
 ---
 
+## 9. 서식·인용 순서 규칙 (저널 편집 지적 반영)
+
+투고 서식 점검 시 아래 규칙을 반드시 적용한다. 문법이 아니라 **편집/서식** 규약이며, 본문·표·그림에 공통으로 적용된다.
+
+### 9.1 표(Table) 본문 콜아웃 + 인용 순서
+- **모든 표는 본문 서술에서 명시적 콜아웃으로 최소 1회 인용**해야 한다. 표가 문서에 존재하기만 해서는 안 되고, 본문 문장이 그 표를 **직접 지목**해야 한다.
+- 콜아웃 문형(권장): **"As shown in Table N, ..."**, "Table N shows/summarizes/reports ...", "..., as summarized in Table N", "... (Table N)". 캡션은 콜아웃으로 치지 않는다 — **서술 본문**에 있어야 한다.
+- 각 표의 **최초 콜아웃이 번호 오름차순**으로 나타나야 한다.
+- 본문에 콜아웃이 없는 표는 삽입한다(예: 본문에 "As shown in Table 17, ..." 추가). 순서가 어긋나면 재정렬 — 예: Table 17의 최초 콜아웃은 Table 16의 최초 콜아웃 **뒤에**.
+```
+좋음:  "As shown in Table 17, the augmented set improves recall over the baseline."
+나쁨:  표만 존재하고 본문이 그 표를 전혀 지목하지 않음.
+점검:  본문에서 "Table 1" → "Table 2" → … → "Table N" 순으로 첫 콜아웃이 등장하는가?
+```
+
+### 9.2 그림(Figure) 본문 콜아웃 + 인용 순서
+- **모든 그림도 본문 서술에서 명시적 콜아웃으로 최소 1회 인용**한다. 캡션·`\includegraphics`만으로는 부족하며, 본문 문장이 그림을 직접 지목해야 한다.
+- 콜아웃 문형(권장): **"As shown in Figure N, ..."**, "Figure N illustrates/depicts/reports ...", "..., as visualized in Figure N", "(Figure N)". LaTeX면 `Figure~\ref{fig:...}`.
+- 각 그림의 **최초 콜아웃이 번호 오름차순**. 콜아웃 없는 그림은 삽입(예: "As shown in Figure 8, ...").
+```
+좋음:  "As shown in Figure 8, the placement distribution shifts toward high-compatibility cells."
+점검:  본문에서 "Figure 1" → "Figure 2" → … 순으로 첫 콜아웃이 등장하는가?
+```
+
+### 9.3 그림 해상도
+- 그림 내용은 **판독 가능**해야 한다. 저해상도 이미지는 **최소 가로/세로 1000픽셀 이상, 또는 300 dpi 이상**의 고해상도 이미지로 교체한다.
+
+### 9.4 숫자 콤마(천단위 구분자)
+- 콤마는 **5자리 이상** 숫자에만 사용한다. **4자리 숫자에서는 콤마를 제거**한다.
+- 본문·표·그림 캡션·그림 내부 라벨 모두 적용.
+```
+올바름:  1200      12,000     114,174
+잘못됨:  1,200  →  1200
+```
+
+---
+
 *분석 대상 논문 9편:*
 1. A Comprehensive Review of Position and Movement Visual Monitoring Systems
 2. Addressing the Impact of Resolution Scaling on YOLO Performance for Brain Tumor Detection
