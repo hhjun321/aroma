@@ -284,19 +284,25 @@
 - 콜아웃 문형(권장): **"As shown in Table N, ..."**, "Table N shows/summarizes/reports ...", "..., as summarized in Table N", "... (Table N)". 캡션은 콜아웃으로 치지 않는다 — **서술 본문**에 있어야 한다.
 - 각 표의 **최초 콜아웃이 번호 오름차순**으로 나타나야 한다.
 - 본문에 콜아웃이 없는 표는 삽입한다(예: 본문에 "As shown in Table 17, ..." 추가). 순서가 어긋나면 재정렬 — 예: Table 17의 최초 콜아웃은 Table 16의 최초 콜아웃 **뒤에**.
+- **섹션-지역성**: 표는 **그 표가 배치된 섹션의 본문에서 인용**한다. 다른(이전/이후) 섹션의 본문에서 그 표를 참조하는 것은 **지양**한다 — 표를 인용해야 할 논의는 그 표가 있는 섹션 안에서 하고, 표도 그 논의가 있는 섹션에 배치한다. (교차 참조가 꼭 필요하면 표 대신 해당 **섹션**을 가리킨다, 예: "see §4.4".)
 ```
 좋음:  "As shown in Table 17, the augmented set improves recall over the baseline."
 나쁨:  표만 존재하고 본문이 그 표를 전혀 지목하지 않음.
+나쁨:  §3(Methods)에서 §4에 놓인 Table 12를 인용 → 대신 "(see §4.4)"로 섹션 참조.
 점검:  본문에서 "Table 1" → "Table 2" → … → "Table N" 순으로 첫 콜아웃이 등장하는가?
+점검:  각 표의 콜아웃이 그 표가 속한 섹션 안에 있는가(타 섹션 참조 없음)?
 ```
 
 ### 9.2 그림(Figure) 본문 콜아웃 + 인용 순서
 - **모든 그림도 본문 서술에서 명시적 콜아웃으로 최소 1회 인용**한다. 캡션·`\includegraphics`만으로는 부족하며, 본문 문장이 그림을 직접 지목해야 한다.
 - 콜아웃 문형(권장): **"As shown in Figure N, ..."**, "Figure N illustrates/depicts/reports ...", "..., as visualized in Figure N", "(Figure N)". LaTeX면 `Figure~\ref{fig:...}`.
 - 각 그림의 **최초 콜아웃이 번호 오름차순**. 콜아웃 없는 그림은 삽입(예: "As shown in Figure 8, ...").
+- **섹션-지역성**: 그림도 **그 그림이 배치된 섹션의 본문에서만 인용**한다. 이전/이후 섹션에서의 참조는 지양하고, 교차 참조가 필요하면 그림 대신 해당 **섹션**을 가리킨다.
 ```
 좋음:  "As shown in Figure 8, the placement distribution shifts toward high-compatibility cells."
+나쁨:  §5(Discussion)에서 §4.1의 Figure 4를 인용 → 대신 "(see §4.1)".
 점검:  본문에서 "Figure 1" → "Figure 2" → … 순으로 첫 콜아웃이 등장하는가?
+점검:  각 그림의 콜아웃이 그 그림이 속한 섹션 안에 있는가?
 ```
 
 ### 9.3 그림 해상도
