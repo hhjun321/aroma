@@ -183,19 +183,38 @@ def _load_synth_crops(
     anns = load_json(annotations_path)
     counts = {"n_total": len(anns), "n_mask": 0, "n_bbox": 0, "n_skipped": 0}
 
+    ann_dir = Path(annotations_path).parent
+
+    def _resolve(p: Optional[str], subdir: str) -> Optional[str]:
+        # 합성 annotations 는 생성 시점의 절대경로(Colab)를 baking 하므로 다른 run·
+        # 경로에서 어긋날 수 있다(예: 이미지는 synth_random/ 인데 image_path 는
+        # 구 synth_random_F/ 를 가리킴). exp4v2 _load_synth_annotations._resolve_path
+        # 와 동일하게, 절대경로가 없으면 annotations 디렉토리 기준으로 폴백한다
+        # ({ann_dir}/{subdir}/basename → {ann_dir}/basename). 미해결 시 None.
+        if not p:
+            return None
+        pp = Path(p)
+        if pp.exists():
+            return str(pp)
+        cand = ann_dir / subdir / pp.name
+        if cand.exists():
+            return str(cand)
+        cand2 = ann_dir / pp.name
+        return str(cand2) if cand2.exists() else None
+
     def _one(ann: Dict[str, Any]) -> Optional[Tuple[np.ndarray, str, str]]:
         # dry_run 은 명시적으로 제외 (exp4v2 관례) — 파일 부재에 의존하는
         # 암묵 필터가 아니라 플래그로 차단(placeholder 파일 존재 시에도 안전).
         if ann.get("dry_run") is True:
             return None
-        img_p = ann.get("image_path")
-        if not img_p or not Path(img_p).exists():
+        img_p = _resolve(ann.get("image_path"), "images")
+        if not img_p:
             return None
         try:
             img = np.array(Image.open(img_p).convert("RGB"))
             ih, iw = img.shape[:2]
-            mask_p = ann.get("mask_path")
-            if mask_p and Path(mask_p).exists():
+            mask_p = _resolve(ann.get("mask_path"), "masks")
+            if mask_p:
                 mask = np.array(Image.open(mask_p).convert("L"))
                 bbox = _mask_to_bbox(mask)
                 if bbox is not None:

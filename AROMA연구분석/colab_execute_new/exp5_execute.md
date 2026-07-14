@@ -114,9 +114,16 @@ for ds in DATASETS:
 import os, json, random, pathlib
 
 # random 합성 하나를 반분해 가짜 aroma/random 구성
-SRC = f"{os.environ['RANDOM_SYNTH_DIR']}/severstal/annotations.json"
-NEG = "/content/tmp/exp5_negctl"
+SRC  = f"{os.environ['RANDOM_SYNTH_DIR']}/severstal/annotations.json"
+REAL = f"{os.environ['RANDOM_SYNTH_DIR']}/severstal"   # 실제 이미지/마스크 위치
+NEG  = "/content/tmp/exp5_negctl"
 anns = json.load(open(SRC))
+# ⚠️ annotations 는 생성 시점 절대경로(구 synth_random_F 등)를 baking → split dir 에는
+#    이미지가 없다. image_path/mask_path 를 실제 위치(RANDOM_SYNTH_DIR)로 보정해야
+#    exp5 가 crop 을 로드한다(미보정 시 mask=0 bbox=0 skipped=전량 → PRDC n=0).
+for a in anns:
+    if a.get('image_path'): a['image_path'] = f"{REAL}/images/{pathlib.Path(a['image_path']).name}"
+    if a.get('mask_path'):  a['mask_path']  = f"{REAL}/masks/{pathlib.Path(a['mask_path']).name}"
 random.Random(0).shuffle(anns)
 half = len(anns) // 2
 for name, part in (("a", anns[:half]), ("b", anns[half:])):
@@ -133,6 +140,9 @@ for name, part in (("a", anns[:half]), ("b", anns[half:])):
 
 neg = json.load(open("/content/tmp/exp5_negctl/out/exp5_prdc_results.json"))
 k5 = neg["severstal"]["k5"]
+if "delta" not in k5:   # crop 로딩 실패(n=0 → PRDC skip) 진단
+    raise SystemExit(f"k5 에 delta 없음 — synth crop 로딩 실패 추정. k5={k5}. "
+                     "위 셀의 image_path/mask_path 보정 + exp5_prdc _resolve 폴백 확인.")
 print("Δ:", k5["delta"], "\np:", k5["p_one_sided"])   # Δ≈0, p ≈ 0.2~0.8 기대
 ```
 
