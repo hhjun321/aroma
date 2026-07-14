@@ -261,13 +261,13 @@
     "notes": "Textile. Raw 4096x256px (16:1 aspect) TILED to 256x256/stride128 (50% overlap) by prepare_aitex.py --tile 256 --stride 128 --min_tile_area 50 (defaults): raw aspect collapsed to 256x16 under exp4v2 imgsz=256 letterbox -> baseline mAP50 0.066 (unlearnable). Single-class: all ~12 defect codes merged into test/defect (71 train imgs / 11 classes was ~6.5/class). Tile stems carry '__tile_r{r}_c{c}' so exp4v2 _split_defects groups all tiles of one source image into the same train/val side (50% overlap leak guard). Defect-image tiles with all-zero mask window -> train/good (bg pool); sub-min_area fragment tiles discarded. Masks re-encoded per tile as 0/255 under ground_truth/defect/{stem}_mask.png. Use a FRESH output dir (aitex_tiled) - do not mix with the legacy non-tiled aitex layout. aitex_manifest.json records tiled:true + per-tile origin/x0."
   },
   "kolektor": {
-    "domain": "aitex",
+    "domain": "mvtec",
     "class_mode": "single",
     "image_dir": "/content/drive/MyDrive/data/Aroma/kolektor/train/good",
     "seed_dirs": [
       "/content/drive/MyDrive/data/Aroma/kolektor/test/defect"
     ],
-    "notes": "KolektorSDD v1 (electrical commutator metal surface). prepare_kolektor.py: kosNN/PartK.jpg + PartK_label.bmp -> train/good(347) + test/defect(52) + ground_truth/defect/{stem}_mask.png. Single-class 'defect'. Images 500x~1260 (tall ~2.5:1) -> exp4v2 use --rect. domain='aitex' only selects the ground_truth/{type}/{stem}_mask.png mask resolver (layout-identical); NOT tiled. CCI=0.224 (low, leather/mtd zone -> weak compat lever; run empirically to confirm). min-bg-quality prescan: 0.7 empties pool (full max 0.549) -> use ~0.42."
+    "notes": "KolektorSDD v1 (electrical commutator metal surface). prepare_kolektor.py: kosNN/PartK.jpg + PartK_label.bmp -> train/good(347) + test/defect(52) + ground_truth/defect/{stem}_mask.png. Single-class 'defect'. Images 500x~1260 (tall ~2.5:1) -> exp4v2 use --rect. domain='mvtec' = generic MVTec-style-layout MASK RESOLVER only (ground_truth/{type}/{stem}_mask.png, image.parent.parent.parent base) — kolektor's layout is identical; domain is NOT benchmark identity and triggers NO tiling/grayscale/special handling (tiling is keyed on dataset_key/__tile_ filenames, not domain). exp4v2 routes on dataset_key 'kolektor' (config-driven aitex/mtd/kolektor branch), not domain. CCI=0.224 (low, leather/mtd zone -> weak compat lever; run empirically to confirm). min-bg-quality prescan: 0.7 empties pool (full max 0.549) -> use ~0.42."
   },
   "mtd": {
     "domain": "mtd",
