@@ -357,8 +357,8 @@ Table A1 reports the data-volume statistics that the profiling stage records for
 
 For each dataset, the profiling stage emits three diagnostic figures under `profiling/<dataset>/figures/`: a morphology-feature histogram grid (Figure B1; `morphology_histograms.png`), a defect–background compatibility heatmap (Figure B2; `compatibility_heatmap.png`), and a per-cell deficit bar chart (Figure B3; `deficit_bars.png`). These visualize, respectively, the morphology distributions from which the Morphology Complexity Index and clustering policy are derived, the context compatibility structure underlying context partitioning, and the (morphology, context) deficit profile discussed in §3.2.6. They are available for all five canonical datasets (AITeX, Kolektor, Severstal, MTD, MVTec Leather) and may be included as supplementary figures.
 
-**Figure B1.** Morphology-feature histograms per dataset (`figures/morphology_histograms.png`). \label{fig:appendix_morph_hist}
+**Figure B1.** Morphology-feature histograms per dataset (`figures/morphology_histograms.png`).
 
-**Figure B2.** Defect–background compatibility heatmaps per dataset (`figures/compatibility_heatmap.png`). \label{fig:appendix_compat}
+**Figure B2.** Defect–background compatibility heatmaps per dataset (`figures/compatibility_heatmap.png`).
 
-**Figure B3.** Per-cell deficit bar charts per dataset (`figures/deficit_bars.png`); note (§3.2.6) that high-deficit cells are precisely those lacking source crops under copy-paste. \label{fig:appendix_deficit}
+**Figure B3.** Per-cell deficit bar charts per dataset (`figures/deficit_bars.png`); note (§3.2.6) that high-deficit cells are precisely those lacking source crops under copy-paste.
