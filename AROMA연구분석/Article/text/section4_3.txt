@@ -13,6 +13,8 @@ Two datasets were selected to evaluate the downstream utility of AROMA under dis
 | AROMA vs. Baseline | +26.44 pp |
 | AROMA vs. Random | +4.96 pp |
 
+**Figure 8.** AITeX ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+
 **Table 9.** YOLOv8n detection performance on Kolektor test set (mean ± std, n = 3 seeds). Two-class plastic defects, imgsz 640, 100 epochs.
 
 | Method | mAP@0.5 |
@@ -24,9 +26,9 @@ Two datasets were selected to evaluate the downstream utility of AROMA under dis
 | AROMA vs. Baseline | +1.30 pp |
 | AROMA vs. Random | −0.68 pp |
 
-**Figure 8.** Downstream mAP@0.5: AITeX (single-class) and Kolektor (two-class) across Baseline, Random, AROMA.
+**Figure 9.** Kolektor ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
-As shown in Figure 8, the two datasets exhibit contrasting augmentation responses: AITeX demonstrates substantial AROMA advantage, whereas Kolektor converges across methods near ceiling performance.
+As shown in Tables 8 and 9, the two datasets exhibit contrasting augmentation responses: AITeX demonstrates substantial AROMA advantage, whereas Kolektor converges across methods near ceiling performance.
 
 On AITeX (Table 8), AROMA achieves 0.4683 mean mAP@0.5, outperforming both Baseline (0.2039, +129% relative gain) and Random (0.4187, +12% relative gain). The improvement is robust across seeds: Baseline is highly unstable (std 0.1138, CI95 straddling zero), whereas both augmented methods stabilize performance. AROMA's edge over Random is modest but consistent: AROMA's tighter confidence interval and lower variance suggest more uniform placement quality across the tiled defect space. The single-class, morphologically homogeneous nature of AITeX—combined with its tiled repetitive structure—appears amenable to context-aware placement: AROMA's ability to identify and prioritize diverse background contexts within the tile geometry yields measurable gains.
 
