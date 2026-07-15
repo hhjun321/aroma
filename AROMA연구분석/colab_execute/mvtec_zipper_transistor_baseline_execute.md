@@ -303,7 +303,7 @@ for DS in DATASETS:
 ```python
 os.environ['SYNTH_AROMA']  = S('synth_aroma')     # 루트 — 스크립트가 /{ds} 붙임
 os.environ['SYNTH_RANDOM'] = S('synth_random')
-os.environ['EXP4V2_OUT']   = f"{S('exp4v2')}_mvtec_new"   # 기존 4셋과 분리(resume 오염 방지)
+os.environ['EXP4V2_OUT']   = S('exp4v2')   # 기존 4셋과 동일 dir — ds 키가 달라(mvtec_zipper/transistor) 충돌 없음, resume 이 기존 셀 skip 후 신규 2종만 추가 → 6셋 통합 results.json
 os.environ['YOLO_CACHE']   = f"{os.environ['AROMA_OUT']}/yolo_cache"
 
 # zipper — multi
