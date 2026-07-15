@@ -1,10 +1,38 @@
-##4.2. Synthesis Quality (Experiment 1)
-Synthesis quality was assessed at the image level using Fréchet Inception Distance (FID), Kernel Inception Distance (KID), and Learned Perceptual Image Patch Similarity (LPIPS), comparing the AROMA-augmented set and the Random-augmented set against the real reference distribution.
-**Figure 7.** Synthesis quality: FID, KID, LPIPS comparing AROMA vs. Random augmentation.
+##4.3. Downstream Detection Performance (AITeX, Kolektor)
 
-As shown in Figure 7, synthesis quality metrics are expected to show minimal differences between AROMA and Random conditions at the image level.
+Two datasets were selected to evaluate the downstream utility of AROMA under distinct data regimes: AITeX, a single-class tiled-pattern dataset with defect instances confined to one anomaly type; and Kolektor, a small-scale two-class plastic-defect dataset. These datasets represent orthogonal challenges: AITeX tests the policy under morphological homogeneity and tiled spatial structure, whereas Kolektor examines performance in the limited-data regime (36 real training images) where synthetic augmentation is most critical. Downstream detection was assessed via supervised YOLOv8n training under three augmentation conditions (Baseline: no synthetic data; Random: random ROI placement; AROMA: compatibility-aware placement) over three random seeds (1, 2, 42). Results are reported as mAP@0.5 on the shared real test set.
 
-We expect only small AROMA-vs-Random differences on any full-image distribution metric, and we state the reason qualitatively. The AROMA and Random arms share the same seed-defect pixels and the same seamless blending, differing only in the ROI placement context—the local background texture surrounding each defect. Since FID measures the global image distribution rather than the localized defect region, it is largely insensitive to the placement differences that AROMA is designed to exploit, so any deltas are expected to be small.
+**Table 8.** YOLOv8n detection performance on AITeX test set (mean ± std, n = 3 seeds). Single-class tiled-pattern dataset, imgsz 256, 300 epochs.
 
-This limitation mirrors the FID behavior reported for CASDA, where the copy-paste variant attained an artificially low FID by reusing real patches whose feature distribution coincided with the reference set by construction. The same structural property applies here: full-image distribution metrics cannot fully resolve the contextual placement advantage of AROMA and are therefore reported primarily to characterize, rather than to discriminate, synthesis quality. KID and LPIPS are expected to behave identically for the same reason. Accordingly, the downstream supervised detection performance presented in Section 4.4 is treated as the primary evidence, since it directly reflects the discriminative value of the placement context that distribution-level metrics do not capture.
+| Method | mAP@0.5 |
+|--------|---------|
+| Baseline | 0.2039 ± 0.1138 |
+| Random | 0.4187 ± 0.0514 |
+| AROMA | 0.4683 ± 0.0461 |
+| Random vs. Baseline | +21.48 pp |
+| AROMA vs. Baseline | +26.44 pp |
+| AROMA vs. Random | +4.96 pp |
+
+**Figure 8.** AITeX ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+
+**Table 9.** YOLOv8n detection performance on Kolektor test set (mean ± std, n = 3 seeds). Two-class plastic defects, imgsz 640, 100 epochs.
+
+| Method | mAP@0.5 |
+|--------|---------|
+| Baseline | 0.9740 ± 0.0225 |
+| Random | 0.9938 ± 0.0020 |
+| AROMA | 0.9870 ± 0.0139 |
+| Random vs. Baseline | +1.98 pp |
+| AROMA vs. Baseline | +1.30 pp |
+| AROMA vs. Random | −0.68 pp |
+
+**Figure 9.** Kolektor ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+
+As shown in Tables 8 and 9, the two datasets exhibit contrasting augmentation responses: AITeX demonstrates substantial AROMA advantage, whereas Kolektor converges across methods near ceiling performance.
+
+On AITeX (Table 8), AROMA achieves 0.4683 mean mAP@0.5, outperforming both Baseline (0.2039, +129% relative gain) and Random (0.4187, +12% relative gain). The improvement is robust across seeds: Baseline is highly unstable (std 0.1138, CI95 straddling zero), whereas both augmented methods stabilize performance. AROMA's edge over Random is modest but consistent: AROMA's tighter confidence interval and lower variance suggest more uniform placement quality across the tiled defect space. The single-class, morphologically homogeneous nature of AITeX—combined with its tiled repetitive structure—appears amenable to context-aware placement: AROMA's ability to identify and prioritize diverse background contexts within the tile geometry yields measurable gains.
+
+On Kolektor (Table 9), baseline performance is already near-ceiling (0.974 mAP@0.5); synthetic augmentation provides only marginal gains. Random achieves 0.9938 (+2% relative), and AROMA achieves 0.9870 (−1% relative to Random, +1% absolute vs. Baseline). At this ceiling level, both placement strategies converge: the 36-image Kolektor training set, combined with high intrinsic dataset quality and balanced defect representation, leaves little headroom for contextual placement to improve detection. The high-variance seed 42 (both Random and AROMA at 0.995 or below) reveals that small-dataset randomness can dominate augmentation effects. AROMA's performance parity with Random—despite its compatibility-aware design—indicates that in high-headroom regimes (Kolektor, MTD: existing strong generalization), the placement policy contributes less than baseline dataset characteristics.
+
+The contrast between AITeX and Kolektor validates the conditional nature of AROMA's benefit: meaningful gains emerge when baseline headroom exists (AITeX: low baseline, high improvement potential) and the defect-background compatibility structure is informative (AITeX: diverse tile contexts; Kolektor: already well-covered by random placement in a small, balanced set). No claim of universal improvement is asserted; instead, the results demonstrate that AROMA recovers value in constrained regimes where random placement leaves coverage gaps, while remaining neutral in high-headroom or data-rich scenarios.
 

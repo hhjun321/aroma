@@ -191,17 +191,7 @@ As shown in Figure 6, coverage metrics quantify the breadth of the ROI selection
 
 Analysis of the committed selection maps shows that the deficit-aware term, which was intended to drive rare-pair coverage, is inert under copy-paste (§3.2.6). The downstream consequence of the placement policy for detection accuracy is examined in Section 4.4.
 
-##4.2. Synthesis Quality (Experiment 1)
-Synthesis quality was assessed at the image level using Fréchet Inception Distance (FID), Kernel Inception Distance (KID), and Learned Perceptual Image Patch Similarity (LPIPS), comparing the AROMA-augmented set and the Random-augmented set against the real reference distribution.
-**Figure 7.** Synthesis quality: FID, KID, LPIPS comparing AROMA vs. Random augmentation.
-
-As shown in Figure 7, synthesis quality metrics are expected to show minimal differences between AROMA and Random conditions at the image level.
-
-We expect only small AROMA-vs-Random differences on any full-image distribution metric, and we state the reason qualitatively. The AROMA and Random arms share the same seed-defect pixels and the same seamless blending, differing only in the ROI placement context—the local background texture surrounding each defect. Since FID measures the global image distribution rather than the localized defect region, it is largely insensitive to the placement differences that AROMA is designed to exploit, so any deltas are expected to be small.
-
-This limitation mirrors the FID behavior reported for CASDA, where the copy-paste variant attained an artificially low FID by reusing real patches whose feature distribution coincided with the reference set by construction. The same structural property applies here: full-image distribution metrics cannot fully resolve the contextual placement advantage of AROMA and are therefore reported primarily to characterize, rather than to discriminate, synthesis quality. KID and LPIPS are expected to behave identically for the same reason. Accordingly, the downstream supervised detection performance presented in Section 4.4 is treated as the primary evidence, since it directly reflects the discriminative value of the placement context that distribution-level metrics do not capture.
-
-##4.3. Downstream Detection Performance (AITeX, Kolektor)
+##4.2. Downstream Detection Performance (AITeX, Kolektor)
 Two datasets were selected to evaluate the downstream utility of AROMA under distinct data regimes: AITeX, a single-class tiled-pattern dataset with defect instances confined to one anomaly type; and Kolektor, a small-scale two-class plastic-defect dataset. These datasets represent orthogonal challenges: AITeX tests the policy under morphological homogeneity and tiled spatial structure, whereas Kolektor examines performance in the limited-data regime (36 real training images) where synthetic augmentation is most critical. Downstream detection was assessed via supervised YOLOv8n training under three augmentation conditions (Baseline: no synthetic data; Random: random ROI placement; AROMA: compatibility-aware placement) over three random seeds (1, 2, 42). Results are reported as mAP@0.5 on the shared real test set.
 
 **Table 8.** YOLOv8n detection performance on AITeX test set (mean ± std, n = 3 seeds). Single-class tiled-pattern dataset, imgsz 256, 300 epochs.
@@ -236,7 +226,7 @@ On Kolektor (Table 9), baseline performance is already near-ceiling (0.974 mAP@0
 
 The contrast between AITeX and Kolektor validates the conditional nature of AROMA's benefit: meaningful gains emerge when baseline headroom exists (AITeX: low baseline, high improvement potential) and the defect-background compatibility structure is informative (AITeX: diverse tile contexts; Kolektor: already well-covered by random placement in a small, balanced set). No claim of universal improvement is asserted; instead, the results demonstrate that AROMA recovers value in constrained regimes where random placement leaves coverage gaps, while remaining neutral in high-headroom or data-rich scenarios.
 
-##4.4. Supervised Detection Evaluation
+##4.3. Supervised Detection Evaluation
 
 The downstream evaluation in Section 4.3 follows the one-class anomaly detection (AD) protocol, in which only normal images are used for training and synthetic defects augment the nominal training distribution. During post-hoc auditing, we identified a protocol concern with that one-class setup. In the exp4 configuration, defect-bearing synthetic images were inadvertently routed into the nominal ("good") training partition, which violates the one-class assumption that the training set contains only defect-free samples and confounds the interpretation of the AUROC gains. To obtain a measurement free of this confound, we designed a separate supervised detection experiment (Exp4v2). In this experiment, defects are treated as explicitly labeled foreground objects, and the synthetic data is used as a conventional labeled training set rather than as a perturbation of a nominal manifold.
 

@@ -1,38 +1,123 @@
-##4.3. Downstream Detection Performance (AITeX, Kolektor)
+##4.4. Supervised Detection Evaluation (Exp4v2)
 
-Two datasets were selected to evaluate the downstream utility of AROMA under distinct data regimes: AITeX, a single-class tiled-pattern dataset with defect instances confined to one anomaly type; and Kolektor, a small-scale two-class plastic-defect dataset. These datasets represent orthogonal challenges: AITeX tests the policy under morphological homogeneity and tiled spatial structure, whereas Kolektor examines performance in the limited-data regime (36 real training images) where synthetic augmentation is most critical. Downstream detection was assessed via supervised YOLOv8n training under three augmentation conditions (Baseline: no synthetic data; Random: random ROI placement; AROMA: compatibility-aware placement) over three random seeds (1, 2, 42). Results are reported as mAP@0.5 on the shared real test set.
+The downstream evaluation in Section 4.3 follows the one-class anomaly detection (AD) protocol, in which only normal images are used for training and synthetic defects augment the nominal training distribution. During post-hoc auditing, we identified a protocol concern with that one-class setup. In the exp4 configuration, defect-bearing synthetic images were inadvertently routed into the nominal ("good") training partition, which violates the one-class assumption that the training set contains only defect-free samples and confounds the interpretation of the AUROC gains. To obtain a measurement free of this confound, we designed a separate supervised detection experiment (Exp4v2). In this experiment, defects are treated as explicitly labeled foreground objects, and the synthetic data is used as a conventional labeled training set rather than as a perturbation of a nominal manifold.
 
-**Table 8.** YOLOv8n detection performance on AITeX test set (mean ± std, n = 3 seeds). Single-class tiled-pattern dataset, imgsz 256, 300 epochs.
+Exp4v2 employs YOLOv8 detectors under a baseline-then-augment protocol. A model is first trained on the real training partition (Baseline), and each augmented condition then adds synthetic defect images—with their co-saved ROI masks converted to bounding-box labels—to the same training partition at a fixed synth:real budget. Ground-truth masks of the held-out real test split are converted to YOLO-format boxes for evaluation, and detection quality is reported as mAP@0.5 over 3 seeds (seeds 1, 2, 42) with paired testing. The evaluation focuses on the three multi-class datasets (Severstal, MTD, MVTec Leather) under the training-free copy-paste compositing engine of §3.2. Baseline / Random / AROMA differ only in the ROI-selection factor, so the comparison is a controlled ablation that isolates the contribution of context-aware placement.
 
-| Method | mAP@0.5 |
-|--------|---------|
-| Baseline | 0.2039 ± 0.1138 |
-| Random | 0.4187 ± 0.0514 |
-| AROMA | 0.4683 ± 0.0461 |
-| Random vs. Baseline | +21.48 pp |
-| AROMA vs. Baseline | +26.44 pp |
-| AROMA vs. Random | +4.96 pp |
+**Table 12.** YOLOv8n supervised detection performance on Severstal (mean ± std, n = 3 seeds). 4-class steel defects; training-free copy-paste compositing engine.
 
-**Figure 8.** AITeX ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+| Method | mAP@0.5 | Class 1 (c1) | Class 2 (c2) | Class 3 (c3) | Class 4 (c4) |
+|--------|---------|-------------|-------------|-------------|-------------|
+| Baseline | 0.4959 ± 0.0271 | 0.4399 ± — | 0.3674 ± — | 0.6009 ± — | 0.5751 ± — |
+| Random | 0.4935 ± 0.0086 | 0.4418 ± — | 0.3226 ± — | 0.6036 ± — | 0.6062 ± — |
+| AROMA | 0.5041 ± 0.0181 | 0.4566 ± — | 0.3330 ± — | 0.5997 ± — | 0.6271 ± — |
+| Random vs. Baseline | −0.24 pp | +0.19 pp | −4.48 pp | +0.27 pp | +3.11 pp |
+| AROMA vs. Baseline | +0.82 pp | +1.67 pp | −3.44 pp | −0.12 pp | +5.20 pp |
+| AROMA vs. Random | +1.06 pp | +1.48 pp | +1.04 pp | −0.39 pp | +2.09 pp |
 
-**Table 9.** YOLOv8n detection performance on Kolektor test set (mean ± std, n = 3 seeds). Two-class plastic defects, imgsz 640, 100 epochs.
+**Figure 10.** Severstal ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
-| Method | mAP@0.5 |
-|--------|---------|
-| Baseline | 0.9740 ± 0.0225 |
-| Random | 0.9938 ± 0.0020 |
-| AROMA | 0.9870 ± 0.0139 |
-| Random vs. Baseline | +1.98 pp |
-| AROMA vs. Baseline | +1.30 pp |
-| AROMA vs. Random | −0.68 pp |
+**Table 13.** YOLOv8n supervised detection performance on MTD (mean ± std, n = 3 seeds). 5-class metal defects; training-free copy-paste compositing engine.
 
-**Figure 9.** Kolektor ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+| Method | mAP@0.5 | Blowhole | Break | Crack | Fray | Uneven |
+|--------|---------|----------|-------|-------|-------|--------|
+| Baseline | 0.9094 ± 0.0274 | 0.9939 ± — | 0.9666 ± — | 0.9561 ± — | 0.8134 ± — | 0.8173 ± — |
+| Random | 0.9465 ± 0.0166 | 0.9943 ± — | 0.9727 ± — | 0.9701 ± — | 0.9574 ± — | 0.8379 ± — |
+| AROMA | 0.9440 ± 0.0152 | 0.9939 ± — | 0.9643 ± — | 0.9794 ± — | 0.9499 ± — | 0.8326 ± — |
+| Random vs. Baseline | +3.71 pp | +0.04 pp | +0.61 pp | +1.40 pp | +14.40 pp | +2.06 pp |
+| AROMA vs. Baseline | +3.46 pp | 0 pp | −0.23 pp | +2.33 pp | +13.65 pp | +1.53 pp |
+| AROMA vs. Random | −0.25 pp | −0.04 pp | −0.84 pp | +0.93 pp | −0.75 pp | −0.53 pp |
 
-As shown in Tables 8 and 9, the two datasets exhibit contrasting augmentation responses: AITeX demonstrates substantial AROMA advantage, whereas Kolektor converges across methods near ceiling performance.
+**Figure 11.** MTD ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
-On AITeX (Table 8), AROMA achieves 0.4683 mean mAP@0.5, outperforming both Baseline (0.2039, +129% relative gain) and Random (0.4187, +12% relative gain). The improvement is robust across seeds: Baseline is highly unstable (std 0.1138, CI95 straddling zero), whereas both augmented methods stabilize performance. AROMA's edge over Random is modest but consistent: AROMA's tighter confidence interval and lower variance suggest more uniform placement quality across the tiled defect space. The single-class, morphologically homogeneous nature of AITeX—combined with its tiled repetitive structure—appears amenable to context-aware placement: AROMA's ability to identify and prioritize diverse background contexts within the tile geometry yields measurable gains.
+**Table 14.** YOLOv8n supervised detection performance on MVTec Leather (mean ± std, n = 3 seeds). 5-class leather defects; training-free copy-paste compositing engine.
 
-On Kolektor (Table 9), baseline performance is already near-ceiling (0.974 mAP@0.5); synthetic augmentation provides only marginal gains. Random achieves 0.9938 (+2% relative), and AROMA achieves 0.9870 (−1% relative to Random, +1% absolute vs. Baseline). At this ceiling level, both placement strategies converge: the 36-image Kolektor training set, combined with high intrinsic dataset quality and balanced defect representation, leaves little headroom for contextual placement to improve detection. The high-variance seed 42 (both Random and AROMA at 0.995 or below) reveals that small-dataset randomness can dominate augmentation effects. AROMA's performance parity with Random—despite its compatibility-aware design—indicates that in high-headroom regimes (Kolektor, MTD: existing strong generalization), the placement policy contributes less than baseline dataset characteristics.
+| Method | mAP@0.5 | Color | Cut | Fold | Glue | Poke |
+|--------|---------|-------|-------|-------|-------|-------|
+| Baseline | 0.8321 ± 0.0643 | 0.9145 ± — | 0.8515 ± — | 0.5989 ± — | 0.8610 ± — | 0.9349 ± — |
+| Random | 0.8543 ± 0.0048 | 0.8658 ± — | 0.7781 ± — | 0.8537 ± — | 0.9833 ± — | 0.7908 ± — |
+| AROMA | 0.8052 ± 0.0421 | 0.8395 ± — | 0.8164 ± — | 0.7542 ± — | 0.8303 ± — | 0.7857 ± — |
+| Random vs. Baseline | +2.22 pp | −4.87 pp | −7.34 pp | +25.48 pp | +12.23 pp | −14.41 pp |
+| AROMA vs. Baseline | −2.69 pp | −7.50 pp | −3.51 pp | +15.53 pp | −3.07 pp | −14.92 pp |
+| AROMA vs. Random | −4.91 pp | −2.63 pp | +3.83 pp | −9.95 pp | −15.30 pp | −0.51 pp |
 
-The contrast between AITeX and Kolektor validates the conditional nature of AROMA's benefit: meaningful gains emerge when baseline headroom exists (AITeX: low baseline, high improvement potential) and the defect-background compatibility structure is informative (AITeX: diverse tile contexts; Kolektor: already well-covered by random placement in a small, balanced set). No claim of universal improvement is asserted; instead, the results demonstrate that AROMA recovers value in constrained regimes where random placement leaves coverage gaps, while remaining neutral in high-headroom or data-rich scenarios.
+**Figure 12.** MVTec Leather ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
+**Severstal (Table 12)** shows AROMA +1.06 pp over Random (0.5041 vs. 0.4935 mAP@0.5) from low-headroom baseline. Class-wise, AROMA gains are balanced: c1 +1.67 pp, c3 −0.12 pp (neutral), but c4 recovers +2.09 pp vs. Random. Class c2 (underrepresented) remains the weakest across all methods (0.3330 AROMA).
+
+**MTD (Table 13)** exhibits high-headroom augmentation: Random adds +3.71 pp over Baseline, but AROMA merely matches (0.9440 ≈ Random 0.9465, Δ−0.25 pp). Per-class divergence is notable: Fray (+13.65 pp vs. Baseline) and Blowhole (0 pp) dominate the aggregate. AROMA's Fray (0.9499) is −0.75 pp below Random (0.9574), suggesting that context-aware placement offers no benefit in the near-ceiling regime.
+
+**MVTec Leather (Table 14)** presents class-heterogeneous behavior despite monotone background. Random adds +2.22 pp, but AROMA declines −2.69 pp vs. Baseline (0.8052 vs. 0.8321), a −4.91 pp gap from Random. Per-class: Fold (+15.53 pp AROMA vs. Baseline, but −9.95 pp vs. Random) dominates the aggregates, while Glue and Poke deteriorate (−3.07 pp and −14.92 pp AROMA vs. Baseline). The negative aggregate reflects that within-class heterogeneity does not translate to cross-class compatibility signals.
+
+Across the three multi-class datasets, the AROMA−random gap responds to baseline headroom and surface heterogeneity: Severstal (heterogeneous, low-baseline, +1.06 pp) shows positive direction; MTD (near-ceiling, limited leverage, −0.25 pp) converges; MVTec Leather (monotone background, misaligned class variation, −4.91 pp) reverses. Combined with single-class results in §4.3 (AITeX +4.96 pp; Kolektor −0.68 pp), the pattern confirms context-aware placement operates conditionally on both sufficient headroom and informative surface heterogeneity.
+
+% =====================================================================
+% TODO (AUTHOR): QUALITATIVE FIGURES — NOT YET GENERATED
+% ---------------------------------------------------------------------
+% A qualitative-results subsection (proposed §4.5) was requested but could
+% NOT be produced from the local checkout. No qualitative figure was
+% generated and NONE was fabricated, because there are no usable image
+% pixels on this machine.
+%
+% WHY BLOCKED (verified by full disk scan, not assumed):
+%   - Total raster images under the project on disk: 11.
+%       * 9 are ALREADY-RENDERED paper plots in
+%         AROMA연구분석/Article/figure/ (AUROC curves, complexity
+%         landscape, ROI coverage, pipeline diagram, etc.) — finished
+%         vector-style plots, not raw image crops.
+%       * 2 are degenerate test fixtures:
+%             tests/fixtures/images/img_001.png  (64x64)
+%             tests/fixtures/seed_defect.png     (16x16)
+%         These are placeholder fixtures, NOT real defect / normal /
+%         synthetic crops.
+%   - Real defect, normal/background, random-synth, and AROMA-synth
+%     images live exclusively on Google Drive / Colab
+%     (e.g. /content/drive/MyDrive/data/Aroma/...) and are unreachable
+%     from this local Windows checkout.
+%   - docs/data_dir/*.txt are directory-tree listings (paths only,
+%     no pixels); .claude/.etc/ holds only JSON/markdown metric reports.
+%
+% WHAT THE FOUR FIGURES SHOULD SHOW (once pixels are available):
+%   Figure A — Side-by-side grid: real defect | random-synth | AROMA-synth
+%              (+ matching normal background) per dataset. Caption should
+%              highlight AROMA's context-aware defect placement on
+%              appropriate background texture vs. random placement.
+%   Figure B — Pipeline-stage visualization: seed defect -> elastic-warp
+%              variant (TF-IDG) -> Poisson-blended composite -> quality-gate
+%              decision, for one representative sample.
+%   Figure C — Synthesis diversity: multiple TF-IDG variants from a single
+%              seed across the five subtypes (linear_scratch, elongated,
+%              compact_blob, irregular, general).
+%   Figure D — Failure cases: blending artifacts, quality-gate rejects,
+%              and/or degenerate AROMA output (see CAUTION below).
+%
+% RE-RUNS / EXPORTS NEEDED (do this in Colab, where pixels exist):
+%   1. Add an image-export step after Stage 1b/synthesis that dumps a
+%      sample of {real, random, AROMA} defect crops plus the matching
+%      {normal} background per dataset into
+%      .../qualitative_samples/<dataset>/.
+%   2. Target a complexity spectrum across the canonical roster to make
+%      Figure A informative: MVTec Leather (MCI 0.645, high morphology),
+%      Severstal (MCI 0.455), AITeX (MCI 0.398, high context CCI 0.434),
+%      MTD (MCI 0.561). Values from Table 1.
+%   3. Per project rule (no new .ipynb), write the matplotlib grid builder
+%      as a .md Colab execution guide under colab_execute/.
+%
+% CAUTION (data integrity): before building the side-by-side grid,
+%   verify that non-empty AROMA and Random synthetic crops actually exist
+%   on Drive for each canonical dataset (Severstal, MVTec Leather, AITeX,
+%   MTD). Note Severstal copy-paste was doubly null (synthesis inert at the
+%   reported budget; Table 12), so a Severstal panel may be uninformative —
+%   prefer AITeX (the only positive) for the context-matched-placement
+%   contrast, and use any empty/degenerate output as a Figure D failure
+%   case rather than presenting an empty panel.
+%
+% Once qualitative_samples/ are exported and the grid figures are rendered:
+%   - Insert a new subsection "##4.5. Qualitative Results" here (before §5).
+%   - Add \begin{figure}...\includegraphics{figure/fig_qualitative_*}...
+%     blocks with \label{fig:qual_*} and honest captions (including
+%     limitations / failure modes).
+%   - Add callout sentences in §4.5 and a forward reference from §4.2
+%     (FID discussion) noting that the placement advantage FID cannot
+%     resolve is made visible qualitatively in §4.5.
+% =====================================================================
