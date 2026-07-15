@@ -293,20 +293,12 @@
 점검:  각 표의 콜아웃이 그 표가 속한 섹션 안에 있는가(타 섹션 참조 없음)?
 ```
 
-### 9.2 그림(Figure) 본문 콜아웃 + 인용 순서
-- **모든 그림도 본문 서술에서 명시적 콜아웃으로 최소 1회 인용**한다. 캡션·`\includegraphics`만으로는 부족하며, 본문 문장이 그림을 직접 지목해야 한다.
-- 콜아웃 문형(권장): **"As shown in Figure N, ..."**, "Figure N illustrates/depicts/reports ...", "..., as visualized in Figure N", "(Figure N)". LaTeX면 `Figure~\ref{fig:...}`.
-- 각 그림의 **최초 콜아웃이 번호 오름차순**. 콜아웃 없는 그림은 삽입(예: "As shown in Figure 8, ...").
-- **섹션-지역성**: 그림도 **그 그림이 배치된 섹션의 본문에서만 인용**한다. 이전/이후 섹션에서의 참조는 지양하고, 교차 참조가 필요하면 그림 대신 해당 **섹션**을 가리킨다.
-```
-좋음:  "As shown in Figure 8, the placement distribution shifts toward high-compatibility cells."
-나쁨:  §5(Discussion)에서 §4.1의 Figure 4를 인용 → 대신 "(see §4.1)".
-점검:  본문에서 "Figure 1" → "Figure 2" → … 순으로 첫 콜아웃이 등장하는가?
-점검:  각 그림의 콜아웃이 그 그림이 속한 섹션 안에 있는가?
-```
+### 9.2 그림(Figure) 관련 규칙 → 별도 문서로 이동
+- 그림 본문 콜아웃·인용 순서·섹션-지역성 규칙은 [figure_patterns.md §2–§3](figure_patterns.md)로 이동했다.
+- 표(§9.1)와 동일한 원칙(본문 콜아웃 필수, 번호 오름차순, 섹션-지역성)이 그림에도 적용된다. 정본은 figure_patterns.md.
 
-### 9.3 그림 해상도
-- 그림 내용은 **판독 가능**해야 한다. 저해상도 이미지는 **최소 가로/세로 1000픽셀 이상, 또는 300 dpi 이상**의 고해상도 이미지로 교체한다.
+### 9.3 그림 해상도 → 별도 문서로 이동
+- [figure_patterns.md §4](figure_patterns.md) 참고. (요약: 1000픽셀 이상 또는 300 dpi 이상 고해상도로 교체.)
 
 ### 9.4 숫자 콤마(천단위 구분자)
 - 콤마는 **5자리 이상** 숫자에만 사용한다. **4자리 숫자에서는 콤마를 제거**한다.

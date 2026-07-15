@@ -1,0 +1,30 @@
+#3. Methodology
+
+##3.3. Experimental Procedure
+
+###3.3.1 Dataset Split
+Train–test partitioning followed the on-disk structure provided by each source dataset (AITeX, Kolektor, Severstal, MTD, MVTec Leather). Where a predefined split was unavailable, a fixed-seed partition was applied for reproducibility. In all cases, synthetic images were added exclusively to the training partition, while the test partition consisted solely of real images, enforcing strict isolation between synthetic data and evaluation.
+
+All downstream results are reported over three random seeds (1, 2, 42) to establish statistical reliability. For each seed, three augmentation conditions were evaluated on an identical real test set under paired testing: (i) baseline: original training data only; (ii) random-ROI: synthetic defects placed uniformly at random locations; (iii) AROMA: synthetic defects placed by the learned compatibility-aware policy (§3.2.6). Paired testing ensures that all differences in downstream detection performance are attributable to the augmentation strategy, not to randomness in the train-test split or model initialization.
+**Table C.** Dataset splits and augmentation scale (v2-1 benchmark suite). Train–test partitioning follows 70:30 ratio; train partition receives synthetic augmentation (baseline: 0×, random: 1.0×, AROMA: 1.0×), test partition is real-only. Synth = total synthetic images added per condition (600 target across baseline/random/AROMA).
+
+| Dataset | Domain | Good Images | Defect Instances | Train / Test | Synth per Condition | Classes |
+|---------|--------|------------|------------------|---|---|---|
+| AITeX | Textile | 7,169 | 352 | 5,018 / 2,151 | 600 | 1 (single-class, tiled) |
+| Kolektor | Plastic | 347 | 52 | 243 / 104 | 600 | 2 |
+| Severstal | Steel | 5,902 | 3,620 | 4,131 / 1,771 | 600 | 4 |
+| MTD | Metal | 956 | 388 | 669 / 287 | 600 | 5 |
+| MVTec Leather | Leather | 245 | 92 | 172 / 73 | 600 | 5 |
+
+###3.3.2 Downstream Detection Protocol
+Downstream utility was assessed via supervised YOLOv8n object detection (COCO-pretrained). Each of the three augmentation conditions (baseline / random / AROMA) trained an independent detector and evaluated it by mean average precision at IoU 0.5 (mAP@0.5) on the shared real test set.
+
+**Multi-class datasets** (Severstal, MVTec Leather, MTD) were evaluated with per-dataset class enumeration, imgsz 640, and rectangular training enabled. **Single-class dataset** (AITeX) used imgsz 256 and disabled rectangular training (tiles are square), with a single synthetic defect class.
+
+All training runs used identical hyperparameters across all three conditions: 100 epochs (multi-class) or 300 epochs (AITeX), early stopping patience 50, validation fraction 0.3, batch size 64. These hyperparameters and the supervised-detection protocol were fixed before any runs and are the source of all downstream mAP@0.5 numbers reported in §4.4.
+
+###3.3.3 ROI Coverage Evaluation
+The capacity of the ROI selection policy to span the space of defect placements was assessed through a coverage analysis comparing the AROMA policy against random selection. Five metrics were reported: morphology_coverage and context_coverage, which measure the proportion of distinct morphology and context categories represented; rare_pair_coverage, which quantifies representation of infrequent (morphology, context) combinations; entropy, which measures the uniformity of the selection's morphology (cluster_id) frequency distribution; and the Gini coefficient, which measures the inequality of that same morphology distribution. Higher coverage and entropy and lower Gini values indicate a more balanced and comprehensive exploration of the placement space. These metrics are neutral descriptors of the selection distribution and serve as an auditability record of the ROI selection process. The coverage metrics are computed and recorded for reproducibility.
+
+###3.3.4 Augmentation Budget
+For each dataset, both augmented conditions (Random and AROMA) add synthetic defect images to the real training partition at an identical synth:real budget (synth_ratio = 1.0, i.e. one synthetic image per real training image, capped per dataset to enforce n_synth parity across arms), so that the two conditions differ only in the ROI-selection strategy and not in the amount of synthetic data. Both arms pass through the same clean-background gate (rejecting degenerate flat/blank placements): a placement is accepted only if a composite background-quality score — a weighted combination of blur (Laplacian variance), local contrast, brightness, and noise — meets a minimum of 0.7, with the blur (sharpness) threshold set to 100. In addition, the fraction of AITeX samples routed to the aspect-ratio-safe direct copy-paste path (§3.2.5) is recorded and reported per dataset.

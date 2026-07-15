@@ -1,0 +1,10 @@
+##4.2. Synthesis Quality (Experiment 1)
+Synthesis quality was assessed at the image level using Fréchet Inception Distance (FID), Kernel Inception Distance (KID), and Learned Perceptual Image Patch Similarity (LPIPS), comparing the AROMA-augmented set and the Random-augmented set against the real reference distribution.
+**Figure 7.** Synthesis quality: FID, KID, LPIPS comparing AROMA vs. Random augmentation.
+
+As shown in Figure 7, synthesis quality metrics are expected to show minimal differences between AROMA and Random conditions at the image level.
+
+We expect only small AROMA-vs-Random differences on any full-image distribution metric, and we state the reason qualitatively. The AROMA and Random arms share the same seed-defect pixels and the same seamless blending, differing only in the ROI placement context—the local background texture surrounding each defect. Since FID measures the global image distribution rather than the localized defect region, it is largely insensitive to the placement differences that AROMA is designed to exploit, so any deltas are expected to be small.
+
+This limitation mirrors the FID behavior reported for CASDA, where the copy-paste variant attained an artificially low FID by reusing real patches whose feature distribution coincided with the reference set by construction. The same structural property applies here: full-image distribution metrics cannot fully resolve the contextual placement advantage of AROMA and are therefore reported primarily to characterize, rather than to discriminate, synthesis quality. KID and LPIPS are expected to behave identically for the same reason. Accordingly, the downstream supervised detection performance presented in Section 4.4 is treated as the primary evidence, since it directly reflects the discriminative value of the placement context that distribution-level metrics do not capture.
+

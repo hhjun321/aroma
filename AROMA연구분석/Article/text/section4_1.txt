@@ -1,0 +1,11 @@
+#4. Experimental Results and Analysis
+This section reports the empirical evaluation of AROMA across the five industrial datasets of §3.1 (AITeX, Kolektor, Severstal, MTD, MVTec Leather) along three complementary axes. Experiment 0 (Section 4.1) evaluates the quality of the ROI selection policy through coverage and distributional statistics, thereby isolating the contribution of the data-driven placement mechanism. Experiment 1 (Section 4.2) assesses the perceptual quality of the synthesized images. Experiment 2 (Section 4.4) measures the downstream impact of the augmented data on supervised detection performance (mAP@0.5); this measure constitutes the primary empirical evidence and is reported honestly and conditionally. Throughout, AROMA is compared against a random ROI placement baseline (Random) and a real-only baseline (Baseline), disentangling the effect of context-aware placement from that of synthetic data volume alone.
+
+##4.1. ROI Quality Evaluation (Experiment 0)
+The objective of the ROI selection policy is to place synthetic defects such that the resulting augmented set spans the morphology–context space as uniformly as possible, with particular emphasis on underrepresented combinations. To quantify this objective independently of synthesis quality, five statistics were computed over the placement maps produced by AROMA and by Random: morphology coverage, context coverage, rare-pair coverage, distributional entropy, and the Gini coefficient. Coverage metrics measure the fraction of the available morphology, context, and rare morphology–context cells that received at least one placement. Entropy measures the uniformity of the selection's morphology (cluster_id) frequency distribution, whereas the Gini coefficient measures the inequality of that same morphology distribution, where lower values denote a more balanced allocation.
+**Figure 6.** ROI placement quality metrics (coverage, entropy, Gini) comparing AROMA vs. Random placement.
+
+As shown in Figure 6, coverage metrics quantify the breadth of the ROI selection across morphological and contextual combinations.
+
+Analysis of the committed selection maps shows that the deficit-aware term, which was intended to drive rare-pair coverage, is inert under copy-paste (§3.2.6). The downstream consequence of the placement policy for detection accuracy is examined in Section 4.4.
+
