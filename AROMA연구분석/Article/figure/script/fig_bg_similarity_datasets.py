@@ -196,10 +196,8 @@ def run():
 
     ax.set_xticks(pos)
     ax.set_xticklabels([f"{n}\n(CCI={c:.2f})" for n, c, *_ in stats], fontsize=10)
-    ax.set_ylabel("Background compatibility\n(texture-histogram intersection with real defect background, 0-1)", fontsize=10)
-    ax.set_xlabel("Dataset (ordered by descending Context Complexity Index)", fontsize=11)
-    ax.set_title("Background selection: AROMA assigns backgrounds more similar to the real defect background than Random\n"
-                 "Engine-independent (copy-paste) placement test · assigned normal vs pooled real defect background · one-sided Mann-Whitney U",
+    ax.set_ylabel("Background compatibility", fontsize=10)
+    ax.set_title("Background selection: AROMA assigns backgrounds more similar to the real defect background than Random",
                  fontsize=11)
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(facecolor="#2c7fb8", alpha=0.6, label="AROMA (compatibility-selected)"),
