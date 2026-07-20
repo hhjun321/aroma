@@ -10,7 +10,7 @@ import numpy as np
 import csv, io, json
 
 PROF = "D:/aroma_dataset/profiling"
-OUT  = "D:/project/aroma/AROMA연구분석/Article/figure/image/[figure15] morphology_clusters.png"
+OUT  = "D:/project/aroma/AROMA연구분석/Article/figure/image/[figure 3.2.2 1] morphology_clusters.png"
 PALETTE = ["#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#b279a2"]
 
 def load(ds):

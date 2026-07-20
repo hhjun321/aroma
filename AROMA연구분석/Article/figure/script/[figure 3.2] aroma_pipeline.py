@@ -1,25 +1,25 @@
 #!/usr/bin/env python
 """
-Figure 1 -- AROMA Pipeline Architecture (regenerated)
+Figure 2 -- AROMA Pipeline Architecture (regenerated)
 
 Static architecture/data-flow diagram (no data file dependency).
-Content sourced from AROMA_FRAMEWORK/{00-INDEX,01-Overview,02..06}.md
-for stage structure, and dataset_config.json (ground truth) for the
-dataset roster: 5 datasets (severstal, mvtec_leather, mtd, aitex,
-kolektor) -- the framework notes say 4 and are stale.
+Stage structure aligned 1:1 to the §3.2 subsections of the current
+section3_2.txt (3.2.1 .. 3.2.7); dataset roster from dataset_config.json
+(ground truth): 5 datasets (severstal, mvtec_leather, mtd, aitex,
+kolektor).
 
-Labeling kept minimal per user direction (2026-07-16): no stage-number
-badges, no side artifact/JSON boxes, no "v2-1" or "exp4v2" text in the
-diagram itself (those stay in the spec doc / caption only).
+Labeling kept minimal per user direction: no stage-number badges, no
+side artifact/JSON boxes, no "v2-1" or "exp4v2" text in the diagram
+itself (those stay in the spec doc / caption only).
 
-Engine correction (2026-07-16, user-confirmed): official AROMA flow
-generates via copy-paste (real defect crop + elastic-warp variants),
-NOT ControlNet. "Prompt Generation" stage removed (was ControlNet
-conditioning-only, has no role in copy-paste), and the ControlNet
-train/fine-tune stage replaced with the copy-paste variant-generation
-+ compat-gate-tau-prescan stage.
+Alignment update (2026-07-20, user-confirmed): boxes re-derived to match
+the 7 subsections of the current §3.2. The stale "Meta Policy Generator /
+auto-select modeling policy" narrative is removed -- the symmetric
+compatibility gate is the single spine/novelty (memory:
+aroma-compat-gate-spine-reframe). ROI score corrected to the current
+ROI_score = 0.6*ctx_prior + 0.4*morph_prior (no quality term).
 
-spec: figure1_pipeline_spec.md
+spec: [figure 3.2] pipeline_spec.md
 """
 import os
 
@@ -27,24 +27,24 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
 OUT_DIR = r"D:\project\aroma\AROMA연구분석\Article\figure\image"
-OUT_PATH = os.path.join(OUT_DIR, "[figure1] aroma_pipeline.png")
+OUT_PATH = os.path.join(OUT_DIR, "[figure 3.2] aroma_pipeline.png")
 
-# (title, detail) -- kept short by design, no stage-number badge
+# (title, detail) -- kept short by design, one line each; aligned to §3.2.1-3.2.7
 STAGES = [
-    ("Prepare Datasets",
-     "Normalize 5 datasets to AROMA layout"),
-    ("Distribution Profiling",
-     "Morphology/context distributions -> compatibility model"),
-    ("Complexity + Meta Policy",
-     "MCI/CCI scalars -> auto-select modeling policy"),
-    ("ROI Selection",
-     "Realism score, top-k = 200"),
-    ("Clean-BG Selection",
-     "Offline background ranking (hist-match + void filter)"),
-    ("Elastic-Warp Variants",
-     "Copy-paste seed variants (cv2.remap)"),
-    ("Generate: AROMA / Random arm",
-     "AROMA = copy-paste + sym gate + clean-bg + seamless; Random = naive"),
+    ("Dataset Complexity Analysis",
+     "MCI / CCI from patch profiling"),
+    ("Morphology & Context Modeling",
+     "Data-driven clusters (GMM+BIC) + tertile context cells"),
+    ("ROI Extraction",
+     "Otsu + connected-components; texture categories"),
+    ("Seed Defect Classification",
+     "SAM masks -> 5 morphology subtypes"),
+    ("ROI Selection & Placement",
+     "ROI_score = 0.6*ctx_prior + 0.4*morph_prior; symmetric compat gate"),
+    ("Blending Synthesis",
+     "Seamless copy-paste; AROMA vs Random arm"),
+    ("Quality Gate",
+     "Composite Q >= 0.7 filter"),
 ]
 
 INPUT_TITLE = "Industrial Datasets"

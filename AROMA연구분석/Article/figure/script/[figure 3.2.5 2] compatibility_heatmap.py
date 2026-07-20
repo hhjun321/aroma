@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Figure 16 — Compatibility heatmap (ctx_prior) for all 5 datasets.
 morphology cluster x context cell, top-20 cells, row-normalized, peak boxed.
-See figure16_compatibility_heatmap.md.
+See [figure 3.2.5 2] compatibility_heatmap.md.
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -49,7 +49,7 @@ for ds in DATASETS:
     cb.set_label("ctx_prior (compat_sym)", fontsize=8)
     cb.ax.tick_params(labelsize=7)
     plt.tight_layout()
-    out = f"{IMG}/[figure16_{ds}] compatibility_heatmap.png"
+    out = f"{IMG}/[figure 3.2.5 2 {ds}] compatibility_heatmap.png"
     fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print("saved:", out, "shape", M.shape)

@@ -236,12 +236,14 @@ def main():
     base_dir = Path("D:/project/aroma_dataset")
 
     # Dataset → Figure number mapping
+    # Section-based figure labels (naming convention: [figure <section> <index> <ds>])
+    # aitex/kolektor are §4.2; severstal/mtd/mvtec_leather are §4.3
     fig_num_map = {
-        "aitex": 8,
-        "kolektor": 9,
-        "severstal": 10,
-        "mtd": 11,
-        "mvtec_leather": 12,
+        "aitex": "4.2 1",
+        "kolektor": "4.2 2",
+        "severstal": "4.3 1",
+        "mtd": "4.3 2",
+        "mvtec_leather": "4.3 3",
     }
 
     for dataset in ["aitex", "kolektor", "severstal", "mtd", "mvtec_leather"]:
@@ -263,7 +265,7 @@ def main():
         synth_random_dir = base_dir / "synth_random" / dataset / "images"
 
         fig_num = fig_num_map[dataset]
-        output_path = Path(f"D:/project/aroma/AROMA연구분석/Article/figure/image/[figure{fig_num}] {dataset}_roi_comparison.png")
+        output_path = Path(f"D:/project/aroma/AROMA연구분석/Article/figure/image/[figure {fig_num}] {dataset}_roi_comparison.png")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         create_comparison_figure(

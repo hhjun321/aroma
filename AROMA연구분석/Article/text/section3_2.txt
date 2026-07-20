@@ -1,81 +1,93 @@
 ﻿#3. Methodology
 
 ##3.2. AROMA Pipeline
-The AROMA pipeline consists of sequential stages that progress from dataset pro-filing and complexity quantification to automated policy selection, defect synthesis, and quality control. Unlike its predecessor CASDA, which relied on a handcrafted compati-bility matrix and domain-specific rules tailored to a single dataset, AROMA derives its augmentation policy directly from measurable dataset statistics. This transition is enabled by two data-driven components. First, a profiling stage measures defect morphology and background context distributions and constructs a defect–background compatibility model from their co-occurrence. Second, a complexity analysis stage computes the Morphology Complexity Index (MCI) and Context Complexity Index (CCI), which are used to automatically select dataset-specific modeling and placement policies. Together, these components replace CASDA's handcrafted compatibility matrix and manually tuned morphological rules, and are recomputed for each dataset without dataset-specific constants.
-**Figure 1.** AROMA pipeline architecture and data flow. Inputs are the five industrial datasets (severstal, mvtec_leather, mtd, aitex, kolektor); profiling and complexity analysis quantify dataset characteristics (MCI, CCI) that drive Meta Policy Generator selection of the clustering and placement strategies. ROI selection ranks placement candidates by a realism score, and an offline step assigns clean backgrounds. Real defect crops are then expanded into subtype-specific elastic-warp variants — a training-free copy-paste operation with no learned generative model — before the AROMA arm (copy-paste composition, symmetric compatibility gate, clean-background gate, seamless blending) and the random arm (naive placement baseline) are synthesized and used to train the downstream detector.
+The AROMA pipeline (Figure 3.2) progresses from dataset profiling and complexity analysis to defect synthesis and quality control. Unlike CASDA, which relies on a handcrafted, do-main-specific compatibility matrix and morphological rules, AROMA re-derives its de-fect–background compatibility model directly from dataset statistics. By profiling defect morphology and background context, AROMA builds this compatibility model from patch-level co-occurrence and summarizes each dataset's difficulty with the Morphology Complexity Index (MCI) and Context Complexity Index (CCI), without manual tuning.
+###Figure 3.2. AROMA Pipeline
 
-As shown in Figure 1, the pipeline flows from the input datasets through profiling and complexity quantification, Meta Policy Generator selection, ROI selection, clean-background assignment, and elastic-warp variant generation, and finally into two synthesis arms (AROMA and random) whose outputs, together with the real data, form the baseline, random-augmented, and AROMA-augmented training conditions fed to the downstream detector. Each stage emits auditable artifacts (JSON metadata and image outputs) to enable reproducibility and transparency. The overall architecture demonstrates how measurable dataset complexity drives policy selection, replacing fixed hand-tuned rules with data-driven decisions. The following subsections detail each stage in turn.
-
-###3.2.1 Phase 0: Dataset Complexity Analysis
-The pipeline begins by quantifying the intrinsic complexity of each dataset along two orthogonal axes: defect morphology and background context. Two scalar indices were computed for this purpose. The Morphology Complexity Index (MCI) characterizes the structural variability of defect-bearing regions and was defined as the mean of four min-max-normalized components: 
-MCI = Mean(Entropy, ValleyCount, ClassDiversity, 1 − Silhouette).
-
-Here, Entropy captures intensity-distribution disorder, ValleyCount reflects the multimodality of the morphology-feature histograms, ClassDiversity is the effective number of defect types, and the Silhouette term measures cluster separability, with its complement (1 − Silhouette) increasing as morphological groupings become less separa-ble. The Context Complexity Index (CCI) characterizes background heterogeneity and was defined as the mean of four normalized components:
+###3.2.1 Dataset Complexity Analysis
+The pipeline first quantifies dataset complexity with two complementary indices. The Morphology Complexity Index (MCI) summarizes the structural variability of defect regions as the mean of four normalized statistics capturing intensity variation, distribution multimodality, defect-type diversity, and cluster separability. The Context Complexity Index (CCI) measures background heterogeneity as the mean of four normalized components:
 CCI = Mean(TextureEntropy, ContextClusterCount, FreqComplexity, OrientVariance),
 
-Where TextureEntropy quantifies local texture disorder, ContextClusterCount is the number of background context clusters (fitted by a Gaussian mixture with BIC model se-lection), FreqComplexity captures spectral richness in the frequency domain, and Ori-entVariance reflects the dispersion of dominant gradient orientations. The morphology valley count entering MCI was computed as the sum of the per-feature valley counts across the profiled morphology features. Contextual statistics were estimated from a sub-sample of 20,000 image patches per dataset. The resulting MCI and CCI values were used to drive subsequent policy selection, providing a quantitative substitute for the domain expertise previously required by CASDA. 
-**Figure 2.** Complexity landscape: MCI-CCI plane across five datasets, with selected policies labeled per dataset.
+where the components quantify texture disorder, the number of background context clusters, frequency-domain complexity, and gradient-orientation variability, estimated from 20,000 sampled image patches per dataset. Both indices characterize the evaluation roster; the CCI additionally conditions the downstream analysis of when context-aware placement is beneficial (Sections 4.2–4.3).
 
-As shown in the complexity landscape, the evaluated datasets span a broad and well-separated range of morphological and contextual difficulty rather than clustering in a single regime; this spread is what enables the policy-selection mechanism to be exercised across distinct complexity conditions.
+As shown in Table 2, decomposing the CCI into its four components reveals the background characteristics of each dataset. Orientation variance and frequency complex-ity provide the strongest discrimination, with AITeX exhibiting the highest values due to its directional, periodic texture, whereas Kolektor and MVTec Leather show consistently low values characteristic of smooth, uniform surfaces. In contrast, texture entropy varies only modestly (2.58–3.22), indicating that structural rather than intensity-based features dominate background differentiation. These measurements provide the quantitative basis for the background categories used during ROI extraction (Section 3.2.3).
 
-###3.2.2 Meta Policy Generator
-The Meta Policy Generator translates the complexity analysis into a concrete aug-mentation policy through three stages. First, it analyzes the morphology and context fea-ture distributions obtained during profiling, detecting their modality (valley structure) to determine an appropriate set of candidate policies for each dataset. Second, candidate clustering and partitioning strategies are generated for the morphology (Gaussian mixture or Otsu thresholding) and context (Gaussian mixture or percentile partitioning) axes. For morphology, the candidate set is further pruned using the measured valley counts and MCI, eliminating strategies inconsistent with the observed complexity regime, whereas the context axis retains a fixed candidate set. Finally, the remaining candidates are evaluated on a small representative subset, and the best-performing policy is selected automatically. Because every decision is driven solely by measured dataset statistics rather than domain-specific heuristics, the resulting policy is reproducible and generalizes across heterogeneous datasets. 
-**Figure 3.** Empirical evaluation scores for candidate morphology and context policies across the five evaluation datasets. For each dataset, the two-member context-axis pool (Gaussian mixture and percentile partitioning) and the morphology-axis pool (shaped by per-feature valley counts and gated by MCI thresholds) were evaluated by silhouette separability. The selected policy for each dataset (marked with □) was determined entirely by measured complexity statistics rather than manual tuning, making the policy decision auditable and per-dataset. The Otsu morphology policy was selected on four datasets (AITeX, Severstal, MTD, MVTec Leather) and Gaussian mixture on Kolektor; the context axis selected either Gaussian mixture (AITeX, Kolektor, MVTec Leather) or percentile partitioning (Severstal, MTD) depending on the measured context complexity regime.
+###Table 2. Per-dataset decomposition of the Context Complexity Index (CCI) into its four measured components
+Dataset	Surface	CCI	Texture Entropy	Clusters	Frequency Complexity	Orientation Variance
+AITeX	Textile	0.440	2.848	5	0.0158	1.3085
+Kolektor	Metal	0.224	2.578	5	0.0002	0.0035
+Severstal	Steel	0.306	3.008	5	0.0073	0.4326
+MTD	Ceramic	0.246	3.215	5	0.0065	0.0093
+MVTec Leather	Organic	0.200	2.981	4	0.0002	0.0005
 
-As shown in Figure 3, this selection procedure is fully auditable: the empirical evaluation scores of all candidate policies across all five datasets are plotted (morphology axis on the left, context axis on the right per dataset), with the selected policy marked (□) in each case. The outcome confirms that on the evaluated roster the morphology axis selected the Otsu policy on four of the five datasets and GMM on Kolektor, whereas the context axis selected Gaussian-mixture partitioning on some datasets and percentile partitioning on others (see §3.1), with the choice driven entirely by the measured complexity statistics rather than fixed by hand. This fully automated, auditable policy selection is the central mechanism by which AROMA generalizes across datasets without per-dataset hand-tuning.
+###3.2.2 Morphology and Context Modeling
+AROMA models defect morphology and background context with per-dataset, data-driven partitions that require no hand-set constants. Defect instances are grouped by a Gaussian mixture whose number of clusters is selected per dataset by the Bayesian In-formation Criterion (BIC), yielding morphology clusters that adapt to each dataset's defect population. Background context is discretized into cells by per-feature tertile (P33/P66) binning of the profiled context features. These morphology clusters and context cells form the row and column indices of the symmetric compatibility model used for placement (Section 3.2.4); because both partitions are estimated from each dataset's own statistics, no dataset-specific constants are introduced.
 
-###3.2.3 Stage 1: ROI Extraction
-Regions of interest (ROIs) were extracted from normal images to identify plausible defect placement locations. Otsu thresholding was first applied to generate a foreground mask, followed by connected-component analysis to obtain candidate ROIs, with com-ponents smaller than 100 pixels discarded as noise. For each retained ROI, a five-stage background analysis pipeline classified the surrounding texture into one of five catego-ries—smooth, directional, periodic, organic, or complex—using a fixed heuristic threshold cascade applied identically to every dataset (Table A). A continuity score and a stability score were also computed to quantify the spatial coherence of each ROI and its consistency across the normal-image population, respectively.
-**Table A.** Background texture categories from ROI extraction (§3.2.3). Each 64-pixel patch is classified by a fixed heuristic decision cascade whose thresholds are global constants — identical across all datasets rather than per-dataset percentiles. The category label is stored in roi_metadata.json but serves only as an optional input to the subtype-matching quality proxy (active when `--min_quality > 0`); core placement scoring instead operates on morphology clusters and a 64-pixel context-cell grid (§3.2.6), so this auxiliary label is largely orthogonal to the data-driven placement decision.
+As shown in Figure 3.2.2-1, defect shape varies mostly along an elongation continuum—from compact, low-aspect blobs to thin, near-linear scratches—so the resulting morphology clusters are essentially segments of this spectrum; each cluster k carries a prior P(k) = n_k / N, its share of the defect population, that serves as the morph_prior when ranking placements (Section 3.2.4).
 
-| Category | Definition | Computational Criteria (fixed thresholds, evaluated in order on each 64-pixel patch; identical across datasets) |
-|----------|---|---|
-| Smooth | Uniform background, minimal texture variation. | `Variance < 100`. Flat, featureless regions (e.g., bare metal). |
-| Directional | Linear, one-directional structure. | else `GradientOrientationEntropy < 1.0` (entropy of an 8-bin Sobel gradient-orientation histogram). Coherent directional edges (e.g., brushed metal, textile weave). |
-| Periodic | Repeating spatial patterns or grids. | else `AutocorrelationPeak > 0.15` (off-origin FFT autocorrelation peak). Regular repeats (e.g., tiles, checker patterns). |
-| Organic | Natural, irregular structure. | else `LBP_Entropy > 2.5` (uniform local binary pattern, P=8/R=1). Irregular texture without dominant orientation (e.g., leather, wood, fabric). |
-| Complex | Multi-feature, heterogeneous regions. | else (fallback when none of the above criteria fire). Boundaries, composite surfaces. |
+**Figure 3.2.2-1.** Data-driven morphology clusters for Severstal and AITeX: each defect in the linearity–log(aspect ratio) plane, colored by its shape cluster k (cluster centroids ★; the legend gives each cluster's label and prior P(k) = morph_prior). The clusters are segments of an elongation continuum; k is a shape cluster, not the defect class.
 
-###3.2.4 Stage 1b: Seed Defect Classification
-Seed defects were extracted from defective images to provide morphological tem-plates for synthesis. The Segment Anything Model (SAM) was used to generate precise defect masks, with Otsu thresholding serving as a fallback when SAM segmentation was unavailable or unreliable. Each defect was then classified into one of five generic mor-phological subtypes—linear_scratch, elongated, compact_blob, irregular, or general—using threshold criteria based on linearity, aspect ratio, and solidity. These subtype labels subsequently parameterize the subtype-specific elastic warping strategies described in Section 3.2.5, without relying on domain-specific defect categories. 
-**Table B.** Defect subtype classification criteria (§3.2.4). Each seed defect is assigned to one of five subtypes based on morphology metrics (linearity, aspect ratio, solidity). Subtype labels parameterize the subtype-specific elastic-warping displacement fields in Stage 2 (§3.2.5).
+As shown in Figure 3.2.2-2, the five profiled context features and their P33/P66 tertile boundaries differ markedly across datasets, so the same discretization yields dataset-specific context cells; the structure-sensitive features (frequency energy, orientation en-tropy) vary most across the roster, consistent with the CCI decomposition (see §3.2.1).
 
-| Subtype | Definition | Classification Criteria |
-|---------|-----------|-------------------------|
-| linear_scratch | Long, thin, linear defect (e.g., scratch, crack). | `Linearity > 0.9` AND `AspectRatio > 5`. Strong directional coherence with extreme elongation. |
-| elongated | Elongated but less linear defect (e.g., elongated blob, seam). | `Linearity > 0.7` AND `AspectRatio ∈ [2, 5]` AND `Solidity < 0.85`. Moderate to high linearity with moderate elongation. |
-| compact_blob | Compact, nearly isotropic defect (e.g., hole, dent, blob). | `Linearity < 0.6` AND `Solidity > 0.85` AND `AspectRatio < 2`. Low linearity, high solidity, near-circular footprint. |
-| irregular | Irregular, medium-linearity defect (e.g., stain, patch, boundary artifact). | `Linearity ∈ [0.4, 0.8]` AND `Solidity ∈ [0.65, 0.95]` AND `AspectRatio < 4`. Mixed morphological properties, intermediate geometry. |
-| general | Fallback category for ambiguous or mixed-morphology defects. | Does not meet criteria for any of the above four categories. Default label; used when sub-type assignment is uncertain or defect lacks clear morphological signature. |
+**Figure 3.2.2-2.** Per-dataset distributions of the five profiled background context features (one panel per dataset), with the P33/P66 tertile boundaries (dashed) that discretize each feature into the three-level context cells indexing the compatibility model.
 
-**Figure 4.** Morphology feature distributions across datasets (severstal, mvtec_leather, mtd, aitex). Box plots of linearity, solidity, and aspect ratio values from defect instances show the range of morphological properties across the four benchmark datasets. Red dashed threshold lines (from Table B) indicate the decision boundaries for subtype classification. The spread confirms that each subtype occupies distinct feature space regions, validating the threshold-based classification approach.
+###3.2.3 Background Categories and Defect Subtypes
+Regions of interest (ROIs) were extracted from normal images to identify plausible defect placement locations: Otsu thresholding produces a foreground mask, connected-component analysis yields candidate ROIs, and components below a minimum connected-component area are discarded as noise. The texture surrounding each retained ROI is classified into one of five categories—smooth, directional, periodic, organic, or complex—by the per-dataset percentile cascade of Table 3, and a continuity score and a stability score quantify each ROI's spatial coherence and its consistency across the normal-image population.
 
-###3.2.5 ROI Selection and Compatibility-Aware Placement
+###Table 3. Background texture categories from ROI extraction.
 
-Table 4. ROI selection allocation
-Defect Type	Smooth	Directional	Periodic	Organic
-Linear scratch	0.5	1	0.7	0.3
-Elongated	0.6	0.9	0.7	0.4
-Compact blob	0.9	0.4	0.7	0.6
-Irregular	0.5	0.4	0.5	0.8
-General	0.7	0.7	0.7	0.7
+Category	Computational Criteria	Example Surface
+Smooth	LocalVariance ≤ P25	bare metal, uniform coating
+Directional	OrientationEntropy ≤ P25 
+AND FreqComplexity ≤ P25	textile weave
+Periodic	FreqComplexity ≥ P75	tiles, checker patterns
+Organic	TextureEntropy ≥ P50 
+AND LocalVariance ≥ P75	leather, wood, fabric
+Complex	else	Boundaries, composite surfaces
 
-As shown in Table 4, the ROI selection proceeds through three sequential phases: quota assignment, multi-class gating, and compatibility-based ranking.
-Placement candidates are ranked using a realism score,
+Seed defects were extracted from defective images to provide morphological templates for synthesis. The Segment Anything Model (SAM) [31] generates precise defect masks, with Otsu thresholding as a fallback when SAM segmentation is unavailable or unreliable. Each defect is classified into one of five generic morphological subtypes—linear_scratch, elongated, compact_blob, irregular, or general—using the threshold criteria of Table 4 on linearity, aspect ratio, and solidity; these subtype labels parameterize the subtype-specific elastic-warping variants generated before composition, without relying on domain-specific defect categories.
 
-ROI score= 0.5⋅ctxprior+0.3⋅morphprior+0.2⋅qualityscore
+**Table 4.** Defect subtype classification criteria
 
-where ctx_prior represents the profiled defect–background compatibility, morph_prior the morphology-cluster prior, and quality_score the subtype-to-background matching score. To prevent morphological collapse, each source defect crop is selected at most once. Before synthesis, a clean background is assigned to each ROI by ranking candidate backgrounds using histogram-matching cues derived from the profiling stage, including source overlap, class-conditional overlap, and size compatibility.
+| Subtype | Classification Criteria (evaluated in order, first match wins) | Description |
+|---------|---------------------------------------------------------------|-------------|
+| linear_scratch | Linearity > 0.9 AND AspectRatio > 5 | long, thin, linear defect |
+| elongated | Linearity > 0.7 AND AspectRatio ∈ [2, 5] AND Solidity < 0.85 | elongated but less linear defect |
+| compact_blob | Linearity < 0.6 AND Solidity > 0.85 AND AspectRatio < 2 | compact, nearly isotropic defect |
+| irregular | Linearity ∈ [0.4, 0.8] AND Solidity ∈ [0.65, 0.95] AND AspectRatio < 4 | irregular, medium-linearity defect |
+| general | default label (no criterion above satisfied) | fallback for ambiguous or mixed-morphology defects |
 
-During composition, placement is governed by a symmetric compatibility gate,
+As shown in Figure 3.2.3-1, the per-dataset distributions of the six morphology features confirm that the Table 4 decision boundaries fall between populated regions of the feature space rather than cutting through dense modes, and that each dataset occupies a distinct morphological regime.
 
-Where P_def and P_clean denote the profiled occurrence probabilities of the defect and clean-background patches, respectively, and ε is a Laplace smoothing term. The square-root formulation ensures symmetric weighting of the defect and background probabilities. Each candidate defect crop is evaluated against the 64-pixel tiled neigh-borhood of the target ROI, and the resulting compatibility score determines the placement location. This data-driven compatibility gate automatically replaces CASDA's handcrafted compatibility matrix with a dataset-specific counterpart derived directly from the profiling statistics. In contrast, the Random baseline performs no compatibility-based ranking and differs only in the ROI placement policy.
+**Figure 3.2.3-1.** Per-dataset distributions of the six profiled defect-morphology features (linearity, solidity, extent, aspect ratio, eccentricity, circularity; one panel per dataset), with the Table 4 subtype decision boundaries overlaid (dashed).
 
-###3.2.6 Blending Synthesis
-Each selected defect crop is placed at the designated bounding box on the target normal image. The same blend operator is applied identically to the AROMA and random arms, ensuring blending is not a confounding factor. Boundary artifacts are measured in the quality gate (Section 3.2.8). For each synthesized image, the corresponding defect mask and bounding box are co-saved, providing pixel-level localization for downstream de-tection.
+###3.2.4 ROI Selection and Compatibility-Aware Placement
 
-3.2.7 Quality Gate
-A quality gate filters low-fidelity synthetic samples prior to dataset construction. Two primary metrics are computed for each composite: artifact score (high-frequency content at defect edges from compositing) and blur score (local sharpness via Laplacian variance ≥ 100). A composite quality score Q is derived as:
-Q= 0.30 · blur + 0.30 · contrast + 0.20 · brightness + 0.20 · noise
+ROI selection ranks all candidate defect–context pairs by a compatibility score and retains the top-K; a base quota per morphology cluster guarantees coverage, and for multi-class datasets a uniform per-class floor prevents any class from being starved. Candidates are ordered by
 
-Where each component is normalized to [0, 1]. Both metrics are evaluated over a di-lated ROI mask centered on the defect placement, confining scoring to the defect neigh-borhood rather than the entire image. Samples with Q < 0.7 are discarded; those with Q ≥ 0.7 are retained.
+ROI_score = 0.6 · ctx_prior + 0.4 · morph_prior,
+
+where ctx_prior is the profiled defect–background compatibility defined below, and morph_prior is the morphology-cluster prior P(k) of Section 3.2.2. Both priors are derived directly from the profiling statistics, so the ranking introduces no hand-set constants; the compatibility term dominates the score, while the cluster prior mainly orders candidates whose compatibility is saturated (ctx_prior = 1). To prevent morphological collapse, each source defect crop is selected at most once. Before synthesis, a clean background is assigned to each ROI by ranking candidate backgrounds using histogram-matching cues derived from the profiling stage, including source overlap, class-conditional overlap, and size compatibility.
+
+During composition, placement is governed by a symmetric compatibility gate that scores a defect morphology cluster k against a 64-pixel context cell c by the geometric mean of two profiled occurrence probabilities:
+
+ctx_prior(k, c) ∝ √(P_def(k, c) · P_clean(c)),
+
+where P_def(k, c) is the probability of cell c among the background patches of defect cluster k, and P_clean(c) is its probability over all clean (normal) background patches. Additive smoothing (ε = 10⁻³) is applied to both factors, and each cluster's scores are rescaled so that its most compatible cell equals 1 (the row-normalized values are stored as matrix_symmetric, also written compat_sym). The geometric mean is high only where both probabilities are high, weighting the defect and background sides symmetrically. Each candidate defect crop is evaluated against the 64-pixel tiled neighborhood of the target ROI, and the resulting compatibility score determines the placement location. This data-driven compatibility gate automatically replaces CASDA's handcrafted compatibility matrix with a dataset-specific counterpart derived directly from the profiling statistics. In contrast, the Random baseline performs no compatibility-based ranking, differing from AROMA only in the ROI placement mechanism.
+
+As shown in Figure 3.2.4-1, each morphology cluster's compatibility concentrates on a few context cells: on heterogeneous surfaces (AITeX, MTD) different clusters prefer different cells, whereas on the near-uniform Severstal surface all clusters share one dominant cell.
+
+**Figure 3.2.4-1.** Symmetric compatibility (ctx_prior) across the five datasets, as morphology-cluster × context-cell heatmaps (top-20 most-compatible cells, row-normalized so each cluster peaks at 1; each cluster's peak cell boxed). ctx_prior is high only where a cell is both a typical background for the defect cluster and a common clean background. Clusters prefer different cells on heterogeneous surfaces (AITeX, MTD) but share a dominant cell on the near-uniform Severstal surface.
+
+As shown in Figure 3.2.4-2, the complete selection-and-placement flow proceeds from the profiled morphology clusters and context cells, through compatibility ranking and clean-background assignment, to the compatibility-gated pixel-level ROI.
+
+**Figure 3.2.4-2.** ROI selection and compatibility-aware placement flow, traced on a Severstal linear-scratch example: a defect's morphology cluster and a candidate background's context cell yield morph_prior and ctx_prior, whose weighted sum ranks candidates before the symmetric compatibility gate fixes the pixel-level ROI.
+
+###3.2.5 Blending Synthesis
+Each selected defect crop is placed at the designated bounding box on the target normal image. The same blend operator is applied identically to the AROMA and random arms, ensuring blending is not a confounding factor. Boundary artifacts are measured in the quality gate (Section 3.2.6). For each synthesized image, the corresponding defect mask and bounding box are co-saved, providing pixel-level localization for downstream detection.
+
+###3.2.6 Quality Gate
+A quality gate filters low-fidelity composites before dataset construction. Each synthesized image is scored over a dilated ROI mask centered on the defect placement by two metrics: an artifact score, which detects compositing artifacts from gradient outliers and residual high-frequency energy at the defect edges, and a blur score, which measures local sharpness from the Laplacian variance and gradient contrast. The composite quality score is
+Q = 0.5 · artifact + 0.5 · blur,
+
+with both components normalized to [0, 1]. Synthesized samples are ranked by Q, and the lowest-quality fraction of each synthesis pool is pruned, so retention adapts to each dataset's score distribution rather than relying on a fixed absolute threshold.

@@ -26,7 +26,7 @@ are annotated. Statistical significance here is robust (n = hundreds/thousands o
 in contrast to the n=3 seed downstream comparison.
 
 Data root: D:/project/aroma_dataset (local mirror of the committed pipeline outputs).
-Output: ../image/bg_similarity_datasets.png
+Output: ../image/[figure 4.1 3] bg_similarity_datasets.png
 """
 import os, glob, json, io
 import numpy as np, cv2
@@ -205,7 +205,7 @@ def run():
               loc="lower left", fontsize=9)
     ax.grid(axis="y", alpha=0.25)
     plt.tight_layout()
-    outp = os.path.join(OUT, "bg_similarity_datasets.png")
+    outp = os.path.join(OUT, "[figure 4.1 3] bg_similarity_datasets.png")
     plt.savefig(outp, dpi=150)
     print("saved:", os.path.abspath(outp))
 

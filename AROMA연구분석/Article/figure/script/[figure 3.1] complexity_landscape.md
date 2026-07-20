@@ -43,8 +43,8 @@
 
 ## 저장
 
-- 스크립트: `figure/script/figure2_complexity_landscape.py`
-- 출력: `figure/image/[figure2] complexity_landscape.png`
+- 스크립트: `figure/script/[figure 3.1] complexity_landscape.py`
+- 출력: `figure/image/[figure 3.1] complexity_landscape.png`
 
 ## 캡션 (초안)
 

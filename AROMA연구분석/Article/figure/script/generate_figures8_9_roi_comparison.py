@@ -229,7 +229,7 @@ def main():
         synth_aroma_dir = base_dir / "synth_aroma" / dataset / "images"
         synth_random_dir = base_dir / "synth_random" / dataset / "images"
 
-        output_path = Path(f"D:/project/aroma/AROMA연구분석/Article/figure/image/[figure{9 if dataset == 'kolektor' else 8}] {dataset}_roi_comparison.png")
+        output_path = Path(f"D:/project/aroma/AROMA연구분석/Article/figure/image/[figure {'4.2 2' if dataset == 'kolektor' else '4.2 1'}] {dataset}_roi_comparison.png")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         create_comparison_figure(

@@ -236,7 +236,7 @@ def main():
                 ax.yaxis.set_visible(True)
                 ax.set_yticks([])
 
-    output_path = Path("D:/project/aroma/AROMA연구분석/Article/figure/image/[figure7] roi_bbox_qualitative.png")
+    output_path = Path("D:/project/aroma/AROMA연구분석/Article/figure/image/[figure 4.1 2] roi_bbox_qualitative.png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"\nSaved: {output_path}")

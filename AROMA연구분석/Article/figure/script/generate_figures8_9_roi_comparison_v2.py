@@ -42,8 +42,8 @@ ASPECT_PRESERVE = {"severstal"}
 
 # dataset -> (fig_num, base_root, test_subdir, mask_subdir, mask_suffix, mask_ext)
 DATASETS = {
-    "aitex":         (8,  "D:/aroma_dataset",         "aitex_tiled/test", "aitex_tiled/ground_truth", "_mask", ".png"),
-    "kolektor":      (9,  "D:/aroma_dataset",         "kolektor/test",    "kolektor/ground_truth",    "_mask", ".png"),
+    "aitex":         ("4.2 1",  "D:/aroma_dataset",         "aitex_tiled/test", "aitex_tiled/ground_truth", "_mask", ".png"),
+    "kolektor":      ("4.2 2",  "D:/aroma_dataset",         "kolektor/test",    "kolektor/ground_truth",    "_mask", ".png"),
     "severstal":     (10, "D:/aroma_dataset",         "severstal/test",   "severstal/masks",          "",      ".png"),
     "mtd":           (11, "D:/project/aroma_dataset", "mtd/test",         "mtd/ground_truth",         "_mask", ".png"),
     "mvtec_leather": (12, "D:/project/aroma_dataset", "leather/test",     "leather/ground_truth",     "_mask", ".png"),
@@ -185,7 +185,7 @@ def build_figure(dataset, cfg):
         for col, (img, bbox, title) in enumerate(cols):
             draw_panel(fig.add_subplot(gs[row, col]), img, bbox, title, fill=fill)
 
-    out = OUT_DIR / f"[figure{fig_num}] {dataset}_roi_comparison.png"
+    out = OUT_DIR / f"[figure {fig_num}] {dataset}_roi_comparison.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()

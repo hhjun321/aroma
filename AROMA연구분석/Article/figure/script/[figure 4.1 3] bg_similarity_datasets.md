@@ -1,7 +1,7 @@
 # Figure — Background-selection compatibility (AROMA vs Random) across datasets
 
-**Script**: `fig_bg_similarity_datasets.py`
-**Output**: `../image/bg_similarity_datasets.png`
+**Script**: `[figure 4.1 3] bg_similarity_datasets.py`
+**Output**: `../image/[figure 4.1 3] bg_similarity_datasets.png`
 **Data root**: `D:/project/aroma_dataset` (override with env `AROMA_DATASET_ROOT`)
 
 ## What the figure shows
@@ -81,7 +81,7 @@ statistical, all-sample aggregate.
 ## Reproduce
 
 ```bash
-python fig_bg_similarity_datasets.py     # writes ../image/bg_similarity_datasets.png
+python "[figure 4.1 3] bg_similarity_datasets.py"     # writes ../image/[figure 4.1 3] bg_similarity_datasets.png
 ```
 Optional `scipy` gives exact Mann-Whitney U; without it the script falls back to a
 1000-permutation p-value. Deterministic (fixed reference sampling seed 42).

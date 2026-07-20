@@ -7,7 +7,7 @@ Figure 2 — Complexity Landscape (MCI x CCI)
 morphology / context policy를 함께 표시.
 
 모든 수치는 aroma_dataset/complexity/<dataset>/complexity_report.json 에서 직접 로드
-(하드코딩 금지). spec: figure2_complexity_landscape.md
+(하드코딩 금지). spec: [figure 3.1] complexity_landscape.md
 """
 import json
 import os
@@ -18,7 +18,7 @@ from matplotlib.lines import Line2D
 # --- paths ---
 DATA_ROOT = r"D:\project\aroma_dataset\complexity"
 OUT_DIR = r"D:\project\aroma\AROMA연구분석\Article\figure\image"
-OUT_PATH = os.path.join(OUT_DIR, "[figure2] complexity_landscape.png")
+OUT_PATH = os.path.join(OUT_DIR, "[figure 3.1] complexity_landscape.png")
 
 # dataset_key: (display name, granularity)  granularity: 'single' | 'multi'
 DATASETS = [

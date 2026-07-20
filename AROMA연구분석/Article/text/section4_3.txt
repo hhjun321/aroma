@@ -1,10 +1,10 @@
 ##4.3. Supervised Detection Evaluation (Exp4v2)
 
-The downstream evaluation in Section 4.2 follows the one-class anomaly detection (AD) protocol, in which only normal images are used for training and synthetic defects augment the nominal training distribution. During post-hoc auditing, we identified a protocol concern with that one-class setup. In the exp4 configuration, defect-bearing synthetic images were inadvertently routed into the nominal ("good") training partition, which violates the one-class assumption that the training set contains only defect-free samples and confounds the interpretation of the AUROC gains. To obtain a measurement free of this confound, we designed a separate supervised detection experiment (Exp4v2). In this experiment, defects are treated as explicitly labeled foreground objects, and the synthetic data is used as a conventional labeled training set rather than as a perturbation of a nominal manifold.
+Section 4.2 reported the supervised downstream evaluation on the two single-class datasets; this section completes the downstream evidence on the three multi-class datasets under the same uniform supervised protocol (Exp4v2; Section 3.3.2). For completeness, we note that an earlier one-class anomaly-detection experiment (exp4) was discarded during post-hoc auditing: defect-bearing synthetic images had been inadvertently routed into the nominal ("good") training partition, violating the one-class assumption and confounding its AUROC gains. Exp4v2 is free of this confound by design—defects are treated as explicitly labeled foreground objects, and the synthetic data is used as a conventional labeled training set rather than as a perturbation of a nominal manifold.
 
-Exp4v2 employs YOLOv8 detectors under a baseline-then-augment protocol. A model is first trained on the real training partition (Baseline), and each augmented condition then adds synthetic defect images—with their co-saved ROI masks converted to bounding-box labels—to the same training partition at a fixed synth:real budget. Ground-truth masks of the held-out real test split are converted to YOLO-format boxes for evaluation, and detection quality is reported as mAP@0.5 over 3 seeds (seeds 1, 2, 42) with paired testing. The evaluation focuses on the three multi-class datasets (Severstal, MTD, MVTec Leather) under the training-free copy-paste compositing engine of §3.2. Baseline / Random / AROMA differ only in the ROI-selection factor, so the comparison is a controlled ablation that isolates the contribution of context-aware placement.
+Exp4v2 employs YOLOv8 detectors under a baseline-then-augment protocol. A model is first trained on the real training partition (Baseline), and each augmented condition then adds synthetic defect images—with their co-saved ROI masks converted to bounding-box labels—to the same training partition under an identical fixed synthesis budget (Section 3.3.5). Ground-truth masks of the held-out real test split are converted to YOLO-format boxes for evaluation, and detection quality is reported as mAP@0.5 over 3 seeds (seeds 1, 2, 42) with paired testing. The evaluation focuses on the three multi-class datasets (Severstal, MTD, MVTec Leather) under the training-free copy-paste compositing engine of §3.2. Baseline / Random / AROMA differ only in the placement mechanism (Section 3.3.5), so the comparison is a controlled ablation of the full data-driven placement framework.
 
-**Table 12.** YOLOv8n supervised detection performance on Severstal (mean ± std, n = 3 seeds). 4-class steel defects; training-free copy-paste compositing engine.
+**Table 8.** YOLOv8n supervised detection performance on Severstal (mean ± std, n = 3 seeds). 4-class steel defects; training-free copy-paste compositing engine.
 
 | Method | mAP@0.5 | Class 1 (c1) | Class 2 (c2) | Class 3 (c3) | Class 4 (c4) |
 |--------|---------|-------------|-------------|-------------|-------------|
@@ -15,9 +15,9 @@ Exp4v2 employs YOLOv8 detectors under a baseline-then-augment protocol. A model 
 | AROMA vs. Baseline | +0.82 pp | +1.67 pp | −3.44 pp | −0.12 pp | +5.20 pp |
 | AROMA vs. Random | +1.06 pp | +1.48 pp | +1.04 pp | −0.39 pp | +2.09 pp |
 
-**Figure 10.** Severstal ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+**Figure 4.3-1.** Severstal ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
-**Table 13.** YOLOv8n supervised detection performance on MTD (mean ± std, n = 3 seeds). 5-class metal defects; training-free copy-paste compositing engine.
+**Table 9.** YOLOv8n supervised detection performance on MTD (mean ± std, n = 3 seeds). 5-class magnetic-tile (ceramic) defects; training-free copy-paste compositing engine.
 
 | Method | mAP@0.5 | Blowhole | Break | Crack | Fray | Uneven |
 |--------|---------|----------|-------|-------|-------|--------|
@@ -28,9 +28,9 @@ Exp4v2 employs YOLOv8 detectors under a baseline-then-augment protocol. A model 
 | AROMA vs. Baseline | +3.46 pp | 0 pp | −0.23 pp | +2.33 pp | +13.65 pp | +1.53 pp |
 | AROMA vs. Random | −0.25 pp | −0.04 pp | −0.84 pp | +0.93 pp | −0.75 pp | −0.53 pp |
 
-**Figure 11.** MTD ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+**Figure 4.3-2.** MTD ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
-**Table 14.** YOLOv8n supervised detection performance on MVTec Leather (mean ± std, n = 3 seeds). 5-class leather defects; training-free copy-paste compositing engine.
+**Table 10.** YOLOv8n supervised detection performance on MVTec Leather (mean ± std, n = 3 seeds). 5-class leather defects; training-free copy-paste compositing engine.
 
 | Method | mAP@0.5 | Color | Cut | Fold | Glue | Poke |
 |--------|---------|-------|-------|-------|-------|-------|
@@ -41,83 +41,12 @@ Exp4v2 employs YOLOv8 detectors under a baseline-then-augment protocol. A model 
 | AROMA vs. Baseline | −2.69 pp | −7.50 pp | −3.51 pp | +15.53 pp | −3.07 pp | −14.92 pp |
 | AROMA vs. Random | −4.91 pp | −2.63 pp | +3.83 pp | −9.95 pp | −15.30 pp | −0.51 pp |
 
-**Figure 12.** MVTec Leather ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
+**Figure 4.3-3.** MVTec Leather ROI selection comparison. Original defects (left) and synthetic augmentations via AROMA-selected (middle) versus random (right) background contexts. Rows represent low and high AROMA compatibility confidence.
 
-**Severstal (Table 12)** shows AROMA +1.06 pp over Random (0.5041 vs. 0.4935 mAP@0.5) from low-headroom baseline. Class-wise, AROMA gains are balanced: c1 +1.67 pp, c3 −0.12 pp (neutral), but c4 recovers +2.09 pp vs. Random. Class c2 (underrepresented) remains the weakest across all methods (0.3330 AROMA).
+**Severstal (Table 8, Figure 4.3-1)** shows AROMA +1.06 pp over Random (0.5041 vs. 0.4935 mAP@0.5) from a low baseline (0.496) that retains substantial headroom. Class-wise, AROMA gains are balanced: c1 +1.67 pp, c3 −0.12 pp (neutral), but c4 recovers +2.09 pp vs. Random. Class c2 (underrepresented) remains the weakest across all methods (0.3330 AROMA).
 
-**MTD (Table 13)** exhibits high-headroom augmentation: Random adds +3.71 pp over Baseline, but AROMA merely matches (0.9440 ≈ Random 0.9465, Δ−0.25 pp). Per-class divergence is notable: Fray (+13.65 pp vs. Baseline) and Blowhole (0 pp) dominate the aggregate. AROMA's Fray (0.9499) is −0.75 pp below Random (0.9574), suggesting that context-aware placement offers no benefit in the near-ceiling regime.
+**MTD (Table 9, Figure 4.3-2)** shows augmentation gains from a near-ceiling baseline: Random adds +3.71 pp over Baseline, but AROMA merely matches (0.9440 ≈ Random 0.9465, Δ−0.25 pp). Per-class divergence is notable: Fray (+13.65 pp vs. Baseline) and Blowhole (0 pp) dominate the aggregate. AROMA's Fray (0.9499) is −0.75 pp below Random (0.9574), suggesting that context-aware placement offers no benefit in the near-ceiling regime.
 
-**MVTec Leather (Table 14)** presents class-heterogeneous behavior despite monotone background. Random adds +2.22 pp, but AROMA declines −2.69 pp vs. Baseline (0.8052 vs. 0.8321), a −4.91 pp gap from Random. Per-class: Fold (+15.53 pp AROMA vs. Baseline, but −9.95 pp vs. Random) dominates the aggregates, while Glue and Poke deteriorate (−3.07 pp and −14.92 pp AROMA vs. Baseline). The negative aggregate reflects that within-class heterogeneity does not translate to cross-class compatibility signals.
+**MVTec Leather (Table 10, Figure 4.3-3)** presents class-heterogeneous behavior despite monotone background. Random adds +2.22 pp, but AROMA declines −2.69 pp vs. Baseline (0.8052 vs. 0.8321), a −4.91 pp gap from Random. Per-class: Fold (+15.53 pp AROMA vs. Baseline, but −9.95 pp vs. Random) dominates the aggregates, while Glue and Poke deteriorate (−3.07 pp and −14.92 pp AROMA vs. Baseline). The negative aggregate has a concrete mechanism: on this near-uniform surface the similarity-ranked background assignment collapses onto a small background pool (15 distinct normal backgrounds across 400 AROMA composites, versus 202 for Random), so AROMA loses background diversity precisely where placement position carries no compatibility signal. Within-class heterogeneity therefore does not translate into a usable cross-class compatibility signal, and the diversity loss tips the aggregate negative.
 
 Across the three multi-class datasets, the AROMA−random gap responds to baseline headroom and surface heterogeneity: Severstal (heterogeneous, low-baseline, +1.06 pp) shows positive direction; MTD (near-ceiling, limited leverage, −0.25 pp) converges; MVTec Leather (monotone background, misaligned class variation, −4.91 pp) reverses. Combined with single-class results in §4.2 (AITeX +4.96 pp; Kolektor −0.68 pp), the pattern confirms context-aware placement operates conditionally on both sufficient headroom and informative surface heterogeneity.
-
-% =====================================================================
-% TODO (AUTHOR): QUALITATIVE FIGURES — NOT YET GENERATED
-% ---------------------------------------------------------------------
-% A qualitative-results subsection (proposed §4.5) was requested but could
-% NOT be produced from the local checkout. No qualitative figure was
-% generated and NONE was fabricated, because there are no usable image
-% pixels on this machine.
-%
-% WHY BLOCKED (verified by full disk scan, not assumed):
-%   - Total raster images under the project on disk: 11.
-%       * 9 are ALREADY-RENDERED paper plots in
-%         AROMA연구분석/Article/figure/ (AUROC curves, complexity
-%         landscape, ROI coverage, pipeline diagram, etc.) — finished
-%         vector-style plots, not raw image crops.
-%       * 2 are degenerate test fixtures:
-%             tests/fixtures/images/img_001.png  (64x64)
-%             tests/fixtures/seed_defect.png     (16x16)
-%         These are placeholder fixtures, NOT real defect / normal /
-%         synthetic crops.
-%   - Real defect, normal/background, random-synth, and AROMA-synth
-%     images live exclusively on Google Drive / Colab
-%     (e.g. /content/drive/MyDrive/data/Aroma/...) and are unreachable
-%     from this local Windows checkout.
-%   - docs/data_dir/*.txt are directory-tree listings (paths only,
-%     no pixels); .claude/.etc/ holds only JSON/markdown metric reports.
-%
-% WHAT THE FOUR FIGURES SHOULD SHOW (once pixels are available):
-%   Figure A — Side-by-side grid: real defect | random-synth | AROMA-synth
-%              (+ matching normal background) per dataset. Caption should
-%              highlight AROMA's context-aware defect placement on
-%              appropriate background texture vs. random placement.
-%   Figure B — Pipeline-stage visualization: seed defect -> elastic-warp
-%              variant (TF-IDG) -> Poisson-blended composite -> quality-gate
-%              decision, for one representative sample.
-%   Figure C — Synthesis diversity: multiple TF-IDG variants from a single
-%              seed across the five subtypes (linear_scratch, elongated,
-%              compact_blob, irregular, general).
-%   Figure D — Failure cases: blending artifacts, quality-gate rejects,
-%              and/or degenerate AROMA output (see CAUTION below).
-%
-% RE-RUNS / EXPORTS NEEDED (do this in Colab, where pixels exist):
-%   1. Add an image-export step after Stage 1b/synthesis that dumps a
-%      sample of {real, random, AROMA} defect crops plus the matching
-%      {normal} background per dataset into
-%      .../qualitative_samples/<dataset>/.
-%   2. Target a complexity spectrum across the canonical roster to make
-%      Figure A informative: MVTec Leather (MCI 0.645, high morphology),
-%      Severstal (MCI 0.455), AITeX (MCI 0.398, high context CCI 0.434),
-%      MTD (MCI 0.561). Values from Table 1.
-%   3. Per project rule (no new .ipynb), write the matplotlib grid builder
-%      as a .md Colab execution guide under colab_execute/.
-%
-% CAUTION (data integrity): before building the side-by-side grid,
-%   verify that non-empty AROMA and Random synthetic crops actually exist
-%   on Drive for each canonical dataset (Severstal, MVTec Leather, AITeX,
-%   MTD). Note Severstal copy-paste was doubly null (synthesis inert at the
-%   reported budget; Table 12), so a Severstal panel may be uninformative —
-%   prefer AITeX (the only positive) for the context-matched-placement
-%   contrast, and use any empty/degenerate output as a Figure D failure
-%   case rather than presenting an empty panel.
-%
-% Once qualitative_samples/ are exported and the grid figures are rendered:
-%   - Insert a new subsection "##4.5. Qualitative Results" here (before §5).
-%   - Add \begin{figure}...\includegraphics{figure/fig_qualitative_*}...
-%     blocks with \label{fig:qual_*} and honest captions (including
-%     limitations / failure modes).
-%   - Add callout sentences in §4.5 and a forward reference from §4.2
-%     (FID discussion) noting that the placement advantage FID cannot
-%     resolve is made visible qualitatively in §4.5.
-% =====================================================================

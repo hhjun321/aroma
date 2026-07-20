@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Figure 13 — Background context-feature distributions per dataset (background_type).
 Mirror of morphology_histograms (defect_type). Overlays real compat cell boundaries
-(bin_edges = P33/P66 tertiles). See figure13_context_distribution.md.
+(bin_edges = P33/P66 tertiles). See [figure 3.2.2 2] context_distribution.md.
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -65,7 +65,7 @@ for ds in DATASETS:
                  "indexing the compatibility model.",
                  fontsize=9, va="top", ha="left")
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-    out = f"{IMG}/[figure13_{ds}] context_distribution.png"
+    out = f"{IMG}/[figure 3.2.2 2 {ds}] context_distribution.png"
     fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print("saved:", out)

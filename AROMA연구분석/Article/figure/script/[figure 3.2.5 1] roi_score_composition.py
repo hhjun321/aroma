@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Figure 14 — ROI_score composition: 0.6*ctx_prior + 0.4*morph_prior.
 Visualizes the PROCESS of producing ROI_score (not placement results).
-Panels: severstal, aitex. See figure14_roi_score_composition.md.
+Panels: severstal, aitex. See [figure 3.2.5 1] roi_score_composition.md.
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -10,7 +10,7 @@ import numpy as np
 import json, io
 
 PROF = "D:/aroma_dataset/profiling"
-OUT  = "D:/project/aroma/AROMA연구분석/Article/figure/image/[figure14] roi_score_composition.png"
+OUT  = "D:/project/aroma/AROMA연구분석/Article/figure/image/[figure 3.2.5 1] roi_score_composition.png"
 TOPN = 12
 BLUE = "#2c6fbb"   # 0.6 * ctx_prior
 GREY = "#b0b0b0"   # 0.4 * morph_prior

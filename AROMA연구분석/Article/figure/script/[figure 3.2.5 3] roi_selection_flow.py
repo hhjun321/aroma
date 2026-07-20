@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Figure 6 — ROI selection & compatibility-aware placement flow (quality-free compat spine).
-Severstal linear-scratch example (real profiling values). See figure6_roi_selection_flow.md.
+Severstal linear-scratch example (real profiling values). See [figure 3.2.5 3] roi_selection_flow.md.
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 OUT = ("D:/project/aroma/AROMA연구분석/Article/figure/image/"
-       "[figure6] roi_selection_flow.png")
+       "[figure 3.2.5 3] roi_selection_flow.png")
 
 BLUE   = "#2c6fbb"   # ctx / compat (core)
 BLUEBG = "#dceaf7"
