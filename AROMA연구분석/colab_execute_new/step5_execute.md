@@ -19,7 +19,7 @@
 - **ControlNet 전용 추가**: `$CN_MODELS/{ds}/best_model/`(step4b 학습본), (**aitex**) `ar_tex_prescan_aitex.json`의 `ar_threshold`·`tex_threshold`.
 - **copy_paste는 CN 학습본·AR 임계 불요** — ControlNet 학습(step4b)을 건너뛴다. (aitex 텍스처 게이트 `tex_threshold`만 선택 사용.)
 
-**데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex = tiled(256×256/stride128, single-class).
+**데이터셋**: 핵심 4종(severstal·mvtec_leather·mtd·aitex)은 이 문서의 STEP 3/3B/4 루프로 처리한다. aitex = tiled(256×256/stride128, single-class). kolektor(5번째 v2-1 데이터셋)는 **STEP 3(controlnet 2차)를 절대 쓰지 않고** STEP 3B(copy_paste)+STEP 4(random)만 사용하며, STEP 3B의 `--min-bg-quality`는 0.7이 아니라 **0.42로 override**해야 한다(0.7이면 배경 풀 전멸) — 절차는 `kolektor_execute.md` §3-5/3-6 참고.
 
 ---
 
@@ -217,6 +217,8 @@ for DS in DATASETS_GEN:
 ## STEP 3B — AROMA arm 생성 (copy_paste, 무학습·CPU) — ★ 1차 주 경로
 
 > **진행 순서(계획)**: **1차 = 이 STEP 3B(copy_paste)** 로 AROMA arm 생성 → STEP 4 random arm과 함께 exp4v2에서 **AROMA(copy_paste) vs random** 비교. **2차 = reviewer report 대응 시 STEP 3(controlnet)** 로 AROMA arm을 추가 생성해 "무학습 vs 생성형" 비교. 1차는 GPU·ControlNet 학습(step4b) 불요.
+>
+> **kolektor(5번째 v2-1 데이터셋) note**: kolektor는 이 STEP 3B 커맨드를 **그대로** 쓰되 `--min-bg-quality`만 0.7 → **0.42로 override**한다(0.7이면 배경 풀이 전멸해 생성이 붕괴함). 아래 for-loop 코드는 4종 전용이라 그대로 두고, kolektor는 `DS='kolektor'`로 별도 셀에서 단독 실행한다(상세 절차: `kolektor_execute.md`).
 
 copy-paste 피벗(무학습 기판). ControlNet 생성 대신 **결함 crop을 clean-bg에 직접 합성**한다. STEP 3(controlnet)과 **동일한 clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비**를 쓰되, 생성 방식만 copy_paste다.
 
@@ -262,6 +264,8 @@ for DS in DATASETS_GEN:
 ## STEP 4 — random arm 생성 (통제군, CPU)
 
 `_SPEC §3 step5 random`. random arm은 **naive copy-paste baseline**(무검사 무작위 위치)이다 — AROMA arm과 동일 `top_k`/`n_per_roi`/`seed`(ROI-선택 무작위성 동일)를 쓰되, **placement grounding·게이트는 의도적으로 없다**: compat/positive placement, foreground 제약, clean-bg/void 게이트 모두 미적용. 이것이 **의도된 placement 비대칭**으로, AROMA의 smart-placement 프레임워크(올바른 ROI·context·void 제외 랭킹)라는 기여를 격리 측정하는 정당한 ablation이다(naive random-position copy-paste는 문헌의 표준 증강 baseline). CPU라 `--local_staging` 사용 가능(`_SPEC §5`).
+
+> **kolektor note**: random arm은 override 불요(min-bg-quality 게이트가 애초에 없음)이므로, kolektor도 이 STEP 4 커맨드를 **그대로** `DS='kolektor'`로 단독 실행하면 된다.
 
 ```python
 for DS in DATASETS:

@@ -6,7 +6,7 @@
 
 **AROMA arm 정의**: knn 모드가 비교하는 aroma 합성은 **aroma-sym**(step5 = `generate_defects --method controlnet` + `--compat_mode symmetric` + clean-bg 게이트 + seamless 블렌딩)의 산출물이며, random arm은 동일 clean-bg 게이트를 통과한 `generate_random.py` 통제군이다(둘 다 `S('synth_aroma')`·`S('synth_random')`에서 읽음). rare 모드는 합성 산출이 아니라 **step3 ROI 선택 산출**(`S('roi',ds)/roi_selected.json`+`roi_candidates.json`)을 직접 평가한다.
 
-**데이터셋 (v2-1 확정 4종)**: `severstal · mvtec_leather · aitex · mtd`. **aitex = tiled(256×256/stride128, single-class)**.
+**데이터셋 (v2-1 확정 5종)**: `severstal · mvtec_leather · aitex · mtd · kolektor`. **aitex = tiled(256×256/stride128, single-class)**.
 
 **런타임**: exp5 임베딩 캐시 재사용 시 **CPU 수 분**. 신규 임베딩(real_train·cand_src)만 T4 수 분.
 
@@ -16,7 +16,7 @@
 
 | 모드 | 가설 | 판정 |
 |------|------|------|
-| knn | Δ(1-NN dist) = mean d1(real+random) − mean d1(real+aroma) **> 0** | clustered-bootstrap p < 0.05, 4종 방향 일치 |
+| knn | Δ(1-NN dist) = mean d1(real+random) − mean d1(real+aroma) **> 0** | clustered-bootstrap p < 0.05, 5종 방향 일치 |
 | rare | rare 모드(빈도 p25↓ AND val 등장) hit rate **aroma > random-null** | 전 그리드(k×cseed) 방향 일치 + 다수 셀 p_emp < 0.05 |
 
 > **정보 분리**: AROMA 선택은 val/test를 보지 않는다(선택 입력 = train 결함 프로파일링) — val 기준 평가와 선택은 정보적으로 분리.
@@ -46,7 +46,7 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]   # v2-1 확정 5종
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
 def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
@@ -68,7 +68,7 @@ for k in ('AROMA_SYNTH_DIR', 'RANDOM_SYNTH_DIR', 'ROI_DIR_ROOT', 'EMBED_CACHE_DI
 ```
 
 > ⚠️ **재합성 후 캐시 무효화**(exp5 규약 동일): 합성/ROI 재생성 시 `!rm -rf $EMBED_CACHE_DIR/{ds}` 후 재실행. 캐시 키가 경로 기반이라 동일 파일명 덮어쓰기 시 stale 임베딩 재사용.
-> ⚠️ **부분 재실행 주의**: 같은 모드를 `--dataset_keys` 일부만으로 재실행하면 그 모드 노드가 **통째로 교체**되어 다른 데이터셋 결과가 사라진다 — 재실행 시 항상 전체 4종을 지정하거나 fresh `--output_dir` 사용.
+> ⚠️ **부분 재실행 주의**: 같은 모드를 `--dataset_keys` 일부만으로 재실행하면 그 모드 노드가 **통째로 교체**되어 다른 데이터셋 결과가 사라진다 — 재실행 시 항상 전체 5종을 지정하거나 fresh `--output_dir` 사용.
 > ⚠️ **quality gate 정합**(rare): step3/step5에서 clean-bg·`--min_quality` 게이트를 켠 경우, null의 표본공간(`roi_candidates`)이 실제 random 생성과 같은 gated 풀인지 확인 — aroma/random/null 셋 다 동일 게이트여야 공정([[quality-gate-fairness 규약]]).
 
 ---
@@ -85,7 +85,7 @@ for k in ('AROMA_SYNTH_DIR', 'RANDOM_SYNTH_DIR', 'ROI_DIR_ROOT', 'EMBED_CACHE_DI
     --real_data_dir        $AROMA_DATA \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
-    --dataset_keys severstal mvtec_leather aitex mtd \
+    --dataset_keys severstal mvtec_leather aitex mtd kolektor \
     --val_frac 0.3 --split_seed 42 \
     --bootstrap_reps 2000 \
     --embed_cache_dir $EMBED_CACHE_DIR \
@@ -119,7 +119,7 @@ for ds in sorted(res):
     --mode rare \
     --real_data_dir $AROMA_DATA \
     --roi_dir_root  $ROI_DIR_ROOT \
-    --dataset_keys severstal mvtec_leather aitex mtd \
+    --dataset_keys severstal mvtec_leather aitex mtd kolektor \
     --kmeans_k 8 10 12 15 --cluster_seeds 0 1 2 3 4 \
     --null_seeds 30 --rare_quantile 0.25 \
     --val_frac 0.3 --split_seed 42 \

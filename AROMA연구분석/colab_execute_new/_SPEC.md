@@ -8,11 +8,11 @@
 - **selection**: `roi_selection.py --sampling_strategy deficit_aware --score_mode realism` (multi 3종은 class 게이트 추가, aitex single은 미사용)
 - **생성(AROMA arm)**: `generate_defects.py --method controlnet` + `--compat_mode symmetric --compat_threshold <τ>` (SGM matrix_symmetric + 64px 타일링 query + positive placement) + clean-bg 게이트 + `--blend_mode seamless`. aitex는 elongated용 AR/텍스처 게이트 추가.
 - **random arm**: `generate_random.py` (통제, 동일 clean-bg 게이트)
-- **데이터셋 준비(step -1)**: `prepare_datasets_execute.md` — v2-1 4종을 AROMA 레이아웃으로 준비 + `dataset_config.json` 등록. phase0 앞. (mvtec_leather는 Drive에 표준 레이아웃으로 이미 존재 → 준비 불요, 경로 확인만.)
+- **데이터셋 준비(step -1)**: `prepare_datasets_execute.md` — v2-1 5종(kolektor 포함)을 AROMA 레이아웃으로 준비 + `dataset_config.json` 등록. phase0 앞. (mvtec_leather는 Drive에 표준 레이아웃으로 이미 존재 → 준비 불요, 경로 확인만.)
 - **생성 선결 준비(step4)**: `build_train_jsonl.py` + `train_controlnet.py`(ControlNet 학습) **+ τ 사전스캔**(`compat_gate_cpu_diagnosis §10`). step5 생성이 소비하는 CN 모델·τ를 이 단계에서 모두 확정. step4는 step0·step3 산출(profiling·roi_candidates)을 입력으로 쓰므로 step3 뒤·step5 앞.
 - **실행 순서 체인 = prepare_datasets(step -1) → phase0 → step1 → step2 → step3 → step4(CN 학습+τ) → step5(생성) → exp\***
 - **다운스트림**: `exp4_v2_supervised_detection.py` — **fresh 전조건 학습**(baseline/random/aroma 모두 처음부터, graft 미사용)
-- **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. **aitex = tiled(256×256/stride128, single-class)**.
+- **데이터셋**: 핵심 4종(공용 stage-first 루프, ControlNet 학습 대상)은 `severstal · mvtec_leather · mtd · aitex`이며, v2-1 유니버스는 여기에 `kolektor`(5번째, domain=mvtec mask resolver·class_mode=single·copy_paste 전용·CN학습 skip)를 더해 정확히 5종이다. **aitex = tiled(256×256/stride128, single-class)**. kolektor 전용 절차는 `kolektor_execute.md` 참고.
 
 ## 1. 공통 환경 셀 (모든 문서 STEP 0에 그대로)
 
@@ -33,7 +33,7 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 핵심 4종(공용 루프) — kolektor(5번째)는 별도 처리, kolektor_execute.md 참고
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
 def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
@@ -192,6 +192,8 @@ legacy 명령 구조 유지, `--dataset_keys severstal mvtec_leather aitex mtd`,
 | mvtec_leather | multi | dataset_config | imgsz 640, rect, 100ep, seeds 42 1 2. 생성 시 `--cn_no_grayscale` |
 | mtd | multi | dataset_config | imgsz 640, rect, 100ep, seeds 42 1 2 |
 | aitex | **single (tiled)** | `aitex_tiled/train/good` | imgsz 256, **no rect**, 300ep, seeds 1 2 42. 생성 시 AR/텍스처 게이트 |
+
+kolektor(5번째, v2-1 유니버스의 일부): class_mode single, image_dir `kolektor/train/good`, exp4v2는 imgsz 640·rect·100ep·seeds 42 1 2·`--class_mode` 미지정(단, ControlNet 학습·STEP3 controlnet 생성은 SKIP, step5는 copy_paste + min-bg-quality 0.42 override만 사용). 절차는 `colab_execute_new/kolektor_execute.md` 참고.
 
 ## 5. 공통 무결성 / 정직 (전 문서 말미)
 

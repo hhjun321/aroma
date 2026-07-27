@@ -1,9 +1,9 @@
-# AROMA 데이터셋 준비 (v2-1 4종) — sym_final 파이프라인 선결
+# AROMA 데이터셋 준비 (v2-1 5종) — sym_final 파이프라인 선결
 
-> **목적**: sym_final 파이프라인(`phase0 → … → exp*`)이 소비하는 **v2-1 4종**을 AROMA 호환 레이아웃으로 준비하고 `dataset_config.json`에 등록한다.
-> **대상**: `severstal`(강판) · `mvtec_leather`(가죽) · `aitex`(직물, **tiled**) · `mtd`(자성타일).
+> **목적**: sym_final 파이프라인(`phase0 → … → exp*`)이 소비하는 **v2-1 5종**을 AROMA 호환 레이아웃으로 준비하고 `dataset_config.json`에 등록한다.
+> **대상**: `severstal`(강판) · `mvtec_leather`(가죽) · `aitex`(직물, **tiled**) · `mtd`(자성타일) · `kolektor`(표면 크랙).
 > **실행 환경**: CPU (severstal context prototypes만 CLIP → T4 권장).
-> **위치**: 이 문서는 파이프라인 **step -1**(phase0 앞). 4종 모두 ✓여야 `phase0_execute.md`로 진입.
+> **위치**: 이 문서는 파이프라인 **step -1**(phase0 앞). 5종 모두 ✓여야 `phase0_execute.md`로 진입.
 
 파이프라인 체인: **prepare_datasets(이 문서) → phase0 → step1 → step2 → step3 → step4 → step5 → exp\***
 
@@ -17,8 +17,9 @@
 | mvtec_leather | **Drive 기존**(표준 레이아웃) | **준비 불요** — 경로 확인만 | multi | `mvtec/leather/train/good`, `test/{color,cut,fold,glue,poke}` |
 | aitex | AITEX.zip (Kaggle) | `prepare_aitex.py --tile 256 --stride 128` | **single** | `aitex_tiled/train/good`, `test/defect` |
 | mtd | Dataset Ninja Supervisely | `prepare_mtd.py` | multi | `mtd/train/good`, `test/{5 class}` |
+| kolektor | KolektorSDD-boxes(Supervisely-box) | `prepare_kolektor.py` | **single** | `kolektor/train/good`(347), `test/defect`(52) |
 
-> ⚠️ **스크립트 경로**: `prepare_severstal.py`·`prepare_aitex.py`·`prepare_mtd.py`·`select_context_prototypes.py`는 `scripts/aroma/`(=`$AROMA_SCRIPTS`)에 있다. (mvtec_leather는 스크립트 없음.)
+> ⚠️ **스크립트 경로**: `prepare_severstal.py`·`prepare_aitex.py`·`prepare_mtd.py`·`prepare_kolektor.py`·`select_context_prototypes.py`는 `scripts/aroma/`(=`$AROMA_SCRIPTS`)에 있다. (mvtec_leather는 스크립트 없음.)
 > ⚠️ **aitex는 tiled 전용**: `aitex_tiled`(256×256/stride128)만 사용한다. 구 비타일 `aitex` 레이아웃과 **혼용 금지**(baseline mAP50 0.066로 학습 불가).
 
 ---
@@ -43,8 +44,10 @@ os.environ['SEV_TRAIN_CSV'] = f"{os.environ['SEV_SRC']}/train.csv"
 os.environ['SEV_TRAIN_IMG'] = f"{os.environ['SEV_SRC']}/train_images"
 os.environ['SEV_OUT']     = f"{os.environ['DRIVE']}/severstal"
 os.environ['MVTEC_OUT']   = f"{os.environ['DRIVE']}/mvtec"             # mvtec/leather/... 추출 위치
+os.environ['KOLEKTOR_RAW'] = f"{os.environ['DRIVE']}/KolektorSDD-boxes" # Supervisely-box 원본
+os.environ['KOLEKTOR_OUT'] = f"{os.environ['DRIVE']}/kolektor"          # train/good, test/defect
 
-for k in ('AITEX_RAW','AITEX_TILED','MTD_RAW','MTD_OUT','SEV_OUT','MVTEC_OUT'):
+for k in ('AITEX_RAW','AITEX_TILED','MTD_RAW','MTD_OUT','SEV_OUT','MVTEC_OUT','KOLEKTOR_RAW','KOLEKTOR_OUT'):
     print(f"{k:12s} {os.environ[k]}")
 ```
 
@@ -179,22 +182,48 @@ else:
 
 ---
 
-## 5. dataset_config.json 등록 / 검증
+## 5. kolektor — Supervisely-box → MVTec-style 레이아웃
 
-4종 엔트리는 저장소 `dataset_config.json`에 이미 커밋되어 있다. **경로가 실제 `DRIVE`와 일치하는지 검증**한다(불일치 시 config의 해당 경로만 수정). 표준 스키마:
+원본: KolektorSDD-boxes(Supervisely-box 포맷), `$DRIVE/KolektorSDD-boxes`. 단일클래스(crack), `train/good`(347) + `test/defect`(52) + `ground_truth/defect/{stem}_mask.png`. 이미지 500x~1260(세로 ~2.5:1) → exp4v2에서 `--rect` 사용.
+
+```python
+# Supervisely-box → MVTec-style (train/good, test/defect, ground_truth/defect/{stem}_mask.png)
+!python $AROMA_SCRIPTS/prepare_kolektor.py \
+    --kolektor_root $KOLEKTOR_RAW \
+    --output_dir    $KOLEKTOR_OUT
+```
+
+```python
+# 산출 확인
+from pathlib import Path
+import os
+for sub in ['train/good', 'test/defect', 'ground_truth/defect']:
+    p = Path(os.environ['KOLEKTOR_OUT']) / sub
+    print(f"{'✓' if p.exists() else '✗'} kolektor/{sub:<20} n={len(list(p.iterdir())) if p.exists() else 0}")
+# 기대: train/good=347, test/defect=52
+```
+
+> `class_mode=single`(전 결함 병합, crack 단일). `domain=mvtec`이지만 이는 mask resolver(`ground_truth/{type}/{stem}_mask.png`)만 공유한다는 뜻 — aitex의 타일링/그레이스케일 특수처리와는 무관하다. 생성 단계(step5)에서 ControlNet 학습 skip + `--min-bg-quality 0.42` override가 필요(상세는 `kolektor_execute.md` 참고).
+
+---
+
+## 6. dataset_config.json 등록 / 검증
+
+5종 엔트리는 저장소 `dataset_config.json`에 이미 커밋되어 있다. **경로가 실제 `DRIVE`와 일치하는지 검증**한다(불일치 시 config의 해당 경로만 수정). 표준 스키마:
 
 ```json
 "severstal":     { "domain": "severstal", "class_mode": "multi",  "image_dir": ".../severstal/train/good",      "seed_dirs": [".../severstal/test/class1", "...class2", "...class3", "...class4"] },
 "mvtec_leather": { "domain": "mvtec",     "class_mode": "multi",  "image_dir": ".../mvtec/leather/train/good",   "seed_dirs": [".../test/color", ".../cut", ".../fold", ".../glue", ".../poke"] },
 "aitex":         { "domain": "aitex",     "class_mode": "single", "image_dir": ".../aitex_tiled/train/good",     "seed_dirs": [".../aitex_tiled/test/defect"] },
-"mtd":           { "domain": "mtd",       "class_mode": "multi",  "image_dir": ".../mtd/train/good",             "seed_dirs": [".../test/blowhole", ".../break", ".../crack", ".../fray", ".../uneven"] }
+"mtd":           { "domain": "mtd",       "class_mode": "multi",  "image_dir": ".../mtd/train/good",             "seed_dirs": [".../test/blowhole", ".../break", ".../crack", ".../fray", ".../uneven"] },
+"kolektor":      { "domain": "mvtec",     "class_mode": "single", "image_dir": ".../kolektor/train/good",        "seed_dirs": [".../kolektor/test/defect"] }
 ```
 
 ```python
 import json, os
 cfg = json.load(open(os.environ['DATASET_CONFIG'], encoding='utf-8'))
 ok_all = True
-for ds in ('severstal', 'mvtec_leather', 'aitex', 'mtd'):
+for ds in ('severstal', 'mvtec_leather', 'aitex', 'mtd', 'kolektor'):
     e = cfg.get(ds)
     if not e:
         print(f"✗ {ds}: config에 없음"); ok_all = False; continue
@@ -209,9 +238,9 @@ print("\nALL OK — phase0 진입 가능" if ok_all else "\n✗ 경로 불일치
 
 ---
 
-## 6. 다음 단계
+## 7. 다음 단계
 
-4종 모두 ✓ → **`phase0_execute.md`**(distribution_profiling, sym_final)로 진입. phase0가 `dataset_config.json`의 `image_dir`/`seed_dirs`를 읽어 프로파일링한다.
+5종 모두 ✓ → **`phase0_execute.md`**(distribution_profiling, sym_final)로 진입. phase0가 `dataset_config.json`의 `image_dir`/`seed_dirs`를 읽어 프로파일링한다.
 
 ---
 
@@ -221,6 +250,7 @@ print("\nALL OK — phase0 진입 가능" if ok_all else "\n✗ 경로 불일치
 - **severstal mask**: `masks/`에서 해소(ground_truth 아님). class2 희소 → multi 불균형은 데이터 특성.
 - **mvtec_leather**: **Drive에 기존** — 다운로드·변환 없음, 경로 확인만. mask=`ground_truth/{defect}/{stem}_mask.png`.
 - **severstal 원본**: Drive `SEV_SRC=/content/drive/MyDrive/data/Severstal`(`train.csv`+`train_images/`, 원시 Kaggle 포맷) → `prepare_severstal.py`로 AROMA 레이아웃 변환 필요(§1).
-- **재실행 안전**: prepare_* 스크립트·추출은 멱등(기존 산출 위에 재생성). aitex/severstal는 원본 dir을 실제 위치에 맞게 수정.
+- **kolektor**: `domain=mvtec`이지만 mask resolver만 공유(aitex 타일링과 무관), 생성 단계(step5)에서 `--min-bg-quality 0.42` override와 ControlNet 학습 skip이 필요 — 상세는 `kolektor_execute.md` 참고.
+- **재실행 안전**: prepare_* 스크립트·추출은 멱등(기존 산출 위에 재생성). aitex/severstal/kolektor는 원본 dir을 실제 위치에 맞게 수정.
 - **경로 일관성**: 전 경로가 `DRIVE=/content/drive/MyDrive/data/Aroma` 기준. dataset_config의 절대경로가 DRIVE와 어긋나면 config를 수정(코드·스크립트 수정 아님).
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 위 확인 셀로.

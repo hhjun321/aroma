@@ -1,5 +1,7 @@
 # KolektorSDD (single-class) — 생성 파이프라인 + exp4v2 실행 가이드
 
+> **본 문서의 위치**: 이 문서는 `colab_execute_new/`의 **5번째 v2-1 데이터셋(kolektor) 전용** 실행 가이드입니다. phase0~step3_5는 다른 4종(severstal/mvtec_leather/mtd/aitex)과 **동일한 범용 loop**(각 `stepN_execute.md`의 `DATASETS` 배열)에 kolektor를 포함시켜 처리하면 됩니다. 이 문서는 kolektor에만 필요한 **고유 오버라이드 지점** — step4c τ 사전스캔 단독 실행, ControlNet 학습 SKIP, step5 copy_paste 전용(+ `min-bg-quality 0.42` override), exp4v2 단독 실행 — 만 다룹니다.
+
 > **목적**: KolektorSDD v1(금속 정류자 표면)을 aitex 와 동일하게 **single-class(nc=1 'defect')** 로 exp4v2 3조건(baseline/random/aroma) 평가.
 > **⚠️ 사전 경고 (CCI)**: kolektor **CCI=0.224**(로컬 실측) — leather(0.20)/mtd(0.25) **dead zone**. compat placement 레버 약함 → **aroma≈random 가능성 높음**. 그럼에도 실 mAP 로 empirical 확정(CCI 는 proxy). headroom(baseline)은 §5 에서 실측.
 > **실행 환경**: 생성 = CPU(copy_paste 무학습) | exp4v2 = GPU(A100).
@@ -8,7 +10,7 @@
 ---
 
 ## 0. 전제
-- prepare 완료 필요(아래 §2). dataset_config 에 `kolektor` 등록됨(domain=aitex, class_mode=single). exp4v2 `("aitex","mtd","kolektor")` 분기 인식.
+- prepare 완료 필요(아래 §2). dataset_config 에 `kolektor` 등록됨(**domain=mvtec** — MVTec 스타일 mask resolver(`ground_truth/{type}/{stem}_mask.png`)를 공유한다는 의미일 뿐, aitex 의 타일링/그레이스케일 특수처리와는 무관, class_mode=single). exp4v2 는 domain 이 아니라 `dataset_key` 기반으로 `("aitex","mtd","kolektor")` 분기 인식.
 - 단일클래스라 roi_selection 은 multi 플래그 없이(전역 top-k), exp4v2 는 `--class_mode` 생략(single 기본).
 
 ## 1. 공통 환경 (`_SPEC §1`)

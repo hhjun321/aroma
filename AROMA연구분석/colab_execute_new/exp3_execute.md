@@ -4,9 +4,9 @@
 
 **목적**: Random ROI vs AROMA ROI 2-way 생성 품질 비교 (FID + PaDiM AUROC).
 **런타임**: FID 모드 = **CPU 가능** | AD 모드 = **GPU 필수** (Colab Pro A100 권장).
-**데이터셋**: v2-1 4종 `severstal · mvtec_leather · aitex · mtd`. aitex = tiled(256×256/stride128, single-class).
+**데이터셋**: v2-1 확정 5종 `severstal · mvtec_leather · aitex · mtd · kolektor`. aitex = tiled(256×256/stride128, single-class).
 
-**전제 (step5 완료)**: step5에서 4종 모두 AROMA arm(`S('synth_aroma', ds)`)·random arm(`S('synth_random', ds)`) 합성본이 생성되어 있어야 한다.
+**전제 (step5 완료)**: step5에서 5종 모두 AROMA arm(`S('synth_aroma', ds)`)·random arm(`S('synth_random', ds)`) 합성본이 생성되어 있어야 한다.
 - **AROMA 입력은 이제 aroma-sym(ControlNet + symmetric compat 게이트)** 산출이다 — 구 copy_paste arm이 아니다. step5의 `generate_defects.py --method controlnet --compat_mode symmetric`가 만든 결과를 그대로 소비한다.
 - **clean-bg 게이트 parity는 step5에서 이미 적용**되어 있다 (AROMA·random 양 arm 모두 `--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0` 동일 조건). 따라서 본 문서는 **합성 재생성을 하지 않는다** — 두 arm 모두 step5 산출을 읽기만 한다.
 
@@ -31,7 +31,7 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]   # v2-1 확정 5종
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
 def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
@@ -64,7 +64,7 @@ print("EXP3_OUT     :", os.environ['EXP3_OUT'])
 
 ## STEP 2 — 전제 확인 (step5 합성본 존재)
 
-두 arm 모두 4종의 합성 이미지가 있어야 진행한다. 없으면 step5를 먼저 완료할 것.
+두 arm 모두 5종의 합성 이미지가 있어야 진행한다. 없으면 step5를 먼저 완료할 것.
 
 ```python
 import pathlib
@@ -97,7 +97,7 @@ print("\nMISSING:", missing if missing else "없음 (진행 가능)")
     --random_synthetic_dir $SYNTH_RANDOM \
     --aroma_synthetic_dir  $SYNTH_AROMA \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         severstal mvtec_leather aitex mtd \
+    --dataset_keys         severstal mvtec_leather aitex mtd kolektor \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --device               cpu
@@ -136,7 +136,7 @@ PaDiM 3조건(baseline / random / aroma-sym) 학습 및 AUROC 측정. **Colab Pr
     --random_synthetic_dir $SYNTH_RANDOM \
     --aroma_synthetic_dir  $SYNTH_AROMA \
     --real_data_dir        $AROMA_DATA \
-    --dataset_keys         severstal mvtec_leather aitex mtd \
+    --dataset_keys         severstal mvtec_leather aitex mtd kolektor \
     --output_dir           $EXP3_OUT \
     --seed                 42 \
     --image_size           256

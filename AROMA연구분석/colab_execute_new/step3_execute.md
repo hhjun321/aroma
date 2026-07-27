@@ -22,7 +22,7 @@ step4(ControlNet 학습·`build_train_jsonl.py`)와 step5(생성·random arm)의
 - phase0 완료 — `S('profiling', ds)`에 `compatibility_matrix.json`(matrix_symmetric 포함), `morphology_features.csv`, `context_features.csv` 존재.
 - step2 완료 — `S('prompts', ds)`에 `prompts.json` 존재.
 - ⚠️ **phase0를 재실행했다면 step1·step2를 모두 재실행한 뒤 step3를 돌린다.** step3의 `image_id`(phase0 고유키 종속)·`cluster_id`(step1 GMM 종속)·`prompts`(step2 종속)가 삼중으로 상류에 종속된다. 하나라도 구버전이면 roi_selected.json이 신 profiling과 어긋나 **step3.5에서 `src_match_frac<1.0`으로 발각**된다(그 전에 예방할 것).
-- 데이터셋 v2-1 4종: `severstal · mvtec_leather · mtd · aitex`. **aitex = tiled(256×256/stride128, single-class)**.
+- 데이터셋 v2-1 5종: `severstal · mvtec_leather · mtd · aitex · kolektor`. **aitex = tiled(256×256/stride128, single-class)**. kolektor는 domain=mvtec(마스크 리졸버 공유)·class_mode=single.
 
 ---
 
@@ -45,10 +45,10 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]   # v2-1 5종
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
-def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
+def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex/kolektor=single (자동)
 ```
 
 ---
@@ -67,17 +67,17 @@ for DS in DATASETS:
     print(f"{DS:<16} {cm:<11} {'OK' if have_prof else 'MISSING':<10}{'OK' if have_prom else 'MISSING':<10}")
 ```
 
-> aitex는 `class_mode=single`로 떠야 정상(자동 분기 기준). `severstal·mvtec_leather·mtd`는 `multi`.
+> aitex·kolektor는 `class_mode=single`로 떠야 정상(자동 분기 기준). `severstal·mvtec_leather·mtd`는 `multi`.
 
 ---
 
-## STEP 2 — selection (multi 3종 / single aitex 분기 루프)
+## STEP 2 — selection (multi 3종 / single aitex·kolektor 분기 루프)
 
-`roi_selection.py`를 `is_multi(ds)`로 분기하여 4종 전부 실행한다.
+`roi_selection.py`를 `is_multi(ds)`로 분기하여 5종 전부 실행한다.
 
 - **공통 (_SPEC §3 step3)**: `--sampling_strategy deficit_aware --score_mode realism --top_k 200 --img_diversity_cap 1`
 - **3종(multi) 추가**: `--class_mode multi --class_floor --per_pair_cap_frac 0.05` (stratified pair-aware allocation + class floor)
-- **aitex(single)**: 위 3개 플래그를 **제거** (single 기본값으로 축퇴)
+- **aitex·kolektor(single)**: 위 3개 플래그를 **제거** (single 기본값으로 축퇴)
 - ⚠️ **`--rarity_temp` 미전달** — realism 정합(deficit_aware가 rarity를 온도 스케일하지 않도록 기본값 1.0 유지).
 
 `!python` 매직은 IPython 전용이라 스레드에서 동작하지 않으므로, 루프는 셀 안에서 순차 `!python`으로 실행한다.
@@ -88,7 +88,7 @@ for DS in DATASETS:
 #     → 소수 crop 수십 회 반복(다양성 붕괴) 제거. distinct source < top_k인 클래스에만
 #       bounded repetition 허용 + 로그. deficit_aware allocation 에만 적용.
 #   multi 3종만 --class_mode multi --class_floor --per_pair_cap_frac 0.05 (stratified allocation).
-#   aitex(single)는 3개 플래그 제거 → single 축퇴(byte-identical to single 기본).
+#   aitex·kolektor(single)는 3개 플래그 제거 → single 축퇴(byte-identical to single 기본).
 #   --rarity_temp 미전달 (realism 정합).
 for DS in DATASETS:
     os.environ['DS']     = DS
@@ -105,7 +105,7 @@ for DS in DATASETS:
             --top_k 200 --img_diversity_cap 1 \
             --class_mode multi --class_floor --per_pair_cap_frac 0.05 \
             --output_dir        $ROI
-    else:              # aitex (single, tiled)
+    else:              # aitex (single, tiled) / kolektor (single)
         print(f"\n===== {DS}  (single: multi 플래그 제거) =====")
         !python $AROMA_SCRIPTS/roi_selection.py \
             --profiling_dir     $PROF \
@@ -117,7 +117,7 @@ for DS in DATASETS:
 
 > 로그 확인 포인트:
 > - multi 3종: `stratified_pair_aware` allocation + class별 floor 로그(특정 class가 floor 미달이면 과소 주의).
-> - aitex: `--class_mode multi` 관련 로그 없이 single로 진행.
+> - aitex·kolektor: `--class_mode multi` 관련 로그 없이 single로 진행.
 > - 공통: `Saved roi_candidates.json (N), roi_selected.json (M)`.
 
 ---
@@ -159,14 +159,14 @@ for DS in DATASETS:
 > `roi_candidates.json`은 step4 `build_train_jsonl.py --roi_candidates`가, `roi_selected.json`(및 후보)은
 > step5 `generate_defects.py --roi_dir $(S('roi',ds))` / `generate_random.py --candidates_json .../roi_candidates.json`이 소비한다.
 >
-> ⚠️ **`roi_candidates.json`은 전체 후보 풀이라 대용량**(로컬 mtd 실측 ~13MB vs `roi_selected.json` ~15KB, 약 889×). 그러나 **삭제/미생성 불가** — random arm(`generate_random.py`는 selected가 아니라 **candidates 풀에서 무작위 샘플**), ControlNet train jsonl(`build_train_jsonl`), exp1/2/6 품질·커버리지 메트릭이 재소비한다. copy_paste 전용 경로만 쓰는 경우엔 미참조지만, 4종 파이프라인 전체에서는 필수. (슬림 스키마화는 별도 최적화 과제.)
+> ⚠️ **`roi_candidates.json`은 전체 후보 풀이라 대용량**(로컬 mtd 실측 ~13MB vs `roi_selected.json` ~15KB, 약 889×). 그러나 **삭제/미생성 불가** — random arm(`generate_random.py`는 selected가 아니라 **candidates 풀에서 무작위 샘플**), ControlNet train jsonl(`build_train_jsonl`), exp1/2/6 품질·커버리지 메트릭이 재소비한다. copy_paste 전용 경로만 쓰는 경우엔 미참조지만, 5종 파이프라인 전체에서는 필수. (슬림 스키마화는 별도 최적화 과제.)
 
 ---
 
 ## 무결성 / 정직 (`_SPEC.md` §5)
 
 - **사후 튜닝 금지**: `top_k`·`img_diversity_cap`·selection 전략을 결과 보고 후 변경하지 않는다.
-- **selection 규격 고정**: 4종 모두 `deficit_aware + realism`. multi/single 차이는 `class_mode`(dataset_config 자동 분기)뿐이며, 이는 exp4v2의 `--class_mode multi` per-class 측정(3종) / aitex single-class 측정과 정합한다.
+- **selection 규격 고정**: 5종 모두 `deficit_aware + realism`. multi/single 차이는 `class_mode`(dataset_config 자동 분기)뿐이며, 이는 exp4v2의 `--class_mode multi` per-class 측정(3종) / aitex·kolektor single-class 측정과 정합한다.
 - **`--rarity_temp` 미전달**: realism 정합. rarity 온도 스케일은 legacy(rarity 스코어) 전용이므로 realism selection에 섞지 않는다.
 - **aitex는 tile-level·single-class** → 절대값을 타 데이터셋과 직접 비교 금지, Δ만 유효.
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 Colab 실행으로.

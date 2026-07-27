@@ -1,6 +1,6 @@
 # phase0 — `distribution_profiling.py` (sym_final 정본)
 
-> **목적**: v2-1 4종(`severstal · mvtec_leather · mtd · aitex`)의 분포 프로파일링을 stage-first 루트(`sym_final/profiling/{ds}`)로 재생성한다. symmetric 게이트(clean-grounded SGM)를 쓰려면 `compatibility_matrix.json`에 신규 키(`matrix_symmetric`·`P_def_patch`·`clean_dist`·`symmetric_epsilon`)가 있어야 하므로, 본 단계에서 그 키의 존재를 **hard assert** 한다(없으면 `--compat_mode symmetric` 자체가 hard-fail).
+> **목적**: v2-1 5종(`severstal · mvtec_leather · mtd · aitex · kolektor`)의 분포 프로파일링을 stage-first 루트(`sym_final/profiling/{ds}`)로 재생성한다. kolektor는 `domain=mvtec`(마스크 리졸버 공유)·`class_mode=single`. symmetric 게이트(clean-grounded SGM)를 쓰려면 `compatibility_matrix.json`에 신규 키(`matrix_symmetric`·`P_def_patch`·`clean_dist`·`symmetric_epsilon`)가 있어야 하므로, 본 단계에서 그 키의 존재를 **hard assert** 한다(없으면 `--compat_mode symmetric` 자체가 hard-fail).
 > **실행 환경**: **CPU**. MVTec/aitex/mtd/severstal은 ground_truth 마스크 사용 → SAM 불요(마스크 없으면 Otsu fallback 자동).
 > **전제**: 저장소는 commit `6c8658f` 이상(신규 키를 emit하는 코드)이어야 한다. **추가로 `b1bb497` 이상**이면 `context_features.csv`가 이미지 실제 dim(`image_w`/`image_h`) 컬럼을 방출하고(step3.5 정밀 배치·스케일의 전제), `31ee0aa` 이상이면 `image_id`가 **클래스-고유키**(`{defect_type}_{stem}`, good=`_{stem}`)로 생성된다(MVTec leather stem 충돌 해소). aitex는 tiled 데이터셋(`aitex_tiled/train/good`, single-class)이 이미 준비되어 있어야 하며 `dataset_config.json`의 `image_dir`가 이를 가리키므로 자동 해소된다.
 >
@@ -29,10 +29,10 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]   # v2-1 5종
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
-def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
+def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex/kolektor=single (자동)
 ```
 
 ---
@@ -58,7 +58,7 @@ for DS in DATASETS:
 
 ---
 
-## STEP 2 — profiling 실행 (DATASETS 4종 루프)
+## STEP 2 — profiling 실행 (DATASETS 5종 루프)
 
 ```python
 for DS in DATASETS:
@@ -179,7 +179,7 @@ for DS in DATASETS:
 
 ## 판정 / 다음 단계
 
-- [ ] 3-1 산출 파일 6종 존재 (4 데이터셋 전부)
+- [ ] 3-1 산출 파일 6종 존재 (5 데이터셋 전부)
 - [ ] 3-2 신규 키 4종 존재 (assert 통과), 비어있지 않은 cluster row max=1.0, clean_dist·P_def_patch 합=1
 - [ ] 3-2 leather 5→191 / mtd 94→205 재현 (또는 support 확장)
 - [ ] 3-2b `image_w/image_h` 컬럼 존재(assert 통과), image_id 고유키 포맷 확인

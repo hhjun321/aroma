@@ -5,7 +5,7 @@
 > **전제**: step1(`compute_complexity.py`) 완료 — 각 데이터셋 `S('complexity',ds)/complexity_report.json` 존재.
 > ⚠️ **phase0/step1 재실행 시 step2도 반드시 재실행**: 프롬프트는 `cluster_id × context_cell` 조합 키(`{cluster_id}_{cell_key}`)로 생성된다. phase0 재실행으로 `cluster_id`가 바뀌면 구 prompts는 신 clustering과 **키 의미가 어긋난다**(스키마는 같아 조용히 진행). step3가 이 prompts를 조인하므로 반드시 함께 재실행.
 > **실행 순서 체인**: phase0 → step1 → **step2** → step3 → step4(ControlNet 학습) → step5(생성) → exp3/exp4v2/exp5/exp6.
-> **데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex는 tiled(single-class).
+> **데이터셋**: v2-1 5종 `severstal · mvtec_leather · mtd · aitex · kolektor`. aitex는 tiled(single-class). kolektor는 domain=mvtec(마스크 리졸버 공유)·class_mode=single.
 
 ---
 
@@ -28,15 +28,15 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]   # v2-1 5종
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
-def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
+def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex/kolektor=single (자동)
 ```
 
 ---
 
-## STEP 1 — 실행 (DATASETS 4종 루프)
+## STEP 1 — 실행 (DATASETS 5종 루프)
 
 `prompt_generation.py`는 `scripts/aroma/`에 있으므로 `$AROMA_SCRIPTS/`로 호출한다.
 
@@ -95,7 +95,7 @@ for DS in DATASETS:
 
 ## 판정 / 다음 단계
 
-- [ ] 4종 전부 `S('prompts',ds)/prompts.json` 생성
+- [ ] 5종 전부 `S('prompts',ds)/prompts.json` 생성
 - [ ] 클러스터별 조합·deficit·prompt가 정상 출력됨
 
 통과 시 → **step3**(`roi_selection.py`, 입력 `S('profiling',ds)`+`S('prompts',ds)` → 출력 `S('roi',ds)`).

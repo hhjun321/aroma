@@ -83,7 +83,7 @@
 ```python
 for RATIO in (0.3, 0.5, 1.0):
     !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
-        --dataset_keys severstal mvtec_leather mtd aitex \
+        --dataset_keys severstal mvtec_leather mtd aitex kolektor \
         --condition baseline random aroma \
         --random_synthetic_dir $RANDOM_SYNTH_DIR \
         --aroma_synthetic_dir  $AROMA_SYNTH_DIR \

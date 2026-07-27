@@ -6,11 +6,11 @@
 
 **AROMA arm 정의**: 여기서 비교되는 aroma 합성은 **aroma-sym**(step5 = `generate_defects --method controlnet` + `--compat_mode symmetric` + clean-bg 게이트 + seamless 블렌딩)의 산출물이다. random arm은 동일 clean-bg 게이트를 통과한 `generate_random.py` 통제군이다. 두 arm 모두 `S('synth_aroma')`·`S('synth_random')`(step5 산출)에서 읽는다.
 
-**데이터셋 (v2-1 확정 4종)**: `severstal · mvtec_leather · aitex · mtd`. **aitex = tiled(256×256/stride128, single-class)**.
+**데이터셋 (v2-1 확정 5종)**: `severstal · mvtec_leather · aitex · mtd · kolektor`. **aitex = tiled(256×256/stride128, single-class)**.
 
 **런타임**: 임베딩 추출 T4 데이터셋당 1–3분(캐시 후 0), PRDC·permutation은 CPU. **전체 30분 이내**.
 
-**전제**: step5까지 완료되어 4종의 aroma(`S('synth_aroma',ds)/annotations.json`)·random(`S('synth_random',ds)/annotations.json`) 합성이 존재한다. mvtec_leather aroma 미생성 시 해당 데이터셋 skip 로그 후 제외(step5 생성 후 재실행).
+**전제**: step5까지 완료되어 5종의 aroma(`S('synth_aroma',ds)/annotations.json`)·random(`S('synth_random',ds)/annotations.json`) 합성이 존재한다. mvtec_leather aroma 미생성 시 해당 데이터셋 skip 로그 후 제외(step5 생성 후 재실행).
 
 ---
 
@@ -21,7 +21,7 @@ aroma/random은 **동일 copy-paste/블렌딩 엔진 + 동일 clean-bg 게이트
 | 지표 | 예측 | 판정 |
 |------|------|------|
 | Precision / Density | **두 조건 동등** | \|Δ\|가 permutation null 95% CI 내 |
-| Recall / Coverage | **aroma > random** | Δ>0 AND one-sided p < 0.05 (4종 방향 일치) |
+| Recall / Coverage | **aroma > random** | Δ>0 AND one-sided p < 0.05 (5종 방향 일치) |
 
 > Recall 계열만 오르고 Precision 계열이 동등해야 "선택의 가치" 입증. 둘 다 오르거나 Precision이 깨지면 가설 기각 — 이 비대칭 예측이 사후합리화 반박을 차단한다.
 
@@ -46,7 +46,7 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]   # v2-1 4종
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]   # v2-1 확정 5종
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]                 # aitex → aitex_tiled/train/good
 def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (자동)
@@ -188,14 +188,14 @@ if "delta" not in k5:   # crop 로딩 실패(n=0 → PRDC skip) 진단
 print("Δ:", k5["delta"], "\np:", k5["p_one_sided"])   # Δ≈0, p ≈ 0.2~0.8 기대
 ```
 
-## STEP 4 — 전체 실행 (4종)
+## STEP 4 — 전체 실행 (5종)
 
 ```python
 !python $AROMA_SCRIPTS/experiments/exp5_prdc.py \
     --real_data_dir        $AROMA_DATA \
     --aroma_synthetic_dir  $AROMA_SYNTH_DIR \
     --random_synthetic_dir $RANDOM_SYNTH_DIR \
-    --dataset_keys severstal mvtec_leather aitex mtd \
+    --dataset_keys severstal mvtec_leather aitex mtd kolektor \
     --nearest_k 3 5 10 \
     --permutation_reps 1000 \
     --val_frac 0.3 --split_seed 42 \

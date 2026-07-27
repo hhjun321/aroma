@@ -14,7 +14,7 @@
 - AROMA arm: `S('synth_aroma', ds)/annotations.json` (+ `images/`) — step5 생성 위치. exp4v2엔 루트 `S('synth_aroma')`만 넘기고 스크립트가 `/{ds}`를 붙여 이 경로를 찾는다.
 - Random arm: `S('synth_random', ds)/annotations.json` (+ `images/`) — 동일 규약(루트 `S('synth_random')` + `/{ds}`).
 
-**데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex = tiled(256×256/stride128, single-class).
+**데이터셋**: v2-1 5종 `severstal · mvtec_leather · mtd · aitex · kolektor`. aitex = tiled(256×256/stride128, single-class). kolektor(5번째, 그룹 C)는 그룹 A(3종)·그룹 B(aitex)와 파라미터가 다르므로 별도 STEP에서 개별 실행한다(single-class/640/rect/100ep/seeds 42 1 2 — 그룹 A와 imgsz·epochs·rect·seed 순서는 같으나 class_mode가 다름).
 
 ---
 
@@ -26,9 +26,10 @@
 | 1 | 패키지 설치 & GPU 확인 | CPU |
 | 2 | 3종(severstal · mvtec_leather · mtd) 실행 — multi / 640 / rect / 100ep / seeds 42 1 2 | **GPU** |
 | 3 | aitex 실행 — single / 256 / no-rect / 300ep / seeds 1 2 42 | **GPU** |
-| 4 | 판정 (baseline/random/aroma + Δ + per-seed 부호 일치) | CPU |
+| 4 | kolektor 실행 — single / 640 / rect / 100ep / seeds 42 1 2 | **GPU** |
+| 5 | 판정 (baseline/random/aroma + Δ + per-seed 부호 일치) | CPU |
 
-> **2 그룹 파라미터 상이** (`_SPEC §4`): 3종과 aitex는 imgsz·epochs·rect·class_mode·seed 순서가 다르다. **하나라도 섞으면 비교 불가** — 반드시 그룹별로 분리 실행한다.
+> **3 그룹 파라미터 상이** (`_SPEC §4`): 3종(그룹 A)·aitex(그룹 B)·kolektor(그룹 C)는 imgsz·epochs·rect·class_mode·seed 순서가 다르다. **하나라도 섞으면 비교 불가** — 반드시 그룹별로 분리 실행한다.
 
 ---
 
@@ -197,7 +198,32 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
 
 ---
 
-## STEP 4 — 판정 (CPU)
+## STEP 4 — kolektor 실행 (그룹 C, single-class)
+
+**그룹 C 파라미터**: `--class_mode` 미지정(=single, kolektor는 `dataset_config.json`상 `class_mode: "single"`) · `--imgsz 640` · `--rect`(이미지가 세로로 긴 500×~1260 비율이라 letterbox 낭비를 줄이기 위해 사용) · `--baseline_epochs 100` · `--patience 25` · `--seeds 42 1 2`. imgsz·epochs·rect·seed 순서는 그룹 A(3종)와 같지만 class_mode가 다르므로(단일클래스) 별도 그룹으로 분리한다. 공통 인자는 그룹 A와 동일(`--batch 128` · `--cache ram` · `--workers 12`).
+
+**동일 `--output_dir`**(`$EXP4V2_OUT`): `--resume`가 이미 완료된 3종·aitex를 건드리지 않고 kolektor만 추가 학습·집계한다.
+
+```python
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolov8n --condition all \
+    --dataset_keys kolektor \
+    --aroma_synthetic_dir  $SYNTH_AROMA \
+    --random_synthetic_dir $SYNTH_RANDOM \
+    --real_data_dir $AROMA_DATA \
+    --output_dir    $EXP4V2_OUT \
+    --yolo_cache_dir $YOLO_CACHE \
+    --imgsz 640 --val_frac 0.3 --synth_ratio 1.0 \
+    --baseline_epochs 100 --patience 25 \
+    --batch 128 --workers 12 --cache ram --rect \
+    --seeds 42 1 2 --resume
+```
+
+> **kolektor 참고**: CCI=0.224(낮음, leather/mtd zone) — step5 생성 시 `--min-bg-quality`를 0.7이 아니라 0.42로 override해야 배경 풀이 전멸하지 않는다(이미 step5 문서에 반영되어 있어야 함; 이 문서는 exp4v2 실행 커맨드만 다룬다). ControlNet 학습(step4 4a/4b)은 kolektor에 대해 SKIP되며, step5 생성도 STEP3(controlnet)이 아니라 STEP3B(copy_paste)+STEP4(random arm)만 사용한다 — 전제(step5 산출)가 이 경로로 채워졌는지 STEP 0 전제 확인 표에서 다시 확인한다.
+
+---
+
+## STEP 5 — 판정 (CPU)
 
 데이터셋별 baseline/random/aroma의 map50(±std) + Δ(aroma−random) + per-seed 부호 일치를 본다.
 
@@ -208,7 +234,7 @@ with open(f"{os.environ['EXP4V2_OUT']}/exp4v2_results.json") as f:
     results = json.load(f)
 
 CONDS = ["baseline", "random", "aroma"]
-ORDER = ["severstal", "mvtec_leather", "mtd", "aitex"]
+ORDER = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]
 
 def fmt(m, sd):
     if not isinstance(m, float): return "N/A"
@@ -250,6 +276,7 @@ for ds in [d for d in ORDER if d in results] + [d for d in results if d not in O
 
 > **near-ceiling 주의**: mtd는 baseline mAP50이 높아 flat이 흔하다 — mtd 단독으로 개선 성패를 headline 삼지 말 것. headroom 있는 데이터셋이 arbiter.
 > **aitex는 tile-level·single-class**: 절대값을 3종(multi)과 직접 비교하지 않는다. Δ(aroma−random)만 유효.
+> **kolektor 해석**: CCI=0.224(낮음, leather/mtd zone과 유사) — aroma≈random 예상되는 저-레버 대조 사례로 해석하며, 예상외 양의 방향이면 잔여 레버 존재로 본다.
 > **정밀 검정**: `per_seed`의 seed별 값으로 paired Wilcoxon/t-test를 별도 수행(rough 판정은 위 부호 일치).
 
 ---
@@ -257,8 +284,8 @@ for ds in [d for d in ORDER if d in results] + [d for d in results if d not in O
 ## 무결성 / 정직 (`_SPEC §5`)
 
 - **사후 튜닝 금지**: τ·seed·synth_ratio·epochs·imgsz·**batch·patience**는 위 그룹별 확정값을 그대로 쓰고, 결과 보고 후 변경하지 않는다. (patience 25는 early-stop을 통해 보고 metric에 영향을 주므로 frozen 대상이다. batch 128도 고정.) 파라미터를 바꾸면 skip 조건에 걸려 재학습되지 않으니 fresh `--output_dir` 또는 해당 항목 삭제로만 재실행한다.
-- **그룹 파라미터 불변**: 3종 = multi·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2 / aitex = single·256·no-rect·300ep·**batch 128·patience 25**·seeds 1 2 42. 공통 속도 인자(`--workers 12`·`--compile`·`--cache ram`)도 3조건 동일 적용. 두 그룹을 섞으면 비교 불가.
-- **fresh 전조건**: baseline/random/aroma 모두 COCO에서 독립 학습. graft(전학습 weight 재사용) 미사용. 합성은 train에만, test/defect는 항상 real.
+- **그룹 파라미터 불변**: 3종 = multi·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2 / aitex = single·256·no-rect·300ep·**batch 128·patience 25**·seeds 1 2 42 / kolektor = single·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2. 공통 속도 인자(`--workers 12`·`--cache ram`, 3종·aitex는 `--compile`도)도 각 그룹 내 3조건 동일 적용. 세 그룹을 섞으면 비교 불가.
+- **fresh 전조건**: baseline/random/aroma 모두 COCO에서 독립 학습. graft(전학습 weight 재사용) 미사용. 합성은 train에만, test/defect는 항상 real. (kolektor는 ControlNet 학습 자체를 SKIP — copy_paste arm만 사용.)
 - **aitex는 tile-level·single-class** → 절대값 타 데이터셋 직접 비교 금지, Δ만 유효.
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 Colab 실행으로.
 - **시간 실측·처리량 벤치 미수행** (load-test policy).

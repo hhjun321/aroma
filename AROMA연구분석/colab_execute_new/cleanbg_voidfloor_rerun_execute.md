@@ -36,9 +36,9 @@ def S(stage, ds=None):
     p = f"{os.environ['SYM_ROOT']}/{stage}"
     return f"{p}/{ds}" if ds else p
 
-# phase0를 image_id 고유키(31ee0aa) 이상으로 재실행했으면 leather 포함(4종).
-# 구 profiling만 있으면 leather 제외(3종) — STEP 2의 src_match_frac assert가 혼용을 잡는다.
-DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex"]
+# phase0를 image_id 고유키(31ee0aa) 이상으로 재실행했으면 leather 포함(v2-1 확정 5종, kolektor는 항상 포함).
+# 구 profiling만 있으면 leather 제외(4종) — STEP 2의 src_match_frac assert가 혼용을 잡는다.
+DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]
 
 with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]     # step5와 동일 규약
@@ -341,7 +341,7 @@ show_class_grid(AFTER,  1, "[AFTER] AROMA")    # 검은 배경 급감 확인
 ## 판정 / 다음 단계
 
 - [ ] STEP 1 prescan: severstal drop@0.5 > 0(partial plate 제거), leather/mtd drop 낮음(과제거 없음), aitex 의도대로. override 필요 데이터셋 확정.
-- [ ] STEP 2: 4종 `clean_bg_selected.json` + `clean_bg_random_arm.json` 재생성, summary에 `floor_pct=15.0`·`void_frac_max=0.5 (majority)` 기록. **E1 재현 PASS**(±0.05).
+- [ ] STEP 2: 5종 `clean_bg_selected.json` + `clean_bg_random_arm.json` 재생성, summary에 `floor_pct=15.0`·`void_frac_max=0.5 (majority)` 기록. **E1 재현 PASS**(±0.05).
 - [ ] STEP 3: generate_defects 로그에 `clean_bg assignment ON` + `used≈T`. AROMA·random arm 모두 재생성.
 - [ ] STEP 4: **class2 composite black-fraction이 48% → 대폭 하락**. 몽타주에서 검은 배경 급감 육안 확인.
 

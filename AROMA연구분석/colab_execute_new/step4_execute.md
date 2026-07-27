@@ -8,6 +8,8 @@
 
 > τ·AR·TEX는 step5의 `--compat_threshold`·`--cn_ar_threshold`·`--texture-dist-threshold`가 그대로 소비한다. **생성 직전 재발명 금지** — step4 말미에서 모두 확정한다(`_SPEC §3 step4 4c`).
 
+> **kolektor(v2-1의 5번째 데이터셋)는 이 문서의 STEP 4a/4b(ControlNet 학습 데이터 빌드+학습)를 SKIP한다** — copy_paste 전용이라 CN 학습본이 불요하다. 다만 STEP 4c(τ 사전스캔)은 kolektor에도 필요하며, 이 섹션의 절차를 DS='kolektor'로 단독 실행한다(상세: `colab_execute_new/kolektor_execute.md` §3-4).
+
 **실행 순서 체인**: `phase0 → step1 → step2 → step3 → **step4(CN 학습 + τ 확정, 이 문서)** → step5(생성)`.
 - step4는 **step3 뒤·step5 앞**이다. step0(profiling)·step3(roi)의 산출을 입력으로 쓰고, step5의 `generate_defects --method controlnet --compat_mode symmetric`이 이 CN 모델(`$CN_MODELS/{ds}/best_model`)과 τ/AR/TEX 임계를 소비한다.
 
@@ -18,7 +20,9 @@
 - `S('profiling',ds)/compatibility_matrix.json` — **`matrix_symmetric` 키 필수**(신 profiling). 없으면 4c hard-fail (구 profile은 `--compat_mode symmetric` 불가).
 - `S('roi',ds)/roi_candidates.json` · `roi_selected.json`
 
-**데이터셋**: v2-1 4종 `severstal · mvtec_leather · mtd · aitex`. aitex = tiled(256×256/stride128, single-class).
+**데이터셋**: ControlNet 학습 대상은 v2-1 핵심 4종(severstal·mvtec_leather·mtd·aitex). kolektor(5번째)는 CN 학습 SKIP, τ 사전스캔만 별도 실행(kolektor_execute.md). aitex = tiled(256×256/stride128, single-class).
+
+> **kolektor 예외**: kolektor(v2-1의 5번째 데이터셋)는 이 문서의 STEP 4a/4b(ControlNet 학습 데이터 빌드+학습)를 SKIP한다 — copy_paste 전용이라 CN 학습본이 불요하다. 다만 STEP 4c(τ 사전스캔)은 kolektor에도 필요하며, 이 섹션의 절차를 DS='kolektor'로 단독 실행한다(상세: `colab_execute_new/kolektor_execute.md` §3-4).
 
 ---
 
@@ -236,6 +240,8 @@ for ds in DATASETS:
 ---
 
 ## STEP 4c — τ (+aitex AR/TEX) 사전스캔 (CPU) — step5 생성 선결
+
+> **kolektor도 이 4c 절차(4c-0~4c-5)를 그대로 재사용**한다 — DS만 `'kolektor'`로 바꿔 단독 실행한다(4a/4b는 SKIP). 상세는 `kolektor_execute.md` §3-4 참고.
 
 step5의 `generate_defects --compat_mode symmetric --compat_threshold <τ>`가 소비하는 **τ·AR·TEX 임계를 여기서 모두 확정**한다(생성 직전 재사전스캔 금지). 신 profiling(`matrix_symmetric`, phase0) 필수.
 
