@@ -16,7 +16,7 @@
 1. Defect crop (morphology: lin 0.961, sol 0.882, AR 5.09)
    - 좌분기: GMM → morphology cluster k=1, morph_prior P(k)=0.24
    - 측면(회색): rule subtype = linear_scratch → Stage 2 elastic-warp only (스코어링 미개입)
-2. Candidate background patch → context cell 0_0_0_1_0, ctx_prior = compat_sym = 1.00
+2. Candidate background patch → context cell 0_0_0_1_0, ctx_prior = matrix_symmetric = 1.00
 3. ROI_score = 0.6·ctx + 0.4·morph = 0.70  (ctx=파랑 강조, morph=회색 약)
 4. Rank all candidates, take Top-K (K=200) — no deficit; per-class uniform floor (multi)
 5. Clean-bg assignment (histogram ∩; void P15 floor)

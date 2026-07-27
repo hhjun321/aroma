@@ -1,6 +1,4 @@
-##4.2. Downstream Detection Performance (AITeX, Kolektor)
-
-Two datasets were selected to evaluate the downstream utility of AROMA under distinct data regimes: AITeX, a single-class tiled-pattern dataset with defect instances confined to one anomaly type; and Kolektor, a small-scale single-class metal-commutator dataset. These datasets represent orthogonal challenges: AITeX tests the policy under morphological homogeneity and tiled spatial structure, whereas Kolektor examines performance in the limited-data regime (36 defect-bearing real training images) where synthetic augmentation is most critical. Downstream detection was assessed via supervised YOLOv8n training under three augmentation conditions (Baseline: no synthetic data; Random: random ROI placement; AROMA: compatibility-aware placement) over three random seeds (1, 2, 42). Results are reported as mAP@0.5 on the shared real test set. Section 4.3 completes the downstream evidence on the three multi-class datasets under the same uniform supervised protocol (Exp4v2); together, the two sections constitute the five-dataset downstream evaluation.
+##4.2. Downstream Detection Performance — Single-Class (AITeX, Kolektor)
 
 **Table 6.** YOLOv8n detection performance on AITeX test set (mean ± std, n = 3 seeds). Single-class tiled-pattern dataset, imgsz 256, 100 epochs.
 

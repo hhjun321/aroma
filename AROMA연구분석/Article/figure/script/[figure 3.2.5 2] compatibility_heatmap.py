@@ -46,7 +46,7 @@ for ds in DATASETS:
     ax.set_xlabel(f"context cell (top {ncol} by compatibility)", fontsize=9)
     ax.set_title(f"Compatibility (ctx_prior) — {ds}", fontsize=13)
     cb = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
-    cb.set_label("ctx_prior (compat_sym)", fontsize=8)
+    cb.set_label("ctx_prior (matrix_symmetric)", fontsize=8)
     cb.ax.tick_params(labelsize=7)
     plt.tight_layout()
     out = f"{IMG}/[figure 3.2.5 2 {ds}] compatibility_heatmap.png"
