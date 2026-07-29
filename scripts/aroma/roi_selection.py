@@ -144,11 +144,93 @@ def _opt_float(value: Any):
     return None if math.isnan(f) else f
 
 
-def quality_proxy(linearity, solidity, aspect_ratio, background_type: str) -> tuple:
+# Middle-tertile width below this fraction of the feature's standard deviation is
+# treated as degenerate: that feature alone reverts to the fixed thresholds, so a
+# dataset whose shape is homogeneous in one feature is not split on measurement
+# noise. The other feature keeps its data-derived tertiles.
+_TERTILE_DEGENERATE_RATIO = 0.15
+
+# Fixed thresholds in (P33-role, P66-role) form, used as the per-feature fallback.
+# Same constants as DefectCharacterizer.classify_defect_subtype.
+_FIXED_TERTILE_EQUIV = {"aspect_ratio": (2.0, 5.0), "solidity": (0.7, 0.9)}
+
+
+def _subtype_percentiles(morph_rows: List[Dict[str, Any]]) -> Any:
+    """Per-dataset P33/P66 of aspect_ratio and solidity for percentile subtypes.
+
+    Returns ``{'aspect_ratio': (p33, p66), 'solidity': (p33, p66)}`` or ``None``
+    when either feature has fewer than 3 usable values (caller falls back to the
+    fixed thresholds rather than splitting a degenerate sample).
+
+    Only aspect_ratio and solidity are needed: linearity = 1 - aspect_ratio**-2
+    and eccentricity = sqrt(linearity) are deterministic reparameterisations of
+    aspect_ratio (verified to machine precision on all profiled defects), so they
+    add no independent axis to the subtype partition.
+    """
+    out: Dict[str, Any] = {}
+    for feat in ("aspect_ratio", "solidity"):
+        vals = [v for v in (_opt_float(r.get(feat)) for r in morph_rows) if v is not None]
+        if len(vals) < 3:
+            logger.warning(
+                "subtype_mode='percentile': only %d usable '%s' values — "
+                "falling back to fixed thresholds", len(vals), feat,
+            )
+            return None
+        arr = np.asarray(vals, dtype=np.float64)
+        p33, p66 = float(np.percentile(arr, 33)), float(np.percentile(arr, 66))
+        # Degeneracy check: the middle tertile must carry more signal than the
+        # feature's own spread. Expressed as a fraction of the standard deviation
+        # because an absolute width is not comparable across features. Observed
+        # values: aitex 118%, mtd 67%, leather 70%, severstal 58% (all healthy)
+        # vs kolektor solidity 3.4% (17 of 52 defects split on ~0.003 solidity).
+        sd = float(arr.std())
+        ratio = (p66 - p33) / sd if sd > 0.0 else 0.0
+        if ratio < _TERTILE_DEGENERATE_RATIO:
+            fb = _FIXED_TERTILE_EQUIV[feat]
+            logger.warning(
+                "subtype_mode=percentile: '%s' middle tertile spans %.6f = %.1f%% "
+                "of its standard deviation (below the %.0f%% guard) — this dataset "
+                "is homogeneous in '%s', so splitting it on tertiles would encode "
+                "measurement noise. Reverting '%s' alone to the fixed thresholds "
+                "(%.4f / %.4f); the other feature keeps its data-derived tertiles.",
+                feat, p66 - p33, 100.0 * ratio,
+                100.0 * _TERTILE_DEGENERATE_RATIO, feat, feat, fb[0], fb[1],
+            )
+            out[feat] = fb
+            out.setdefault("_fixed_fallback", []).append(feat)
+        else:
+            out[feat] = (p33, p66)
+    return out
+
+
+def _percentile_subtype(ar: float, sol: float, th: Dict[str, Any]) -> str:
+    """Subtype cascade on per-dataset tertiles (first match wins).
+
+    Mirrors the fixed cascade's structure with the constants replaced by the
+    dataset's own P33/P66. Order is load-bearing: rules 1 and 3 overlap for an
+    elongated defect with a concave boundary, which is labelled linear_scratch.
+    """
+    ar_p33, ar_p66 = th["aspect_ratio"]
+    sol_p33, sol_p66 = th["solidity"]
+    if ar > ar_p66:
+        return "linear_scratch"
+    if ar < ar_p33 and sol > sol_p66:
+        return "compact_blob"
+    if sol < sol_p33:
+        return "irregular"
+    return "general"
+
+
+def quality_proxy(linearity, solidity, aspect_ratio, background_type: str,
+                  thresholds: Any = None) -> tuple:
     """Return ``(defect_subtype, quality_score)`` via the subtype-matching proxy.
 
-    ``quality_score = SuitabilityEvaluator.matching_score(subtype, background_type)``
-    where ``subtype = DefectCharacterizer.classify_defect_subtype(metrics)``.
+    ``quality_score = SuitabilityEvaluator.matching_score(subtype, background_type)``.
+    The subtype comes from ``DefectCharacterizer.classify_defect_subtype`` (fixed
+    thresholds) when ``thresholds`` is None — the default, so omitting it keeps the
+    result byte-identical — or from ``_percentile_subtype`` on the supplied
+    per-dataset tertiles otherwise.
+
     Returns ``('general', 1.0)`` when deps are unavailable OR any morphology
     metric is missing (quality-unknown → pass the gate, never misclassify).
     """
@@ -159,8 +241,11 @@ def quality_proxy(linearity, solidity, aspect_ratio, background_type: str) -> tu
     ar  = _opt_float(aspect_ratio)
     if lin is None or sol is None or ar is None:
         return "general", 1.0
-    metrics = {"linearity": lin, "solidity": sol, "aspect_ratio": ar}
-    subtype = _DEFECT_CHAR.classify_defect_subtype(metrics)
+    if thresholds is None:
+        metrics = {"linearity": lin, "solidity": sol, "aspect_ratio": ar}
+        subtype = _DEFECT_CHAR.classify_defect_subtype(metrics)
+    else:
+        subtype = _percentile_subtype(ar, sol, thresholds)
     return subtype, float(_SUIT_EVAL.matching_score(subtype, background_type))
 
 
@@ -292,6 +377,7 @@ def build_candidates(
     data: Dict[str, Any],
     background_type: str = "directional",
     score_mode: str = "legacy",
+    subtype_mode: str = "fixed",
 ) -> List[Dict[str, Any]]:
     """
     Score all (morph_row × context_bin) candidates.
@@ -310,6 +396,24 @@ def build_candidates(
     compat_json   = data["compat_matrix"]
     deficit_json  = data["deficit_analysis"]
     prompts       = data["prompts"]
+
+    # --- subtype thresholds (None = fixed constants, the byte-identical default) ---
+    subtype_th = None
+    subtype_mode_tag = "fixed"
+    if subtype_mode == "percentile":
+        subtype_th = _subtype_percentiles(morph_rows)
+        if subtype_th is not None:
+            fb = subtype_th.get("_fixed_fallback", [])
+            logger.info(
+                "subtype_mode=percentile — thresholds in use: "
+                "aspect_ratio %.4f / %.4f | solidity %.4f / %.4f%s",
+                subtype_th["aspect_ratio"][0], subtype_th["aspect_ratio"][1],
+                subtype_th["solidity"][0], subtype_th["solidity"][1],
+                (" (fixed fallback: %s)" % ", ".join(fb)) if fb else "",
+            )
+            subtype_mode_tag = (
+                "percentile+fixed(%s)" % "+".join(fb) if fb else "percentile"
+            )
 
     # --- build lookup: image_id → cluster_id ---
     assignments: Dict[str, int] = {
@@ -349,6 +453,7 @@ def build_candidates(
             row.get("solidity"),
             row.get("aspect_ratio"),
             background_type,
+            thresholds=subtype_th,
         )
 
         cluster_id = assignments.get(image_id)
@@ -382,6 +487,7 @@ def build_candidates(
                 "cell_key":    cell_key,
                 "class_key":   str(row.get("defect_type") or "_"),
                 "defect_subtype": defect_subtype,
+                "subtype_mode":   subtype_mode_tag,
                 "quality_score":  round(quality_score, 6),
                 "roi_score":   round(roi_score, 6),
                 "morph_prior": round(morph_prior, 6),
@@ -1547,6 +1653,7 @@ def run(
     min_quality: float = 0.0,
     background_type: str = "directional",
     score_mode: str = "legacy",
+    subtype_mode: str = "fixed",
 ) -> Dict[str, Any]:
     """
     Full Step 3 pipeline: load → score → quality-gate → select → save.
@@ -1579,7 +1686,8 @@ def run(
             rarity_temp,
         )
     candidates = build_candidates(data, background_type=background_type,
-                                  score_mode=score_mode)
+                                  score_mode=score_mode,
+                                  subtype_mode=subtype_mode)
     passing    = apply_quality_gate(candidates, min_quality)
     if not passing:
         logger.error(
@@ -1695,6 +1803,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
                         "0.4·morph+0.4·ctx+0.2·deficit (byte-identical). "
                         "'realism': 0.5·ctx+0.3·morph+0.2·quality (deficit "
                         "dropped, quality promoted from gate to graded term).")
+    p.add_argument("--subtype_mode", default="fixed",
+                   choices=["fixed", "percentile"],
+                   help="Defect-subtype thresholds. 'fixed' (default): the "
+                        "dataset-invariant constants of DefectCharacterizer "
+                        "(byte-identical). 'percentile': this dataset's own "
+                        "P33/P66 tertiles of aspect_ratio and solidity, matching "
+                        "the tertile discretization used for context cells.")
     return p.parse_args(argv)
 
 
@@ -1714,6 +1829,7 @@ def main(argv=None) -> None:
         min_quality=args.min_quality,
         background_type=args.background_type,
         score_mode=args.score_mode,
+        subtype_mode=args.subtype_mode,
     )
     if result.get("status") != "ok":
         sys.exit(1)

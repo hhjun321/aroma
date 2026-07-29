@@ -34,3 +34,15 @@
 [33] Heusel, M.; Ramsauer, H.; Unterthiner, T.; Nessler, B.; Hochreiter, S. GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium. NeurIPS. 2017, 30, pp. 6626–6637.
 [34] Bińkowski, M.; Sutherland, D. J.; Arbel, M.; Gretton, A. Demystifying MMD GANs. ICLR. 2018.
 [35] Zhang, R.; Isola, P.; Efros, A. A.; Shechtman, E.; Wang, O. The Unreasonable Effectiveness of Deep Features as a Perceptual Metric. CVPR. 2018, pp. 586–595. DOI: 10.1109/CVPR.2018.00068.
+
+# --- 임시 번호 (PROVISIONAL) ---
+# 아래 [36]–[39]는 §3.2.3의 배경 텍스처 지표 정의 문단에서 인용된다.
+# 그 문단 내 등장순으로 부여했다: Shannon → Dalal&Triggs → Ojala → Haralick.
+# 전역 등장순 규칙상 본래 [31](SAM) 앞에 와야 하지만, 개선 중 레퍼런스 추가가 반복될 것으로
+# 예상되어 지금은 말미에 임시 부여하고 추후 한 번에 등장순으로 재정렬한다.
+# 재정렬 시 함께 갱신할 파일: section3_2.txt, section3_3.txt, section5.txt, AROMA.txt
+# 미인용 잔여 항목(이번 범위 밖): Otsu thresholding(§3.2.3), BIC(§3.2.2)
+[36] Shannon, C. E. A Mathematical Theory of Communication. Bell System Technical Journal. 1948, 27(3), 379–423. DOI: 10.1002/j.1538-7305.1948.tb01338.x.
+[37] Dalal, N.; Triggs, B. Histograms of Oriented Gradients for Human Detection. CVPR. 2005, pp. 886–893. DOI: 10.1109/CVPR.2005.177.
+[38] Ojala, T.; Pietikäinen, M.; Mäenpää, T. Multiresolution Gray-Scale and Rotation Invariant Texture Classification with Local Binary Patterns. IEEE Transactions on Pattern Analysis and Machine Intelligence. 2002, 24(7), 971–987. DOI: 10.1109/TPAMI.2002.1017623.
+[39] Haralick, R. M. Statistical and Structural Approaches to Texture. Proceedings of the IEEE. 1979, 67(5), 786–804. DOI: 10.1109/PROC.1979.11328.

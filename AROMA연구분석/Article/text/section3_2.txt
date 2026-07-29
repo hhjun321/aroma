@@ -38,28 +38,63 @@ Regions of interest (ROIs) were extracted from normal images to identify plausib
 
 Category	Computational Criteria	Example Surface
 Smooth	LocalVariance ≤ P25	bare metal, uniform coating
-Directional	OrientationEntropy ≤ P25 
-AND FreqComplexity ≤ P25	textile weave
-Periodic	FreqComplexity ≥ P75	tiles, checker patterns
-Organic	TextureEntropy ≥ P50 
+Directional	GradOrientEntropy ≤ P25
+AND AutocorrPeak ≤ P25	textile weave
+Periodic	AutocorrPeak ≥ P75	tiles, checker patterns
+Organic	LBPEntropy ≥ P50
 AND LocalVariance ≥ P75	leather, wood, fabric
 Complex	else	Boundaries, composite surfaces
 
-Seed defects were extracted from defective images to provide morphological templates for synthesis. The Segment Anything Model (SAM) [31] generates precise defect masks, with Otsu thresholding as a fallback when SAM segmentation is unavailable or unreliable. Each defect is classified into one of five generic morphological subtypes—linear_scratch, elongated, compact_blob, irregular, or general—using the threshold criteria of Table 4 on linearity, aspect ratio, and solidity; these subtype labels parameterize the subtype-specific elastic-warping variants generated before composition, without relying on domain-specific defect categories.
+The four descriptors of Table 3 are computed on the same 64-pixel patch grid as the context cells (Section 3.2.2), from the grayscale patch p alone. LocalVariance is the intensity variance of p. Two of the remaining descriptors are the Shannon entropy [36] of a normalized histogram q,
+
+Entropy(q) = − Σ_k q_k · log₂ q_k,
+
+applied to two different histograms. GradOrientEntropy takes the histogram of Sobel gradient orientations over eight 22.5° bins, each orientation reduced modulo 180° so that the two opposite gradient signs along one stripe share a bin, and each weighted by its gradient magnitude [37]; it is smallest when a single edge orientation dominates, as on a woven or brushed surface. LBPEntropy takes the ten-bin histogram of the rotation-invariant uniform local binary pattern with eight neighbours at radius one [38]; it is largest where many micro-patterns coexist without a dominant one, as on grained or fibrous surfaces. AutocorrPeak is the strongest off-origin peak of the patch autocorrelation R, normalized by its value at the origin [39],
+
+AutocorrPeak(p) = max_{(u,v) ≠ (0,0)} R(u,v) / R(0,0),   where R = ℱ⁻¹(|ℱ(p)|²),
+
+with ℱ the two-dimensional Fourier transform, so that AutocorrPeak is largest when the patch reproduces itself at some non-zero lag, as on a tiled or checkered surface. Although obtained through the Fourier transform, it measures spatial self-similarity and is therefore distinct from the frequency-energy component of the CCI (Section 3.2.1).
+
+The five categories are assigned by a lazy cascade in the order listed in Table 3, the first satisfied criterion winning, so each criterion is implicitly conjoined with the negation of all preceding ones; patches satisfying none of the four are labelled Complex.
+
+Seed defects were extracted from defective images to provide morphological templates for synthesis. The Segment Anything Model (SAM) [31] generates precise defect masks, with Otsu thresholding as a fallback when SAM segmentation is unavailable or unreliable. Each defect is classified into one of four generic morphological subtypes—linear_scratch, compact_blob, irregular, or general—using the threshold criteria of Table 4 on aspect ratio and solidity, whose numeric values are derived from each dataset's own defect population (Table 4b); these subtype labels parameterize the subtype-specific elastic-warping variants generated before composition, without relying on domain-specific defect categories.
 
 **Table 4.** Defect subtype classification criteria
 
 | Subtype | Classification Criteria (evaluated in order, first match wins) | Description |
 |---------|---------------------------------------------------------------|-------------|
-| linear_scratch | Linearity > 0.9 AND AspectRatio > 5 | long, thin, linear defect |
-| elongated | Linearity > 0.7 AND AspectRatio ∈ [2, 5] AND Solidity < 0.85 | elongated but less linear defect |
-| compact_blob | Linearity < 0.6 AND Solidity > 0.85 AND AspectRatio < 2 | compact, nearly isotropic defect |
-| irregular | Linearity ∈ [0.4, 0.8] AND Solidity ∈ [0.65, 0.95] AND AspectRatio < 4 | irregular, medium-linearity defect |
+| linear_scratch | AspectRatio > P66(AspectRatio) | long, thin, near-linear defect |
+| compact_blob | AspectRatio < P33(AspectRatio) AND Solidity > P66(Solidity) | compact, nearly isotropic defect with a convex boundary |
+| irregular | Solidity < P33(Solidity) | defect with a ragged or strongly concave boundary |
 | general | default label (no criterion above satisfied) | fallback for ambiguous or mixed-morphology defects |
 
-As shown in Figure 3.2.3-1, the per-dataset distributions of the six morphology features confirm that the Table 4 decision boundaries fall between populated regions of the feature space rather than cutting through dense modes, and that each dataset occupies a distinct morphological regime.
+The thresholds are the P33 and P66 tertiles of each dataset's own defect population — the same discretization already applied to the background context features (Section 3.2.2), so that every partition in the pipeline is anchored to the dataset it describes. The rule is therefore dataset-invariant in form while its numeric values are estimated per dataset; the derived values are reported in Table 4b. A single fixed constant cannot define the same morphological category across the roster: an aspect ratio of 5.0 sits at the 40th percentile of Kolektor's defect population but the 78th of MVTec Leather's, and a solidity of 0.9 at the 10th percentile of Kolektor's but the 67th of AITeX's.
 
-**Figure 3.2.3-1.** Per-dataset distributions of the six profiled defect-morphology features (linearity, solidity, extent, aspect ratio, eccentricity, circularity; one panel per dataset), with the Table 4 subtype decision boundaries overlaid (dashed).
+The criteria involve only aspect ratio and solidity. Linearity is not used as a criterion because, for a region described by its second central moments, it is a deterministic function of the aspect ratio: writing lambda_max and lambda_min for the eigenvalues of the covariance matrix of the region's pixel coordinates, Linearity = 1 - lambda_min/lambda_max while AspectRatio = sqrt(lambda_max/lambda_min), so that
+
+Linearity = 1 - AspectRatio^-2.
+
+Every linearity threshold therefore reduces to an aspect-ratio threshold, and the two features order the defect population identically (Spearman rho = 1.000 on all five datasets). Eccentricity, which equals the square root of Linearity, is redundant in the same sense; all three are profiled and reported, but only aspect ratio enters the classification.
+
+The cascade order is load-bearing where the first and third criteria overlap — an elongated defect with a concave boundary is labelled linear_scratch, not irregular. One safeguard is applied to the tertile estimation: when a dataset's middle tertile for a feature spans less than 15% of that feature's standard deviation, the dataset is morphologically homogeneous in that feature and splitting it on tertiles would encode measurement noise rather than shape, so that feature alone reverts to a fixed threshold while the other keeps its data-derived tertiles. Across the roster this applies to solidity on Kolektor only, whose middle tertile spans 0.0029 — 3.4% of the standard deviation, against 58–118% for the other four datasets.
+
+**Table 4b.** Per-dataset subtype thresholds derived from each dataset's defect population
+
+| Dataset | Defects | AspectRatio P33 | AspectRatio P66 | Solidity P33 | Solidity P66 |
+|---------|---------|-----------------|-----------------|--------------|--------------|
+| AITeX | 352 | 3.13 | 16.43 | 0.648 | 0.900 |
+| Kolektor | 52 | 4.39 | 5.73 | 0.700 * | 0.900 * |
+| Severstal | 3620 | 2.80 | 7.80 | 0.900 | 0.965 |
+| MTD | 388 | 1.70 | 3.62 | 0.846 | 0.934 |
+| MVTec Leather | 92 | 1.58 | 4.03 | 0.874 | 0.954 |
+
+\* Fixed fallback. Kolektor's measured solidity tertiles (0.9810 / 0.9839) fail the homogeneity safeguard described above and are replaced by fixed thresholds; its aspect-ratio tertiles are data-derived.
+
+The derived thresholds vary by a factor of 4.5 in aspect ratio (3.62 for MTD to 16.43 for AITeX) and span 0.648 to 0.981 in solidity, so the same rule expresses a markedly different shape boundary in each domain. This is the morphological variation that a fixed constant would absorb silently.
+
+As shown in Figure 3.2.3-1, the per-dataset distributions of the profiled morphology features locate the Table 4 thresholds within each dataset's own shape distribution: the solidity thresholds fall in sparsely populated regions, whereas the aspect-ratio thresholds necessarily cut a continuously populated range, and each dataset occupies a distinct morphological regime.
+
+**Figure 3.2.3-1.** Per-dataset distributions of the six profiled defect-morphology features (linearity, solidity, extent, aspect ratio, eccentricity, circularity; one panel per dataset), with the Table 4 subtype thresholds overlaid (dashed) on the two features that carry criteria. Aspect ratio is shown on a logarithmic axis.
 
 ###3.2.4 ROI Selection and Compatibility-Aware Placement
 

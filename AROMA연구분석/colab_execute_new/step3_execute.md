@@ -75,10 +75,11 @@ for DS in DATASETS:
 
 `roi_selection.py`를 `is_multi(ds)`로 분기하여 5종 전부 실행한다.
 
-- **공통 (_SPEC §3 step3)**: `--sampling_strategy deficit_aware --score_mode realism --top_k 200 --img_diversity_cap 1`
+- **공통 (_SPEC §3 step3)**: `--sampling_strategy deficit_aware --score_mode realism --subtype_mode percentile --top_k 200 --img_diversity_cap 1`
 - **3종(multi) 추가**: `--class_mode multi --class_floor --per_pair_cap_frac 0.05` (stratified pair-aware allocation + class floor)
 - **aitex·kolektor(single)**: 위 3개 플래그를 **제거** (single 기본값으로 축퇴)
 - ⚠️ **`--rarity_temp` 미전달** — realism 정합(deficit_aware가 rarity를 온도 스케일하지 않도록 기본값 1.0 유지).
+- ⚠️ **`--subtype_mode percentile` 필수** — 미전달 시 기본값 `fixed`(전 데이터셋 공통 하드코딩 상수)로 조용히 실행되고, 구 산출물과 byte-identical이 되어 **재실행한 의미가 사라진다**. 논문 Table 4/4b가 percentile을 기술하므로 정본은 percentile이다.
 
 `!python` 매직은 IPython 전용이라 스레드에서 동작하지 않으므로, 루프는 셀 안에서 순차 `!python`으로 실행한다.
 
@@ -102,6 +103,7 @@ for DS in DATASETS:
             --profiling_dir     $PROF \
             --prompts_dir       $PROMPTS \
             --sampling_strategy deficit_aware --score_mode realism \
+            --subtype_mode      percentile \
             --top_k 200 --img_diversity_cap 1 \
             --class_mode multi --class_floor --per_pair_cap_frac 0.05 \
             --output_dir        $ROI
@@ -111,6 +113,7 @@ for DS in DATASETS:
             --profiling_dir     $PROF \
             --prompts_dir       $PROMPTS \
             --sampling_strategy deficit_aware --score_mode realism \
+            --subtype_mode      percentile \
             --top_k 200 --img_diversity_cap 1 \
             --output_dir        $ROI
 ```
@@ -119,6 +122,52 @@ for DS in DATASETS:
 > - multi 3종: `stratified_pair_aware` allocation + class별 floor 로그(특정 class가 floor 미달이면 과소 주의).
 > - aitex·kolektor: `--class_mode multi` 관련 로그 없이 single로 진행.
 > - 공통: `Saved roi_candidates.json (N), roi_selected.json (M)`.
+> - **공통: `subtype_mode=percentile — thresholds in use: aspect_ratio A / B | solidity C / D`** — 이 줄이 없으면 `--subtype_mode`가 누락되어 fixed로 돌았다는 뜻이니 즉시 재실행.
+> - **kolektor에서만** `Fixed fallback: solidity` 경고가 뜬다(동질성 가드). 다른 4종에서 뜨면 profiling이 다른 것이므로 조사.
+
+---
+
+## STEP 2-1 — percentile 임계 대조 (논문 Table 4b 검증)
+
+`--subtype_mode percentile`이 유도한 임계가 논문 Table 4b와 일치하는지 자동 대조한다. 아래 기준값은 **로컬 미러 실측**(`aroma_dataset`, 2026-07-29)이며, 동일 profiling이면 소수 2자리까지 재현되어야 한다.
+
+```python
+import numpy as np, csv, io
+
+# 논문 Table 4b 기준값 (AR P33, AR P66, Sol P33, Sol P66)
+# kolektor solidity는 동질성 가드(중간 tertile < sd의 15%)로 fixed 폴백 → 0.700 / 0.900
+TABLE4B = {
+    "aitex":        (3.13, 16.43, 0.648, 0.900),
+    "kolektor":     (4.39,  5.73, 0.700, 0.900),   # solidity = fixed fallback
+    "severstal":    (2.80,  7.80, 0.900, 0.965),
+    "mtd":          (1.70,  3.62, 0.846, 0.934),
+    "mvtec_leather":(1.58,  4.03, 0.874, 0.954),
+}
+DEGEN_RATIO = 0.15                                  # roi_selection._TERTILE_DEGENERATE_RATIO
+FIXED_EQUIV = {"aspect_ratio": (2.0, 5.0), "solidity": (0.7, 0.9)}
+
+for DS in DATASETS:
+    rows = list(csv.DictReader(io.open(f"{S('profiling', DS)}/morphology_features.csv", encoding='utf-8')))
+    got, fb = [], []
+    for f in ("aspect_ratio", "solidity"):
+        x = np.array([float(r[f]) for r in rows if r.get(f) not in (None, '', 'nan')])
+        p33, p66 = np.percentile(x, 33), np.percentile(x, 66)
+        if x.std() > 0 and (p66 - p33) / x.std() < DEGEN_RATIO:
+            p33, p66 = FIXED_EQUIV[f]; fb.append(f)
+        got += [p33, p66]
+    ref = TABLE4B.get(DS)
+    ok = ref is not None and all(abs(g - r) < 0.02 for g, r in zip(got, ref))
+    print(f"{DS:14s} AR {got[0]:7.3f}/{got[1]:7.3f}  Sol {got[2]:.4f}/{got[3]:.4f}"
+          f"  {'PASS' if ok else 'DRIFT(조사)'}"
+          f"{'  [fixed fallback: ' + ','.join(fb) + ']' if fb else ''}")
+    assert ref is None or ok, (
+        f"[{DS}] 유도 임계가 Table 4b와 불일치 — profiling이 논문 산출과 다르다. "
+        f"got={[round(g,4) for g in got]} expected={ref}. phase0를 재확인할 것.")
+```
+
+> **DRIFT가 나면** 임계 자체가 아니라 **profiling(`morphology_features.csv`)이 논문 기준과 다른 것**이다. `image_id` 고유키(`31ee0aa`)·`image_w/image_h`(`b1bb497`) 반영 여부를 먼저 확인한다. 임계는 profiling의 결정론적 함수이므로 동일 입력이면 항상 동일하다.
+>
+> **fixed fallback은 kolektor solidity 1건만 정상.** kolektor의 실측 solidity tertile(0.9810 / 0.9839)은 폭이 sd의 3.4%로, 52건 중 17건이 그 0.003 폭 안에서 compact_blob / irregular / general로 갈린다 — 측정 노이즈를 subtype으로 승격시키는 상황이라 해당 특징만 fixed로 되돌린다. 다른 4종은 58~118%로 건전하다.
 
 ---
 

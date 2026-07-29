@@ -5,7 +5,7 @@
 ## 0. 최종 규격 요약 (aroma-sym)
 
 `exp4v2_mtd_symmetric_execute.md`를 정본 규격으로 삼는다:
-- **selection**: `roi_selection.py --sampling_strategy deficit_aware --score_mode realism` (multi 3종은 class 게이트 추가, aitex single은 미사용)
+- **selection**: `roi_selection.py --sampling_strategy deficit_aware --score_mode realism --subtype_mode percentile` (multi 3종은 class 게이트 추가, aitex single은 미사용). `--subtype_mode percentile` = defect subtype 임계를 데이터셋 자체 P33/P66 tertile로 유도(논문 Table 4/4b). 미전달 시 기본값 `fixed`(전 데이터셋 공통 하드코딩 상수) → **구 산출물과 byte-identical이므로 반드시 명시**.
 - **생성(AROMA arm)**: `generate_defects.py --method controlnet` + `--compat_mode symmetric --compat_threshold <τ>` (SGM matrix_symmetric + 64px 타일링 query + positive placement) + clean-bg 게이트 + `--blend_mode seamless`. aitex는 elongated용 AR/텍스처 게이트 추가.
 - **random arm**: `generate_random.py` (통제, 동일 clean-bg 게이트)
 - **데이터셋 준비(step -1)**: `prepare_datasets_execute.md` — v2-1 5종(kolektor 포함)을 AROMA 레이아웃으로 준비 + `dataset_config.json` 등록. phase0 앞. (mvtec_leather는 Drive에 표준 레이아웃으로 이미 존재 → 준비 불요, 경로 확인만.)
@@ -94,11 +94,14 @@ for DS in DATASETS:
 !python $AROMA_SCRIPTS/roi_selection.py \
     --profiling_dir $PROF --prompts_dir $PROMPTS \
     --sampling_strategy deficit_aware --score_mode realism \
+    --subtype_mode percentile \
     --top_k 200 --img_diversity_cap 1 \
     --class_mode multi --class_floor --per_pair_cap_frac 0.05 \
     --output_dir $ROI
 # aitex(single): 위에서 --class_mode multi --class_floor --per_pair_cap_frac 0.05 제거
 ```
+
+> `--subtype_mode percentile` 필수(정본). 로그에 `subtype_mode=percentile — thresholds in use: ...`가 떠야 하며, 값은 논문 Table 4b와 대조 가능(`step3_execute.md` STEP 2-1 대조표). **kolektor만** `Fixed fallback: solidity` 경고가 정상.
 
 ### step4 — ControlNet 학습 (step5 선결; 순서상 step3 뒤·step5 앞)
 ```python
