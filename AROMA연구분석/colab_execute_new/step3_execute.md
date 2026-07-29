@@ -75,7 +75,8 @@ for DS in DATASETS:
 
 `roi_selection.py`를 `is_multi(ds)`로 분기하여 5종 전부 실행한다.
 
-- **공통 (_SPEC §3 step3)**: `--sampling_strategy deficit_aware --score_mode realism --subtype_mode percentile --top_k 200 --img_diversity_cap 1`
+- **공통 (_SPEC §3 step3)**: `--sampling_strategy deficit_aware --score_mode realism --subtype_mode percentile --img_diversity_cap 1`
+- **`--top_k`는 데이터셋별로 다르다 (`synth_pool_sizing.md` §2 정본)**: **severstal 1000**, 나머지 4종 200. severstal은 `real_train=2534`라 ratio 1.0 증강에 2,534장이 필요한데 `top_k=200 × n_per_roi=3 = 600`으로는 6.3× 부족하다. 후보가 266,624개이므로 `top_k=1000`은 상위 0.4%로 품질 꼬리 유입이 미미하다. ⚠️ **전 데이터셋 200으로 돌리면 severstal이 exp4v2에서 ratio 1.0에 도달하지 못해 기존 결과와 비교 불가**가 된다.
 - **3종(multi) 추가**: `--class_mode multi --class_floor --per_pair_cap_frac 0.05` (stratified pair-aware allocation + class floor)
 - **aitex·kolektor(single)**: 위 3개 플래그를 **제거** (single 기본값으로 축퇴)
 - ⚠️ **`--rarity_temp` 미전달** — realism 정합(deficit_aware가 rarity를 온도 스케일하지 않도록 기본값 1.0 유지).
@@ -91,30 +92,34 @@ for DS in DATASETS:
 #   multi 3종만 --class_mode multi --class_floor --per_pair_cap_frac 0.05 (stratified allocation).
 #   aitex·kolektor(single)는 3개 플래그 제거 → single 축퇴(byte-identical to single 기본).
 #   --rarity_temp 미전달 (realism 정합).
+# 데이터셋별 top_k — synth_pool_sizing.md §2 정본. severstal만 1000(real_train 2534 대응).
+TOP_K = {"severstal": 1000, "mvtec_leather": 200, "mtd": 200, "aitex": 200, "kolektor": 200}
+
 for DS in DATASETS:
     os.environ['DS']     = DS
     os.environ['PROF']   = S('profiling', DS)
     os.environ['PROMPTS']= S('prompts', DS)
     os.environ['ROI']    = S('roi', DS)
+    os.environ['TOPK']   = str(TOP_K[DS])
 
     if is_multi(DS):   # severstal / mvtec_leather / mtd
-        print(f"\n===== {DS}  (multi: class-gated allocation) =====")
+        print(f"\n===== {DS}  (multi: class-gated allocation, top_k={TOP_K[DS]}) =====")
         !python $AROMA_SCRIPTS/roi_selection.py \
             --profiling_dir     $PROF \
             --prompts_dir       $PROMPTS \
             --sampling_strategy deficit_aware --score_mode realism \
             --subtype_mode      percentile \
-            --top_k 200 --img_diversity_cap 1 \
+            --top_k $TOPK --img_diversity_cap 1 \
             --class_mode multi --class_floor --per_pair_cap_frac 0.05 \
             --output_dir        $ROI
     else:              # aitex (single, tiled) / kolektor (single)
-        print(f"\n===== {DS}  (single: multi 플래그 제거) =====")
+        print(f"\n===== {DS}  (single: multi 플래그 제거, top_k={TOP_K[DS]}) =====")
         !python $AROMA_SCRIPTS/roi_selection.py \
             --profiling_dir     $PROF \
             --prompts_dir       $PROMPTS \
             --sampling_strategy deficit_aware --score_mode realism \
             --subtype_mode      percentile \
-            --top_k 200 --img_diversity_cap 1 \
+            --top_k $TOPK --img_diversity_cap 1 \
             --output_dir        $ROI
 ```
 
@@ -167,6 +172,34 @@ for DS in DATASETS:
 
 > **DRIFT가 나면** 임계 자체가 아니라 **profiling(`morphology_features.csv`)이 논문 기준과 다른 것**이다. `image_id` 고유키(`31ee0aa`)·`image_w/image_h`(`b1bb497`) 반영 여부를 먼저 확인한다. 임계는 profiling의 결정론적 함수이므로 동일 입력이면 항상 동일하다.
 >
+### 산출 개수 대조 (top_k 누락 검출)
+
+`--top_k`가 데이터셋별로 다르므로, 실제 선택 수가 기대값과 맞는지 확인한다. 후보 수는 subtype/top_k와 무관하게 profiling에만 의존하므로 함께 대조한다.
+
+```python
+import json
+
+# 로컬 미러 실측(2026-07-29) = 논문 산출 기준. candidates는 profiling 결정론적 함수.
+EXPECT = {   # ds: (candidates, selected)
+    "severstal":     (266624, 1000),
+    "mvtec_leather": (   968,  200),
+    "mtd":           ( 16877,  200),
+    "aitex":         (  5887,  200),
+    "kolektor":      (   511,  200),
+}
+for DS in DATASETS:
+    roi = S('roi', DS)
+    nc = len(json.load(open(f"{roi}/roi_candidates.json")))
+    ns = len(json.load(open(f"{roi}/roi_selected.json")))
+    ec, es = EXPECT[DS]
+    print(f"{DS:14s} cand {nc:>7} (기대 {ec:>7}) {'OK' if nc==ec else 'MISMATCH'}"
+          f"   sel {ns:>5} (기대 {es:>5}) {'OK' if ns==es else 'MISMATCH'}")
+    assert nc == ec, f"[{DS}] 후보 수 불일치 — profiling이 논문 산출과 다르다 ({nc} vs {ec})."
+    assert ns == es, f"[{DS}] 선택 수 불일치 — --top_k 확인 ({ns} vs {es}). TOP_K 딕셔너리 누락 가능."
+```
+
+> **선택 수 MISMATCH의 최빈 원인 = `--top_k` 데이터셋별 값 누락.** severstal을 200으로 돌리면 여기서 `1000 vs 200`으로 잡힌다(실제 발생 사례, 2026-07-29). 후보 수 MISMATCH는 profiling 버전 차이이므로 phase0를 확인한다.
+
 > **fixed fallback은 kolektor solidity 1건만 정상.** kolektor의 실측 solidity tertile(0.9810 / 0.9839)은 폭이 sd의 3.4%로, 52건 중 17건이 그 0.003 폭 안에서 compact_blob / irregular / general로 갈린다 — 측정 노이즈를 subtype으로 승격시키는 상황이라 해당 특징만 fixed로 되돌린다. 다른 4종은 58~118%로 건전하다.
 
 ---

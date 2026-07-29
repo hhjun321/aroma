@@ -95,11 +95,13 @@ for DS in DATASETS:
     --profiling_dir $PROF --prompts_dir $PROMPTS \
     --sampling_strategy deficit_aware --score_mode realism \
     --subtype_mode percentile \
-    --top_k 200 --img_diversity_cap 1 \
+    --top_k $TOPK --img_diversity_cap 1 \
     --class_mode multi --class_floor --per_pair_cap_frac 0.05 \
     --output_dir $ROI
 # aitex(single): 위에서 --class_mode multi --class_floor --per_pair_cap_frac 0.05 제거
 ```
+
+> **`--top_k`는 데이터셋별 값** (`synth_pool_sizing.md` §2 정본): **severstal 1000**, 나머지 4종 200. severstal은 `real_train=2534`라 200×3=600으로는 ratio 1.0에 6.3× 부족하다. 전 데이터셋 200으로 돌리면 severstal이 기존 결과와 비교 불가가 된다(실제 발생, 2026-07-29). `step3_execute.md`의 `TOP_K` 딕셔너리 + 산출 개수 assert 사용.
 
 > `--subtype_mode percentile` 필수(정본). 로그에 `subtype_mode=percentile — thresholds in use: ...`가 떠야 하며, 값은 논문 Table 4b와 대조 가능(`step3_execute.md` STEP 2-1 대조표). **kolektor만** `Fixed fallback: solidity` 경고가 정상.
 
