@@ -20,11 +20,13 @@
 | `[figure 3.2] aroma_pipeline.png` | §3.2 | Figure 3.2 | AROMA 파이프라인 아키텍처 |
 | `[figure 3.2.2 1] morphology_clusters.png` | §3.2.2 | Figure 3.2.2-1 | data-driven morphology clusters |
 | `[figure 3.2.2 2 <ds>] context_distribution.png` | §3.2.2 | Figure 3.2.2-2 | 배경 context feature 분포 (5종) |
-| `[figure 3.2.4 1 <ds>] morphology_distribution.png` | §3.2.4 | Figure 3.2.4-1 | defect morphology feature 분포 (5종) |
-| `[figure 3.2.5 1] roi_score_composition.png` | §3.2.5 | Figure 3.2.5-1 | ROI_score 구성 |
-| `[figure 3.2.5 2 <ds>] compatibility_heatmap.png` | §3.2.5 | Figure 3.2.5-2 | symmetric compatibility 히트맵 (5종) |
+| `[figure 3.2.2 3] morph_features.png` | §3.2.2 | Figure 3.2.2-3 | 형태 특징 6종의 검사 영역 (k의 입력 벡터) |
+| `[figure 3.2.2 4] context_cell.png` | §3.2.2 | Figure 3.2.2-4 | 64px 패치 → context cell 환산 4단계 |
+| `[figure 3.2.3 1 <ds>] morphology_distribution.png` | §3.2.3 | Figure 3.2.3-1 | defect morphology feature 분포 (5종) |
+| `[figure 3.2.4 1 <ds>] compatibility_heatmap.png` | §3.2.4 | Figure 3.2.4-1 | symmetric compatibility 히트맵 (5종) |
+| `[figure 3.2.4 2] placement_footprint.png` | §3.2.4 | Figure 3.2.4-2 | 위치 결정 5단계 / footprint mean-compat |
 | `[figure 3.2.5 3] roi_selection_flow.png` | §3.2.5 | Figure 3.2.5-3 | ROI 선택·배치 흐름 |
-| `[figure 4.1 1] quality_proxy_matrix.png` | §4.1 | Figure 4.1-1 | ROI placement quality metrics |
+| `[figure 4.1 1] roi_coverage.png` | §4.1 | Figure 4.1-1 | ROI 커버리지 지표 |
 | `[figure 4.1 2] roi_bbox_qualitative.png` | §4.1 | Figure 4.1-2 | qualitative ROI placement |
 | `[figure 4.1 3] bg_similarity_datasets.png` | §4.1 | Figure 4.1-3 | background-selection compatibility |
 | `[figure 4.2 1] aitex_roi_comparison.png` | §4.2 | Figure 4.2-1 | AITeX ROI 비교 |
@@ -47,3 +49,25 @@
 - **다중 그림 배치 생성기**는 여러 절/데이터셋을 한 번에 생성하므로 단일 섹션명을 붙일 수 없어 서술형 이름 유지: `generate_all_roi_comparison_figures.py`, `generate_figures8_9_roi_comparison(.py/_v2.py)`, `generate_figure8_aitex_roi_comparison.py`.
 - **비그림·deprecated 유지**: `table_background_categories_spec.md`(§3.2.3 Table 3), `figure3_policy_selection.py`/`_spec.md`(deprecated).
 - 실행 시 파일명에 공백·대괄호가 있으므로 따옴표로 감쌀 것: `python "[figure 3.2] aroma_pipeline.py"`.
+
+## 정정 이력 (2026-07-31)
+
+매핑표가 한 리비전 stale 상태였다 — 실제 파일명·섹션과 대조해 정정:
+
+| 이전 표기 | 실제 | 비고 |
+|---|---|---|
+| `[figure 3.2.4 1 <ds>] morphology_distribution` / §3.2.4 | `[figure 3.2.3 1 <ds>]` / §3.2.3 | 섹션 재번호 미반영 |
+| `[figure 3.2.5 2 <ds>] compatibility_heatmap` / §3.2.5 | `[figure 3.2.4 1 <ds>]` / §3.2.4 | 동일 |
+| `[figure 4.1 1] quality_proxy_matrix` | `[figure 4.1 1] roi_coverage` | slug 변경 미반영 |
+| `[figure 3.2.5 1] roi_score_composition` | **이미지 없음** | script/에 `.py`·`.md`만 존재, PNG 미생성 |
+
+또한 `[figure 3.2.5 3] roi_selection_flow_mod.py`·`.md`가 script/에 있으나 대응 이미지가 없다(`_mod` 변형안). `[figure3] policy_selection.png`는 구 명명 규칙 잔존물이다.
+
+## 스크립트 규약
+
+`script/` 하위에 그림당 `.md`(스펙) + `.py`(생성) 한 쌍을 둔다.
+
+- 출력 경로는 `../image/`, 파일명은 위 표의 고정명. 샘플 stem 등 가변 요소를 파일명에 넣지 않는다
+- 운영 함수는 **import해서 호출**하고 재구현하지 않는다(값 불일치 방지). 중간량을 자체 계산해야 하면 최종값이 운영 함수 결과와 일치하는지 `assert`로 확인한다
+- 데이터 루트는 `AROMA_DATASET_ROOT`, 리포 루트는 `AROMA_REPO` 환경변수로 재지정 가능하게 한다
+- 라벨 언어는 영문이 기본. `[figure 3.2.2 3]`·`[figure 3.2.2 4]`·`[figure 3.2.4 2]` 3건은 현재 한글이며 영문 교체 대기(2026-07-31)
