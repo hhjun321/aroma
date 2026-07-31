@@ -4,7 +4,7 @@
 >
 > **작성**: 2026-07-29. 코드 = `scripts/distribution_profiling.py`, `scripts/aroma/generate_defects.py`, `scripts/aroma/roi_selection.py`. 실측 = `D:/project/aroma_dataset/profiling/profiling/<ds>/`(로컬 미러, Colab Drive `sym_final/profiling`과 동일 버전 확인됨).
 >
-> **개정 2026-07-31**: §4-1~§4-4(`P_def` 관측 범위·support 실측·원 카운트·**cluster 무차별성**), **§4-5 개선 제안**(`P_def` 계수 범위를 결함 국소로 — 미구현), §5 본문(교환 대칭·기하평균 선택 근거), §5-1~§5-7(역할 분담·재순위 실측·ε 발동 규모·기여 균등 검증·효과 크기 데이터셋 의존·**`S_k` 비대칭과 neutral 0.5 편향**), §6-1(void 게이트 fail-open), §6-2(배경 이미지 선택은 히스토그램 교집합), **§7 신설**(legacy `matrix` vs `matrix_symmetric` 소비 경로 분기) 추가. 정직성 11~19 추가. 이에 따라 구 §7→§8, §8→§9, §9→§10.
+> **개정 2026-07-31**: §4-1~§4-4(`P_def` 관측 범위·support 실측·원 카운트·**cluster 무차별성**), **§4-5 개선 제안**(`P_def` 계수 범위를 결함 국소로 — 미구현), §5 본문(교환 대칭·기하평균 선택 근거), §5-1~§5-7(역할 분담·재순위 실측·ε 발동 규모·기여 균등 검증·효과 크기 데이터셋 의존·**`S_k` 비대칭과 neutral 0.5 편향**), **§5-8 개선 제안**(`P_clean` 곱셈 형태 재검토 — 미구현), §6-1(void 게이트 fail-open), §6-2(배경 이미지 선택은 히스토그램 교집합), **§7 신설**(legacy `matrix` vs `matrix_symmetric` 소비 경로 분기) 추가. 정직성 11~19 추가. 이에 따라 구 §7→§8, §8→§9, §9→§10.
 
 ---
 
@@ -405,6 +405,9 @@ severstal은 5개 행이 사실상 같은 분포다(r ≈ 0.97). ⇒ **`ctx_prio
 ### 4-5. 🔧 개선 필요 — `P_def`의 계수 범위를 결함 주변으로 좁혀야 한다
 
 > **상태: 미구현 / 설계 제안.** 본 연구의 의도와 현행 구현이 어긋나는 지점이라 개선 항목으로 기록한다.
+>
+> 📋 **패치 노트: `.claude/.dev_note/aroma_ctxprior_localization_and_normalization.md`**
+> 본 절(계수 범위 국소화)과 **§5-8**(`P_clean` 곱셈 형태 재검토)을 하나의 착수 단위로 묶어 정리했다. 순서 의존(국소화 → 상관 재측정 → 정규화 형태 결정 → τ 재캘리브레이션)이 있으므로 구현 시 그 문서를 기준으로 삼는다.
 
 #### 연구 의도 vs 현행 동작
 
@@ -612,6 +615,55 @@ severstal k1: 관측 196 cell 중 **195개가 0.5 미만**(median 0.027). 행에
 - mtd k4·kolektor k4(23~25%), leather k0/k2(10~12%)도 무시할 수 없다
 
 §6 2단계의 "미관측 cell은 거부가 아니라 중립 0.5다" 한 줄이 실제로는 이 규모의 편향을 뜻한다. **τ 값에 따라 배치 결과가 뒤집힐 수 있으므로 별건 검토 대상.**
+
+### 5-8. 🔧 개선 필요 — `P_clean`을 곱하는 것이 매칭인가
+
+> **상태: 미구현 / 설계 제안.**
+> 📋 **패치 노트: `.claude/.dev_note/aroma_ctxprior_localization_and_normalization.md` §2**
+> §4-5(계수 범위 국소화)와 **하나의 착수 단위**다. 국소화가 선행 조건이므로 순서는 그 문서 §4를 따른다.
+
+연구 핵심은 "결함 국소 배경의 특징을 clean pool에서 찾아 그 자리에 합성"이다. 이 정의에서 세 항의 지위는:
+
+| 항 | 지위 |
+|---|---|
+| `P_def(k, ·)` | **질의(query)** — 찾고자 하는 표면 프로파일 |
+| clean pool | **탐색 대상(corpus)** |
+| `P_clean(c)` | corpus의 **주변 분포** — 질의의 한쪽 항이 **아님** |
+
+⇒ §4-5 위험 3(관측 범위 비대칭)은 **문제가 아니다.** query는 국소여야 하고 corpus 통계는 전역이어야 한다.
+
+정보검색 비유가 정확하다 — `P_def` = query term 분포, `P_clean` = document frequency. SGM은 `query × DF`이며 **TF-IDF와 반대 방향**이다. IDF 논리대로면 나눠야 한다: `lift(k,c) = P_def / P_clean`.
+
+**실측 — SGM 순위와 lift 순위가 직교한다** (Spearman, cluster별 범위):
+
+| 데이터셋 | Spearman(lift, `ctx_prior`) |
+|---|---|
+| severstal | −0.084 ~ +0.121 |
+| aitex | −0.256 ~ +0.049 |
+| mtd | −0.276 ~ +0.040 |
+| kolektor | −0.272 ~ +0.101 |
+| mvtec_leather | −0.077 ~ +0.008 |
+
+severstal k=1 개별 cell(§5-3과 같은 대상):
+
+| cell | `P_def` | `P_clean` | **lift** | lift 순위 | `ctx_prior` 순위 |
+|---|---|---|---|---|---|
+| `0_0_0_1_0` | 0.15857 | 0.051667 | 3.07 | 11 | 1 |
+| `1_1_0_2_2` | 0.01919 | 0.052596 | **0.37** | **161** | **3** |
+| `1_0_2_1_1` | 0.00445 | 0.000539 | **8.26** | **2** | **92** |
+
+`1_1_0_2_2`는 결함 쪽에 정상보다 **덜** 흔한데(lift 0.37) SGM이 3위로 올리고, `1_0_2_1_1`은 cluster 1에 가장 특이한 표면인데(lift 8.26, 2위) 92위로 내린다. 노이즈 아니다 — 각각 결함 ~365 / clean ~318 패치.
+
+**`P_clean`의 위치가 뒤바뀌어 있다:**
+
+| 단계 | 가용성 항이 정당한가 | 현재 |
+|---|---|---|
+| ROI 후보 열거 | **정당** — pool에 없는 cell 추천은 슬롯 낭비 | legacy `matrix`, SGM 미적용 |
+| 배치(§6) | **부당** — 타일이 이미 손에 있어 가용성 확보됨 | SGM 적용 |
+
+도입 경위상 검증된 lever는 `P_def` patch-gran화(support 확장)와 max-norm(τ 정합)이며, **`P_clean` 곱셈 자체의 기여는 분리 입증되지 않았다**(`aroma_compat_gate_clean-grounded_redesign.md` §3-1·§5-2).
+
+대안 4안(`P_def` 단독 / lift / cluster-특이 lift / 역할 분리)과 각 trade-off는 패치 노트 §2-5. **lift 채택 시 중립점이 1.0으로 정의되어 §5-7(b)의 neutral 0.5 자의성도 함께 해소된다.**
 
 ---
 
@@ -840,6 +892,8 @@ cv2 dtype 버그를 고치면 §6-1 표대로 `void@0.7`이 98~100%가 되어 **
 
 **같은 기호가 서로 다른 스케일·다른 관측 단위의 값을 가리킨다.** legacy는 결함 이미지 1장이 cell 1개에만 기여하므로 support가 결함 이미지 수로 상한되고, §2-5④에서 인용한 192~197 / 22~60은 **SGM 쪽 수치**다.
 
+**이 분기는 사고가 아니라 의도된 설계다.** `aroma_compat_gate_clean-grounded_redesign.md` §4가 `roi_selection` 미전환을 명시하고 근거를 둘 든다 — (a) cluster당 ~191 cell로 candidate 폭증, (b) selection↔placement 직교 확인. 결론은 "**clean-grounding은 게이트 전용**". 다만 §5-8은 그 결정이 가용성 항을 가장 부당한 쪽(배치)에만 남겼다고 본다.
+
 논문에서 "선택과 배치가 같은 `ctx_prior`를 쓴다"로 읽히면 부정확하다. 활성화 조건도 다르다 — 배치 쪽은 `--compat_threshold > 0` **AND** `--compat_mode symmetric`(둘 다 기본 OFF: `0.0` / `"defect"`)일 때만 동작하고, ROI 선택 쪽은 항상 legacy를 읽는다.
 
 **미확인 사항**: 실제 실험 실행 커맨드의 `--strategy` / `--compat_mode` / `--compat_threshold` 조합. 결과 해석 전 확인 필요.
@@ -879,13 +933,15 @@ cv2 dtype 버그를 고치면 §6-1 표대로 `void@0.7`이 98~100%가 되어 **
 18. **neutral 0.5는 중립이 아니라 관대하다** — §5-7(b). 관측 cell의 85~99%가 0.5 미만(severstal median 0.027)이라 미관측 타일이 footprint 평균을 끌어올린다. 런타임 조우율 severstal 0.1% / **aitex 최대 63.7%**. "미관측 = 중립"으로만 서술하면 편향 규모를 감춘다.
 19. **대칭 항의 효과는 데이터셋 의존** — §5-6. severstal Spearman 0.97(거의 무변화) vs leather 0.72(최대 105계단 재배치). "대칭이 순위를 바로잡는다"를 severstal 결과로 뒷받침할 수 없다.
 20. **severstal에서 `ctx_prior`는 `k`를 거의 구분하지 못한다** — §4-4. cluster 행 간 log `P_def` 상관 0.956~0.991. 어느 cluster를 붙이든 같은 자리를 추천한다. "결함 형태별로 적합한 배경을 고른다"는 aitex(r=0.07~0.71)에서는 성립하나 **severstal에서는 실증되지 않는다.**
-21. **`P_def` 계수 범위가 연구 의도와 어긋난다 (미해결)** — §4-5. 의도는 결함 국소 배경, 구현은 이미지 전역 배경. 학습(전역 ~95타일)–추론(footprint 6타일) 스케일 불일치. 개선 전까지 §3.2.4를 "결함 주변 컨텍스트"로 서술하면 안 된다.
+21. **`P_def` 계수 범위가 연구 의도와 어긋난다 (미해결)** — §4-5. 의도는 결함 국소 배경, 구현은 이미지 전역 배경. 학습(전역 ~95타일)–추론(footprint 6타일) 스케일 불일치. 개선 전까지 §3.2.4를 "결함 주변 컨텍스트"로 서술하면 안 된다. → `.claude/.dev_note/aroma_ctxprior_localization_and_normalization.md`
+22. **`P_clean` 곱셈이 매칭 논리가 아니다 (미해결)** — §5-8. `P_def`/`P_clean` = lift 순위와 `ctx_prior` 순위의 Spearman이 −0.28 ~ +0.12로 직교. 도입 경위상 검증된 lever는 patch-gran화·max-norm이고 곱셈 자체의 기여는 분리 입증되지 않았다. "결함 특징에 맞는 배경을 찾는다"로 서술할 근거가 현행 식에는 없다. → 동일 패치 노트 §2
 
 ---
 
 ## 10. 관련 문서
 
 - **`Article/figure/script/[figure 3.2.4 2] placement_footprint.py`** — §6 시각화 생성 스크립트(운영 함수 import). 출력 `Article/figure/image/[figure 3.2.4 2] placement_footprint.png`, 사양 `.../script/[figure 3.2.4 2] placement_footprint.md`
+- **`.claude/.dev_note/aroma_ctxprior_localization_and_normalization.md`** — 🔧 **§4-5 + §5-8 착수 패치 노트.** `P_def` 계수 범위 국소화(개선안 A1~A4) + 정규화 형태 재검토(B1~B4), 순서 의존·위험·미확인 사항 정리
 - **`.claude/.dev_note/aroma_cleanbg_gate_cv2_dtype_failopen.md`** — §6-1 void 게이트 무력화 결함 상세·수정 시 결정 사항
 - `.claude/.dev_note/aroma_compat_gate_clean-grounded_redesign.md` — SGM + patch-granularity 재설계(본 모델의 도입 경위), τ 사전스캔
 - `.claude/.dev_note/aroma_table3_background_descriptor_definitions.md` — Table 3 지표 정의, `background_type` 미실행 발견
