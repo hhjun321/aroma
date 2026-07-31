@@ -2,7 +2,9 @@
 
 > **목적**: AROMA의 기여가 집약된 `ctx_prior(k, c) ∝ √(P_def(k, c) · P_clean(c))`가 **무엇을 세어 어떻게 확률이 되는지**를 코드·실측 기준으로 정리한다. 논문 §3.2.2·§3.2.4 서술의 근거 문서이며, 설명 시 이 문서를 중심으로 삼는다.
 >
-> **작성**: 2026-07-29. 코드 = `scripts/distribution_profiling.py`, `scripts/aroma/generate_defects.py`. 실측 = `D:/project/aroma_dataset/profiling/profiling/<ds>/`(로컬 미러, Colab Drive `sym_final/profiling`과 동일 버전 확인됨).
+> **작성**: 2026-07-29. 코드 = `scripts/distribution_profiling.py`, `scripts/aroma/generate_defects.py`, `scripts/aroma/roi_selection.py`. 실측 = `D:/project/aroma_dataset/profiling/profiling/<ds>/`(로컬 미러, Colab Drive `sym_final/profiling`과 동일 버전 확인됨).
+>
+> **개정 2026-07-31**: §4-1~§4-4(`P_def` 관측 범위·support 실측·원 카운트·**cluster 무차별성**), **§4-5 개선 제안**(`P_def` 계수 범위를 결함 국소로 — 미구현), §5 본문(교환 대칭·기하평균 선택 근거), §5-1~§5-7(역할 분담·재순위 실측·ε 발동 규모·기여 균등 검증·효과 크기 데이터셋 의존·**`S_k` 비대칭과 neutral 0.5 편향**), §6-1(void 게이트 fail-open), §6-2(배경 이미지 선택은 히스토그램 교집합), **§7 신설**(legacy `matrix` vs `matrix_symmetric` 소비 경로 분기) 추가. 정직성 11~19 추가. 이에 따라 구 §7→§8, §8→§9, §9→§10.
 
 ---
 
@@ -326,6 +328,123 @@ $$P_{\text{clean}}(c) = \frac{n_{\text{clean}}(c)}{\sum_{c'} n_{\text{clean}}(c'
 
 **두 granularity의 접합점이 여기다.** 패치가 개별적으로 `k`로 분류되는 게 아니라 **소속 이미지의 `k`를 물려받는다**. 따라서 `P_def(k, c)`는 "cluster `k` 결함이 **어떤 배경 위에 놓여 있었는가**"의 분포이며, 결함 픽셀의 분포가 아니다.
 
+`P_clean`은 `k`에 무관하므로 **모든 cluster 행에 같은 열 가중**이 걸린다. "clean-grounded"의 grounding이 이것이다.
+
+### 4-1. ⚠ `P_def`가 재는 것 — 오해 4건
+
+**① 결함 국소 이웃이 아니라 이미지 전역 배경이다.**
+severstal 1600×256 이미지 1장의 배경 패치 ~98개가 **전부 같은 `k`**를 상속한다. 결함이 좌측 끝에 있어도 우측 끝 패치까지 `P_def(k, ·)`에 들어간다. "결함 주변 배경"이 아니라 "결함이 있던 이미지의 배경 전체" — **국소성이 없다.**
+AITeX 타일(256×256, 16패치)은 상대적으로 국소적이다. §2-5④의 *표본 밀도* 차이와 **별개의 의미 차이**다.
+
+🔧 **이 지점이 연구 의도와 어긋난다 — 개선 항목 §4-5 참조.** ROI 배치 기준은 결함 국소 배경이어야 한다.
+
+**② 이미지 1장 1표가 아니라 배경 면적 비례다.**
+결함이 큰 이미지는 제외되는 패치가 많아 기여가 작아진다. 가중이 암묵적으로 배경 넓이에 비례한다.
+
+**③ 결함 형태 정보가 들어 있지 않다.**
+`k`는 라벨로만 들어온다. 분포 자체는 순수 배경 텍스처 통계다.
+
+**④ cluster 배정이 없으면 통째로 드롭된다.**
+`if cid is None: continue`(`:595-596`). morph 행이 없는 결함 이미지(마스크 부재·처리 실패)의 배경 패치는 **어느 `P_def`에도 들어가지 않는다**. §2-5①의 미참조 마스크 214건과는 별개 경로다.
+
+### 4-2. 실측 support (2026-07-31)
+
+`compatibility_matrix.json` 직접 계수:
+
+| 데이터셋 | `clean_dist` cell | `P_def_patch` cell (cluster별) | 정규화 검산 |
+|---|---|---|---|
+| severstal | 208 | 195 / 196 / 192 / 192 / 197 | 전부 합 1.0 |
+| kolektor | 242 | 132 / 186 / 203 / 191 / 105 | 〃 |
+| mtd | 216 | 187 / 166 / 166 / 168 / 116 | 〃 |
+| aitex | 128 | 37 / 22 / 60 / 23 / 60 | 〃 |
+| mvtec_leather | 191 | 147 / 180 / 154 | 〃 |
+
+### 4-3. 확률값의 원 카운트 — severstal `0_0_0_1_0`
+
+`context_features.csv` + `morphology_clusters.json`에서 `_build_symmetric`을 재현한 결과(§5-2 값과 일치):
+
+| | 분자 | 분모 | 분모 정체 |
+|---|---|---|---|
+| `P_clean(c)` | 30,494 | **590,200** | normal **5,902장 × 100패치** (1600×256 → 25×4 격자, 제외 0) |
+| `P_def(1, c)` | 13,007 | **82,025** | cluster 1 결함 **859장**의 배경 패치 |
+
+859 × 100 = 85,900 중 **3,875개(4.5%)가 결함 과반 타일로 제외**됐다(이미지당 평균 95.5 배경 패치). ⇒ severstal 결함이 프레임의 약 4.5%를 덮는다.
+
+`c = 0_0_0_1_0` = `local_variance` 하위 / `edge_density` 하위 / `texture_entropy` 하위 / `frequency_energy` 중간 / `orientation_consistency` 하위 = **매끈하고 특징 없는 강판 면**. 243칸 균등이면 0.41%인데 `P_clean = 5.17%` — **12.6배 과대표**, 정상 강판의 지배적 텍스처다.
+
+### 4-4. ⚠ `P_def`가 cluster를 거의 구분하지 못한다 (severstal)
+
+같은 cell `0_0_0_1_0`에서 5개 cluster 전부:
+
+| k | `P_def(k, c)` | 이미지 | 배경 패치 | `P_def / P_clean` |
+|---|---|---|---|---|
+| 0 | 0.146049 | 522 | 49,141 | 2.83 |
+| **1** | **0.158574** | 859 | 82,025 | **3.07** |
+| 2 | 0.072370 | 861 | 85,229 | 1.40 |
+| 3 | 0.071595 | 438 | 41,176 | 1.39 |
+| 4 | 0.101137 | 940 | 88,998 | 1.96 |
+
+**전부 1보다 크다.** "cluster 1 결함이 매끈한 배경을 선호한다"가 아니라 **"severstal 결함 이미지 전반이 정상 이미지보다 배경이 매끈하다"**에 가깝다 — pool 수준 편향이지 결함 형태별 신호가 아니다.
+
+cluster 행끼리의 log `P_def` 상관으로 확장 측정:
+
+| 데이터셋 | min | median | max |
+|---|---|---|---|
+| **severstal** | **0.956** | **0.973** | **0.991** |
+| mvtec_leather | 0.890 | 0.890 | 0.958 |
+| kolektor | 0.451 | 0.741 | 0.849 |
+| mtd | 0.507 | 0.632 | 0.795 |
+| **aitex** | **0.070** | **0.330** | 0.709 |
+
+severstal은 5개 행이 사실상 같은 분포다(r ≈ 0.97). ⇒ **`ctx_prior(k, c)`가 `k`에 거의 의존하지 않는다.** 어느 cluster를 붙이든 같은 자리를 추천한다.
+
+원인은 §4-1①과 직결된다 — `P_def(k, ·)`가 이미지 **전역** 배경이고 severstal 이미지 1장이 평균 26.8 cell에 흩어지므로, cluster별 차이가 이미지 전체 배경 통계에 희석된다. AITeX(r = 0.07~0.71)는 타일 단위라 cluster별로 뚜렷이 갈린다.
+
+**§3.2.4를 "결함 형태별로 적합한 배경을 고른다"로 서술하면 severstal에서는 실증되지 않는다.** §5-6(대칭 효과가 severstal에서 가장 약함)과 같은 방향의 발견이다.
+
+### 4-5. 🔧 개선 필요 — `P_def`의 계수 범위를 결함 주변으로 좁혀야 한다
+
+> **상태: 미구현 / 설계 제안.** 본 연구의 의도와 현행 구현이 어긋나는 지점이라 개선 항목으로 기록한다.
+
+#### 연구 의도 vs 현행 동작
+
+본 연구에서 ROI 배치 기준은 **결함이 실제로 놓여 있던 국소 배경**이어야 한다. "이 형태의 결함은 이런 표면 위에 생긴다"가 `ctx_prior`가 담아야 할 명제다.
+
+현행 `_context_worker`는 결함 이미지의 **모든 비-결함 패치**를 방출하고 `_build_symmetric`이 그것을 전부 그 이미지의 `k`로 계수한다. 결함이 좌측 끝에 있어도 1600px 반대편 패치까지 `P_def(k, ·)`에 들어간다. 그 결과가 §4-4의 cluster 무차별성이다.
+
+#### 학습–추론 스케일 불일치
+
+| 단계 | 관측 범위 |
+|---|---|
+| 학습 (`P_def` 계수) | 이미지 **전역** 배경 (severstal ~95 타일) |
+| 추론 (§6 3단계 판정) | crop **footprint** (160×96 → **6 타일**) |
+
+같은 `ctx_prior`를 두 스케일에서 쓴다. 전역 통계로 학습한 값을 6타일 국소 질의에 적용하는 구조다.
+
+#### 개선안
+
+| 안 | 계수 대상 | 비고 |
+|---|---|---|
+| A. 반경 링 | 결함 bbox를 `R`만큼 팽창한 영역과 겹치는 배경 타일 | `R = _COMPAT_TILE`(1링)이 최소안 |
+| B. 인접 타일만 | bbox에 접하는 8-이웃 타일 | 가장 좁음, 표본 급감 |
+| C. 거리 가중 | 전 배경 타일을 쓰되 결함 중심거리로 감쇠 가중 | 표본 유지, hard cut 없음 |
+| **D. footprint 정합** | **결함 bbox 크기의 창을 결함 중심에 두고 그 안의 배경 타일** | **추론 스케일과 일치 — 권장** |
+
+D가 §6 3단계의 판정 단위와 정확히 맞물린다. §2-1의 "측정 대상 불일치"(형태=최대 blob / crop=전 blob)와 같은 계열의 정합 문제다.
+
+#### 구현 메모
+
+- `_context_worker`는 이미 `patch_xy`를 방출한다(`:387`). 결함 bbox는 `morphology_features.csv`의 `defect_bbox`에 있다 → **거리/포함 판정에 필요한 정보가 이미 산출돼 있다.**
+- `_build_symmetric`에 반경 파라미터를 추가하는 방식이면 legacy `matrix` 경로와 분리된 채 additive로 갈 수 있다(현행 SGM 도입 방식과 동일).
+- 재-profiling 필요. `matrix_symmetric`만 바뀌므로 `--compat_mode defect` 경로는 무영향.
+
+#### 예상 효과·위험
+
+- **효과**: cluster 행 간 상관이 내려가 `k` 조건화가 실제로 작동. severstal r ≈ 0.97 → 하락 기대.
+- **위험 1**: 표본 급감. severstal k1 82,025 → 1링이면 이미지당 ~10-20 타일 수준으로 축소. support cell 수(현 192~197)도 감소.
+- **위험 2**: AITeX는 이미 support 22~60으로 희소(§2-5④). 좁히면 §5-7(b)의 neutral 0.5 조우율(현 14~64%)이 더 악화될 수 있다. **데이터셋별 사전 스캔 후 반경 확정 필요.**
+- **위험 3**: `P_clean`은 정상 이미지에 결함이 없어 같은 방식으로 좁힐 수 없다 → 두 항의 관측 범위가 비대칭이 된다(결함 국소 vs 정상 전역). 이 비대칭을 허용할지 별도 판단 필요.
+
 ---
 
 ## 5. SGM — 기하평균·support·정규화
@@ -348,7 +467,33 @@ $$\text{ctx\_prior}(k, c) = \frac{\sqrt{(P_{\text{def}}(k,c)+\varepsilon)(P_{\te
 
 **대칭성의 의미**: 결함 쪽엔 흔하지만 clean에는 드문 cell이 그 **반대와 동등하게 감점**된다. 이 점이 결함-조건부 빈도 `P_def` 단독과 다른 지점이다.
 
-### 실측 예시 — Severstal cluster 1
+엄밀히는 **교환 대칭** `f(a,b) = f(b,a)`다. `(P_def=0.100, P_clean=0.001)`과 `(P_def=0.001, P_clean=0.100)`이 정확히 같은 raw 값을 받는다. log를 취하면 구조가 드러난다:
+
+$$\log \text{SGM} = \tfrac{1}{2}\log(P_{\text{def}}+\varepsilon) + \tfrac{1}{2}\log(P_{\text{clean}}+\varepsilon)$$
+
+**log 공간의 균등가중 산술평균** — 두 항이 정확히 반반이다.
+
+왜 기하평균인지는 대안과 비교하면 분명하다:
+
+| 결합 | 교환 대칭 | 한쪽이 0에 가까울 때 |
+|---|---|---|
+| 산술평균 `(a+b)/2` | ○ | 다른 쪽이 크면 **살아남음** — 감점이 안 됨 |
+| `min(a, b)` | ○ | 완전 붕괴 — 큰 쪽 정보를 전부 버림 |
+| **기하평균 `√(ab)`** | ○ | **곱셈적 감점** — 붕괴하되 큰 쪽 정보는 보존 |
+| `P_def` 단독 | ✗ | clean 희소성을 무시 |
+
+⚠ 단, 이 대칭은 **support 안에서만** 성립한다. `S_k`의 정의가 비대칭이라 밖에서는 깨진다 — §5-7.
+
+### 5-1. 두 항의 역할 분담
+
+| 항 | 묻는 것 |
+|---|---|
+| `P_def(k, c)` | **적합성** — 이 cluster 결함이 놓여 있을 법한 배경인가 |
+| `P_clean(c)` | **가용성** — 실제로 붙일 clean pool에 그런 자리가 존재하는가 |
+
+기하평균이라 한쪽이 작으면 전체가 죽는다. `P_def` 단독이면 "결함 이미지엔 흔하지만 clean pool엔 없는 자리"를 1순위로 추천해 **붙일 데가 없고**, `P_clean` 단독이면 그냥 텍스처 빈도표라 **결함 정보가 사라진다.**
+
+### 5-2. 실측 예시 — Severstal cluster 1 peak
 
 | 항목 | 값 |
 |---|---|
@@ -358,15 +503,127 @@ $$\text{ctx\_prior}(k, c) = \frac{\sqrt{(P_{\text{def}}(k,c)+\varepsilon)(P_{\te
 | 정규화 전 SGM | `√((0.158574+1e-3)(0.051667+1e-3))` = 0.091675 |
 | 행 정규화 후 | **1.0000** |
 
+### 5-3. 대칭이 실제로 순위를 바꾼다 (severstal k=1, 실측 2026-07-31)
+
+peak 하나만 보면 `P_def` 최대 = `ctx_prior` 최대라 대칭의 효과가 안 드러난다. 2위 이하에서 갈린다:
+
+| cell | `P_def` | `P_clean` | `ctx_prior` | `P_def` 순위 → `ctx_prior` 순위 |
+|---|---|---|---|---|
+| `0_0_0_1_0` | 0.15857 | 0.05167 | **1.0000** | 1 → 1 |
+| `0_0_0_2_0` | 0.02683 | 0.04649 | 0.3966 | 4 → **2** ↑ |
+| `1_1_0_2_2` | 0.01919 | **0.05260** | 0.3588 | 7위권 → **3** ↑↑ |
+| `0_0_2_0_1` | 0.03249 | 0.03089 | 0.3565 | 2 → 4 ↓ |
+| `2_2_1_2_2` | 0.02789 | 0.02358 | 0.2907 | 3 → 5 ↓ |
+
+최대 강등 3건:
+
+| cell | `P_def` | `P_clean` | 순위 |
+|---|---|---|---|
+| `1_0_2_1_1` | 0.00445 | **0.000539** | 52 → **91** (−39) |
+| `1_0_1_1_0` | 0.00182 | **0.000469** | 91 → 118 (−27) |
+| `2_1_2_1_1` | 0.00344 | 0.001201 | 62 → 88 (−26) |
+
+`1_1_0_2_2`는 결함 쪽 빈도가 평범한데 정상 표면에 흔해서 3위로 올라오고, `1_0_2_1_1`은 결함 쪽엔 관측됐지만 clean pool에 거의 없어 39계단 내려간다. **"결함 옆에 자주 있었다"만으로는 부족하고 "정상 표면에도 흔한 자리"여야 점수가 유지된다.**
+
+### 5-4. `P_clean = 0` 케이스 — ε이 실제로 일하는 지점
+
+`S_k`는 `P_def > 0`으로만 정의되므로, support 안에 있으면서 `P_clean(c) = 0`인 cell이 생길 수 있다. 그 경우 SGM = `√((p_def+ε)·ε)`로 붕괴하고, **ε이 없으면 정확히 0**이다.
+
+데이터셋별 발생 건수(실측 2026-07-31):
+
+| 데이터셋 | clean cell | cluster별 *clean support 밖* `P_def` cell 수 |
+|---|---|---|
+| severstal | 208 | 0 / 0 / 0 / 0 / 0 |
+| kolektor | 242 | 0 / 0 / 0 / 0 / 1 |
+| mtd | 216 | 1 / 1 / 3 / 3 / 0 |
+| aitex | 128 | 0 / 0 / 3 / 3 / 2 |
+| **mvtec_leather** | 191 | **5 / 5 / 6** |
+
+severstal은 0건 — `P_def` support가 clean support에 완전히 포함된다. leather가 가장 많다(§6-1의 leather washout·포화와 같은 방향).
+
+⇒ ε의 실질 역할은 "0-붕괴 방지"이며, **그 발동이 데이터셋별로 0~6 cell 수준**이다. §9 정직성 7번(하드코딩 상수)을 방어할 때 이 규모를 함께 제시할 수 있다.
+
+### 5-5. 실측 — 두 항의 기여가 정말 균등한가 (2026-07-31)
+
+기하평균은 log 산술평균이므로 **log 변동폭이 큰 쪽이 순위를 지배**한다. support 내에서 측정:
+
+| 데이터셋 | `sd log P_def` / `sd log P_clean` | corr(log ctx, log P_def) | corr(log ctx, log P_clean) |
+|---|---|---|---|
+| severstal | 0.98 ~ 1.03 | 0.964 ~ 0.972 | 0.962 ~ 0.972 |
+| mtd | 0.88 ~ 1.13 | 0.898 ~ 0.957 | 0.868 ~ 0.959 |
+| kolektor | 0.76 ~ 1.05 | 0.792 ~ 0.977 | 0.886 ~ 0.978 |
+| aitex | 0.83 ~ 1.19 | 0.813 ~ 0.937 | 0.846 ~ 0.942 |
+| mvtec_leather | 1.01 ~ 1.04 | 0.820 ~ 0.850 | 0.814 ~ 0.841 |
+
+비율이 전부 1 근처이고 두 상관계수가 거의 같다. ⇒ **어느 한쪽도 순위를 지배하지 않는다.** "동등하게 감점"이 형식뿐 아니라 실측으로도 성립한다.
+
+### 5-6. 대칭의 *효과 크기*는 데이터셋 속성에 좌우된다
+
+대칭이 성립하는 것과 대칭이 무언가를 바꾸는 것은 다르다. `P_def` 단독 순위 대비:
+
+| 데이터셋 | corr(log `P_def`, log `P_clean`) | Spearman(`P_def`, `ctx_prior`) | 평균 \|Δrank\| | 최대 \|Δrank\| |
+|---|---|---|---|---|
+| severstal | **0.855 ~ 0.889** | 0.966 ~ 0.970 | ~10 / 195 | 57 |
+| kolektor k1~k3 | 0.895 ~ 0.911 | 0.965 ~ 0.969 | ~10 / 190 | 54 |
+| mtd | 0.561 ~ 0.836 | 0.844 ~ 0.944 | ~14 / 170 | 74 |
+| aitex k0 / k3 | **0.429 / 0.430** | 0.792 / 0.817 | 5.6 / 3.4 | 15 / 8 |
+| **mvtec_leather** | **0.336 ~ 0.429** | **0.716 ~ 0.833** | **23 ~ 25 / 150** | **105** |
+
+⇒ **대칭 항의 기여도 = 결함 이미지 배경 분포와 정상 이미지 배경 분포가 얼마나 다른가.**
+
+- severstal은 두 pool이 같은 강판이라 배경 분포가 이미 닮았고(r ≈ 0.87) 대칭이 순위를 거의 안 바꾼다(Spearman 0.97).
+- leather는 두 분포가 크게 달라(r ≈ 0.37) 실질 재배치가 일어난다(Spearman 0.72, 최대 105계단).
+
+**대칭 항은 결함/정상 pool의 배경이 다른 데이터셋에서만 일한다.** §5-3의 severstal 재순위 예시는 그중 효과가 가장 약한 케이스임에 유의.
+
+### 5-7. ⚠ 대칭이 깨지는 지점 — `S_k` 정의와 neutral 0.5
+
+#### (a) support 정의 자체가 비대칭
+
+`S_k = {c : P_def(k,c) > 0}` — `P_clean`은 support 결정에 관여하지 않는다.
+
+| 상황 | 행렬에서 | 런타임 값 |
+|---|---|---|
+| `P_def > 0`, `P_clean = 0` | 행에 **있음**, `√((p+ε)·ε)` | ≈ 0 (최하위) |
+| `P_def = 0`, `P_clean > 0` | 행에 **없음** | `.get(cell, 0.5)` → **0.5** |
+
+두 경우가 전혀 동등하지 않다. 후자가 압도적으로 유리하다. **"반대와 동등하게 감점"은 support 안에서만 참이다.**
+
+#### (b) neutral 0.5는 중립이 아니라 관대하다
+
+행 max 정규화 때문에 1.0은 정의상 1개뿐이고 나머지는 급락한다. 실측:
+
+| 데이터셋 | row median `ctx_prior` | `ctx_prior < 0.5` 비율 | **런타임 조우율** (clean 확률질량이 row 밖) |
+|---|---|---|---|
+| severstal | 0.037 | 98 ~ 99% | **0.0 ~ 0.1%** |
+| mvtec_leather | 0.053 | 98% | 0.9 ~ 11.8% |
+| mtd | 0.141 | 90 ~ 94% | 0.8 ~ **23.3%** (k4) |
+| kolektor | 0.265 | 85 ~ 94% | 1.8 ~ **25.0%** (k4) |
+| **aitex** | 0.053 | 90 ~ 95% | **14.2 ~ 63.7%** |
+
+severstal k1: 관측 196 cell 중 **195개가 0.5 미만**(median 0.027). 행에 없는 clean cell 12개는 런타임에 0.5를 받아 **관측 195개 중 194개보다 높은 점수**가 된다.
+
+⇒ `_positive_place`의 footprint 평균에서 **미관측 타일 1개가 관측 타일 여러 개를 압도**한다(0.5 vs median 0.027 ≈ 18배). 배치가 "결함 이미지에서 한 번도 관측되지 않은 배경" 쪽으로 끌린다 — **의도와 반대 방향**이다.
+
+심각도는 조우율에 비례한다:
+
+- **severstal 안전**(0.0~0.1%) — support가 clean 공간을 사실상 덮는다
+- **aitex 심각**(최대 63.7%) — k3는 clean 패치 확률질량의 2/3가 미관측 cell에 떨어져 0.5를 받는다. §2-5④에서 AITeX가 "관측 cell 전멸거부 + neutral fallback 수락"으로 분류된 것의 정량 근거
+- mtd k4·kolektor k4(23~25%), leather k0/k2(10~12%)도 무시할 수 없다
+
+§6 2단계의 "미관측 cell은 거부가 아니라 중립 0.5다" 한 줄이 실제로는 이 규모의 편향을 뜻한다. **τ 값에 따라 배치 결과가 뒤집힐 수 있으므로 별건 검토 대상.**
+
 ---
 
 ## 6. 배치 — `ctx_prior`가 실제 좌표로 바뀌는 5단계
 
 `_positive_place`(`generate_defects.py:888-1030`). **판정 단위는 cell이 아니라 crop footprint다.** 같은 cell 위에 놓인 두 후보라도 crop이 함께 덮는 이웃 타일이 달라 점수가 갈린다.
 
-![위치 결정 5단계](fig_placement_footprint_severstal.png)
+> **범위 주의**: 본 절은 "**이미지 한 장 안에서 어디**"만 다룬다. 그 앞 단계인 "**어느 normal 이미지**"는 `ctx_prior`를 쓰지 않는다 — §6-2 참조.
 
-> 생성: `fig_placement_footprint.py` — 운영 함수(`_extract_context_features`/`_context_cell_key`/`_is_clean_background`/`_tile_anchors`)와 상수(`_COMPAT_TILE`/`_POS_STRIDE`/`_POS_TOPK`)를 직접 import(재구현 금지). 대상 = severstal normal `00031f466`, cluster 1, crop 160×96.
+![위치 결정 5단계](Article/figure/image/%5Bfigure%203.2.4%202%5D%20placement_footprint.png)
+
+> 생성: `Article/figure/script/[figure 3.2.4 2] placement_footprint.py` — 운영 함수(`_extract_context_features`/`_context_cell_key`/`_is_clean_background`/`_tile_anchors`)와 상수(`_COMPAT_TILE`/`_POS_STRIDE`/`_POS_TOPK`)를 직접 import(재구현 금지). 대상 = severstal normal `00031f466`, cluster 1, crop 160×96.
 
 ### 1단계 — 후보 격자 열거
 
@@ -493,19 +750,114 @@ severstal·mtd·aitex는 11~23%로 합리적, leather 99.6%는 포화(가죽 표
 
 과거 devnote에 게이트가 작동한 실측이 있으므로(검은배경 9.1%→6.0%, `aroma_exp4v2_foreground-void-rejection.md`), **cv2 업그레이드 시점 이후 조용히 죽은 것**으로 보인다. 결과 재현성에 직결되므로 별도 dev_note로 분리 처리한다.
 
+### 6-2. 그 앞 단계 — 어느 normal을 쓸지는 `ctx_prior`가 정하지 않는다
+
+§6 1~5단계는 "이미지 한 장 **안에서** 어디"다. 그보다 앞에 "**어느 이미지**"가 있고, **여기엔 compat 행렬 값이 쓰이지 않는다.**
+
+배경 선택 우선순위 3단(`generate_defects.py:3199-3260`):
+
+| 순위 | 경로 | 기준 | compat 값 사용 |
+|---|---|---|---|
+| 1 | `clean_bg_selected.json` 사전계산 pool | `clean_bg_selection.py` 별도 산출(roi_idx 조인, `image_id` 불일치 시 폐기) | ✗ |
+| 2 | image-rank (`image_rank_on`) | **히스토그램 교집합** — 아래 | ✗ |
+| 3 | `rng.choice(normal_images)` | 균일 추첨 | ✗ |
+
+#### 기준 = cell 분포 유사도 (배경 ↔ 배경)
+
+```python
+_sim = _hist_intersection(_p_dv, _p_clean)          # :3246
+_sel = _rank_normals(_scored, rng, _NORMAL_TOPK)    # :3253  top-16 추첨
+```
+
+| 항목 | 정의 |
+|---|---|
+| `p_dv` | **소스 결함 이미지의 배경** cell 히스토그램(`_dv_bg_hist:1174`). 결함 타일 제외 — mask>0.5, 없으면 bbox 과반 겹침(`_context_worker` 규칙 미러) |
+| `p_clean` | clean 이미지의 non-void cell 히스토그램(`_cell_hist:1152` over `_normal_tile_cells:1033`) |
+| 유사도 | `_hist_intersection = Σ_c min(p[c], q[c])` ∈ [0,1] (`:1284`) |
+| 선택 | 내림차순 정렬 → **top-16**(`_NORMAL_TOPK`) rng 추첨. stage-2 re-pick pool도 top-16으로 좁힘 |
+| 샘플링 | stride 64, **cap 64 타일/이미지** — 초과 시 stride 2배씩(좌상단 편향 방지) |
+
+**`compat_row`를 한 번도 읽지 않는다.** 공유하는 것은 `bin_edges`와 cell 어휘뿐이다. 즉 `ctx_prior`(결함 cluster × 배경 cell)가 아니라 **배경 대 배경** 분포 유사도다.
+
+#### 왜 compat 평균이 아닌가
+
+이전 티어는 normal을 cluster에 대한 **mean compat**으로 점수 매겼다(`_image_compat_score:1111`). 주석 `:778-791`이 교체 이유를 명시한다 — cluster는 결함 형태 군집이지 배경 유형이 아니고, 평균이 외양 이질성을 뭉갠다. **mean-compat이 비슷하다고 배경이 닮은 것이 아니다.** 그래서 분포 비교로 교체했다.
+
+⚠ `_image_compat_score`는 **정의만 남고 런타임 호출이 없다**(호출부는 `.claude/.etc/positive_place_viz/` 스모크·시각화 스크립트뿐). 코드를 읽고 "이미지 순위도 compat으로 매긴다"고 서술하면 틀린다.
+
+⇒ 두 단계가 서로 다른 신호를 쓴다: **소스 결함이 놓여 있던 배경과 닮은 배경을 고르고(§6-2), 그 안에서 cluster 호환 좌표를 고른다(§6 1~5단계).**
+
+#### 활성 조건 — §6과 동일
+
+`compat_matrix ≠ None` AND `bin_edges ≠ None` AND `compat_mode == "symmetric"` AND `compat_threshold > 0` AND cv2(`:3018-3024`). 하나라도 빠지면 균일 추첨으로 되돌아가고 rng 스트림이 legacy와 byte-identical하다.
+
+#### ⚠ §6-1 결함이 이 경로에도 걸린다
+
+`p_dv`·`p_clean` 둘 다 void 타일을 빼도록 설계됐으나 `_is_clean_background`가 fail-open이라 **현재 아무 것도 빠지지 않는다.**
+
+임계 비대칭도 있다:
+
+| 히스토그램 | void 판정 `min_quality` |
+|---|---|
+| `p_dv` (`_dv_bg_hist:1268`) | **0.7 하드코딩** |
+| `p_clean` (`_normal_cells_for:3054`) | `min_bg_quality` — 운영 **0.5** |
+
+cv2 dtype 버그를 고치면 §6-1 표대로 `void@0.7`이 98~100%가 되어 **`p_dv`가 대부분 `{}`가 되고 → `image_rank`가 통째로 균일 추첨으로 폴백**한다. 수정 시 이 경로의 임계까지 함께 재산정해야 한다.
+
 ---
 
-## 7. 논문 대응 위치
+## 7. ⚠ 소비 경로 — 행렬이 2개고 소비처가 갈린다
+
+`compatibility_matrix.json`에는 **서로 다른 두 행렬**이 들어 있고, 파이프라인 단계마다 다른 쪽을 읽는다. 문서 §4~§6이 기술하는 것은 `matrix_symmetric`뿐이다.
+
+### 7-1. 파일 안의 두 행렬
+
+| 키 | 산출 방식 | 관측 단위 | 정규화 | 스케일 | 코드 |
+|---|---|---|---|---|---|
+| `matrix` (legacy) | 결함 이미지의 **패치 평균** context → 이미지당 cell 1개 → 카운트 → `P(cell\|k)` | 이미지 1장 = cell **1개** | 행 합 = 1 (확률) | max 보통 <0.2 | `:995-1013` |
+| **`matrix_symmetric`** (SGM) | 패치 개별 계수 + clean 접합 기하평균 (§4·§5) | **64px 패치** | 행 **max = 1** | [0, 1] | `_build_symmetric` |
+| `clean_dist` / `P_def_patch` / `symmetric_epsilon` | SGM 재료·provenance | 패치 | 합 = 1 | — | 〃 |
+
+**두 스케일은 호환되지 않는다.** τ(`--compat_threshold`)는 symmetric의 max-normalized [0,1]을 전제로 캘리브레이션돼 있어, legacy raw 확률에 그대로 먹이면 전량 거부된다. 코드가 `compat_mode=symmetric`인데 키가 없으면 **hard-fail**시키는 이유다(`generate_defects.py:2959-2965`, silent fallback 금지).
+
+### 7-2. 단계별 소비처
+
+| 단계 | 코드 | 읽는 키 | 쓰임 |
+|---|---|---|---|
+| ROI 후보 생성·랭킹 | `roi_selection.py:429` | **`matrix`** (legacy) | `ctx_prior` → `ROI_score`; `--strategy compatibility`는 `0.6·ctx_prior + 0.4·morph_prior` |
+| deficit 분석 | `distribution_profiling.py:1056` | **`matrix`** (legacy) | `max(0, P(c\|good) − P(c\|k))`. roi_selection에 전달되나 현재 weight 0 (provenance) |
+| **합성 배치** | `generate_defects.py:2958` | **`matrix_symmetric`** (`--compat_mode symmetric`) | §6 — footprint 점수·τ 판정 |
+| 배경 이미지 선택 | `generate_defects.py:3238-3253` | **없음** (`bin_edges`만) | §6-2 — 히스토그램 교집합 |
+| 학습 JSONL | `build_train_jsonl.py:355` | 없음 (`roi_candidates.json` 경유) | `ctx_prior` MAX → `stability_score` |
+| clean-bg 사전선택 | `clean_bg_selection.py:142-146` | `bin_edges`만 | 자체 히스토그램 재구성 |
+
+### 7-3. 그래서 `ctx_prior`라는 이름이 두 산출을 가리킨다
+
+| 부르는 곳 | 실체 |
+|---|---|
+| §3.2.4 식(§5의 SGM) | `matrix_symmetric[k][c]` — 배치 게이트 전용 |
+| §3.2.5 `ROI_score`의 `ctx_prior` | `matrix[k][c]` — legacy 이미지평균 확률 |
+
+**같은 기호가 서로 다른 스케일·다른 관측 단위의 값을 가리킨다.** legacy는 결함 이미지 1장이 cell 1개에만 기여하므로 support가 결함 이미지 수로 상한되고, §2-5④에서 인용한 192~197 / 22~60은 **SGM 쪽 수치**다.
+
+논문에서 "선택과 배치가 같은 `ctx_prior`를 쓴다"로 읽히면 부정확하다. 활성화 조건도 다르다 — 배치 쪽은 `--compat_threshold > 0` **AND** `--compat_mode symmetric`(둘 다 기본 OFF: `0.0` / `"defect"`)일 때만 동작하고, ROI 선택 쪽은 항상 legacy를 읽는다.
+
+**미확인 사항**: 실제 실험 실행 커맨드의 `--strategy` / `--compat_mode` / `--compat_threshold` 조합. 결과 해석 전 확인 필요.
+
+---
+
+## 8. 논문 대응 위치
 
 | 문서 위치 | 대응 내용 |
 |---|---|
 | §3.2.2 | `k`(GMM/BIC 군집), `c`(P33/P66 tertile cell), Figure 3.2.2-1(군집 산점도·`P(k)`), Figure 3.2.2-2(context feature 분포·tertile 경계) |
-| §3.2.4 | `ctx_prior` 식·산출 설명, Figure 3.2.4-1(cluster × cell 히트맵), Figure 3.2.5-3(흐름도) |
+| §3.2.4 | `ctx_prior` 식·산출 설명, Figure 3.2.4-1(cluster × cell 히트맵), Figure 3.2.5-3(흐름도) — **`matrix_symmetric` 기준** (§7-3) |
+| §3.2.5 | `ROI_score`의 `ctx_prior` — **legacy `matrix` 기준** (§7-3) |
 | §3.2.3 | `defect_subtype`(Table 4/4b), `background_type`(Table 3) — **`ctx_prior`와 무관한 별개 축** |
 
 ---
 
-## 8. 서술 시 지켜야 할 정직성
+## 9. 서술 시 지켜야 할 정직성
 
 1. **`k`는 GT 클래스가 아니다** — §2-3 교차표(severstal·leather 모두 전 군집이 복수 클래스 혼재).
 2. **`c`는 개별 패치가 아니다** — §3-1 다대일, §3-2 평균 ~2,838 patches/cell.
@@ -518,12 +870,22 @@ severstal·mtd·aitex는 11~23%로 합리적, leather 99.6%는 포화(가죽 표
 9. **GMM 특징 중복·min-max 왜곡·라벨 부분 사영** — §2-4. 특히 **`k`를 cluster 라벨로 지칭하면 안 된다**(AITeX는 `linear_scratch` 군집이 2개, 서로 AR 5배 차이).
 10. **severstal 마스크 214건이 형태 통계에 진입하지 않는다** — §2-5①.
 11. **void 게이트가 현 환경에서 무력화돼 있다** — §6-1. cv2 4.13.0 dtype 예외 + fail-open. "clean-bg 게이트 항상 ON" 정책을 인용할 때 반드시 함께 밝혀야 한다.
+12. **`ctx_prior`는 배경 이미지 선택에 관여하지 않는다** — §6-2. "어느 normal"은 배경↔배경 히스토그램 교집합(`p_dv` vs `p_clean`), "어디에"만 `ctx_prior`다. `_image_compat_score`는 정의만 남고 런타임 미호출. "compat 행렬로 배경을 고른다"고 쓰면 틀린다.
+13. **`ctx_prior`가 두 산출을 가리킨다** — §7-3. 배치 게이트 = `matrix_symmetric`(패치 단위, max-norm [0,1]), ROI_score = legacy `matrix`(이미지평균 확률, max<0.2). 스케일도 관측 단위도 다르다. "선택과 배치가 같은 값을 쓴다"고 쓰면 틀린다.
+14. **`P_def`는 결함 국소 이웃이 아니라 이미지 전역 배경이다** — §4-1①. severstal 1600×256 이미지의 배경 패치 ~98개가 전부 같은 `k`를 상속한다. "결함 주변 컨텍스트"라고 쓰면 과장이다.
+15. **`P_def` 가중은 이미지 균등이 아니라 배경 면적 비례다** — §4-1②. 결함이 큰 이미지일수록 기여가 작다.
+16. **ε 발동 규모는 데이터셋별 0~6 cell** — §5-4. severstal 0건, leather 5~6건. 7번(하드코딩 상수) 방어 시 이 수치를 함께 제시하면 "순위 영향 제한적"이 실측으로 뒷받침된다.
+17. **대칭은 `S_k` 안에서만 성립한다** — §5-7(a). `P_def=0, P_clean>0` cell은 행에 없어 런타임 **0.5**, `P_def>0, P_clean=0` cell은 행에 있어 **≈0**. 전혀 동등하지 않다.
+18. **neutral 0.5는 중립이 아니라 관대하다** — §5-7(b). 관측 cell의 85~99%가 0.5 미만(severstal median 0.027)이라 미관측 타일이 footprint 평균을 끌어올린다. 런타임 조우율 severstal 0.1% / **aitex 최대 63.7%**. "미관측 = 중립"으로만 서술하면 편향 규모를 감춘다.
+19. **대칭 항의 효과는 데이터셋 의존** — §5-6. severstal Spearman 0.97(거의 무변화) vs leather 0.72(최대 105계단 재배치). "대칭이 순위를 바로잡는다"를 severstal 결과로 뒷받침할 수 없다.
+20. **severstal에서 `ctx_prior`는 `k`를 거의 구분하지 못한다** — §4-4. cluster 행 간 log `P_def` 상관 0.956~0.991. 어느 cluster를 붙이든 같은 자리를 추천한다. "결함 형태별로 적합한 배경을 고른다"는 aitex(r=0.07~0.71)에서는 성립하나 **severstal에서는 실증되지 않는다.**
+21. **`P_def` 계수 범위가 연구 의도와 어긋난다 (미해결)** — §4-5. 의도는 결함 국소 배경, 구현은 이미지 전역 배경. 학습(전역 ~95타일)–추론(footprint 6타일) 스케일 불일치. 개선 전까지 §3.2.4를 "결함 주변 컨텍스트"로 서술하면 안 된다.
 
 ---
 
-## 9. 관련 문서
+## 10. 관련 문서
 
-- **`fig_placement_footprint.py`** — §6 시각화 생성 스크립트(운영 함수 import). 출력 `fig_placement_footprint_severstal.png`
+- **`Article/figure/script/[figure 3.2.4 2] placement_footprint.py`** — §6 시각화 생성 스크립트(운영 함수 import). 출력 `Article/figure/image/[figure 3.2.4 2] placement_footprint.png`, 사양 `.../script/[figure 3.2.4 2] placement_footprint.md`
 - **`.claude/.dev_note/aroma_cleanbg_gate_cv2_dtype_failopen.md`** — §6-1 void 게이트 무력화 결함 상세·수정 시 결정 사항
 - `.claude/.dev_note/aroma_compat_gate_clean-grounded_redesign.md` — SGM + patch-granularity 재설계(본 모델의 도입 경위), τ 사전스캔
 - `.claude/.dev_note/aroma_table3_background_descriptor_definitions.md` — Table 3 지표 정의, `background_type` 미실행 발견
