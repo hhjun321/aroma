@@ -24,7 +24,9 @@
 | `[figure 3.2.2 4] context_cell.png` | §3.2.2 | Figure 3.2.2-4 | 64px 패치 → context cell 환산 4단계 |
 | `[figure 3.2.3 1 <ds>] morphology_distribution.png` | §3.2.3 | Figure 3.2.3-1 | defect morphology feature 분포 (5종) |
 | `[figure 3.2.4 1 <ds>] compatibility_heatmap.png` | §3.2.4 | Figure 3.2.4-1 | symmetric compatibility 히트맵 (5종) |
-| `[figure 3.2.4 2] placement_footprint.png` | §3.2.4 | Figure 3.2.4-2 | 위치 결정 5단계 / footprint mean-compat |
+| `[figure 3.2.4 2] placement_ring.png` | §3.2.4 | Figure 3.2.4-2 | ring 분포 매칭으로 붙일 좌표 결정 (4패널) |
+| ~~`[figure 3.2.4 2] placement_footprint.png`~~ | — | — | **대체됨 (2026-08-03).** footprint mean-compat / top-K 샘플 / τ 게이트를 설명했으나 채택안(`ring_sgm`)에서 그 세 요소가 사라졌다. 이력 보존용으로 남기되 본문 미인용 |
+| `[figure 3.2.4 3] bg_cue_decomposition.png` | §3.2.4 | Figure 3.2.4-3 | clean 배경 랭킹 4 cue 분해 + 데이터셋별 lift 가중치 |
 | `[figure 3.2.5 3] roi_selection_flow.png` | §3.2.5 | Figure 3.2.5-3 | ROI 선택·배치 흐름 |
 | `[figure 4.1 1] roi_coverage.png` | §4.1 | Figure 4.1-1 | ROI 커버리지 지표 |
 | `[figure 4.1 2] roi_bbox_qualitative.png` | §4.1 | Figure 4.1-2 | qualitative ROI placement |
@@ -70,4 +72,4 @@
 - 출력 경로는 `../image/`, 파일명은 위 표의 고정명. 샘플 stem 등 가변 요소를 파일명에 넣지 않는다
 - 운영 함수는 **import해서 호출**하고 재구현하지 않는다(값 불일치 방지). 중간량을 자체 계산해야 하면 최종값이 운영 함수 결과와 일치하는지 `assert`로 확인한다
 - 데이터 루트는 `AROMA_DATASET_ROOT`, 리포 루트는 `AROMA_REPO` 환경변수로 재지정 가능하게 한다
-- 라벨 언어는 영문이 기본. `[figure 3.2.2 3]`·`[figure 3.2.2 4]`·`[figure 3.2.4 2]` 3건은 현재 한글이며 영문 교체 대기(2026-07-31)
+- 라벨 언어는 영문이 기본. `[figure 3.2.2 3]`·`[figure 3.2.2 4]` 2건은 현재 한글이며 영문 교체 대기(2026-07-31). `[figure 3.2.4 2]`는 `placement_ring` 재제작으로 영문화 완료(2026-08-03)

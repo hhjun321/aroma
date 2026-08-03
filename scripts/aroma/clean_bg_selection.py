@@ -215,6 +215,20 @@ def load_inputs(profiling_dir: str, roi_dir: str) -> Dict[str, Any]:
         elif it == "defect":
             defect_rows.append(r)
 
+    # Defect tile occupancy (defect_tiles.py, optional). Present → the per-source
+    # query can be narrowed to the tiles ADJACENT to the defect instead of the
+    # whole image background. Absent → --adjacent_radius is rejected in run().
+    dt_path = pd / "defect_tiles.json"
+    defect_tiles: Dict[str, Any] = {}
+    defect_tiles_meta: Dict[str, Any] = {}
+    if dt_path.exists():
+        try:
+            blob = load_json(str(dt_path))
+            defect_tiles = blob.get("tiles", {}) or {}
+            defect_tiles_meta = blob.get("meta", {}) or {}
+        except Exception as exc:        # noqa: BLE001 - a bad cache must not kill the run
+            logger.warning("defect_tiles.json unreadable (%s) — localization unavailable", exc)
+
     return {
         "status": "ok",
         "compat": compat,
@@ -225,6 +239,8 @@ def load_inputs(profiling_dir: str, roi_dir: str) -> Dict[str, Any]:
         "defect_rows": defect_rows,
         "iid_to_class": iid_to_class,
         "iid_to_bbox": iid_to_bbox,
+        "defect_tiles": defect_tiles,
+        "defect_tiles_meta": defect_tiles_meta,
     }
 
 
@@ -501,6 +517,103 @@ def _class_edge_prior(iid_to_class, iid_to_bbox, src_dim_by_img,
     return prior, global_es
 
 
+# ---------------------------------------------------------------------------
+# §5-4 — (k, c) 기반 신호: 1단계 k_fit + 2단계 ring_sgm 자리 산출
+# (devnote aroma_adjacent_context_bg_selection.md §5-4, §6-9)
+# ---------------------------------------------------------------------------
+
+def _target_by_cluster(compat: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    """cluster k → L1 정규화한 matrix_symmetric[k] (목표 문맥 셀 분포).
+
+    논문 수식 무수정: matrix_symmetric(k,c) ∝ sqrt(P_def(k,c)·P_clean(c)) 를 지지집합
+    S_k 위에서 행 max 정규화한 값이다. 분포 매칭을 하려면 확률분포여야 하므로 L1 로
+    다시 정규화한다 — 단조 rescale 이라 행의 상대 형태는 바뀌지 않는다.
+
+    같은 목표를 두 단계가 공유한다:
+      1단계 k_fit  : 배경 이미지의 셀 분포가 이 분포를 지원하는가 (P_clean 항이 정당 —
+                     어떤 배경을 고를지 정하는 시점에는 가용성이 의미 있다)
+      2단계 ring   : 후보 자리 둘레의 셀 분포가 이 분포와 겹치는가
+    """
+    out: Dict[str, Dict[str, float]] = {}
+    for k, row in (compat.get("matrix_symmetric") or {}).items():
+        s = sum(float(v) for v in row.values())
+        if s > 0:
+            out[str(k)] = {c: float(v) / s for c, v in row.items()}
+    return out
+
+
+def _tile_grid(rows: List[Dict[str, str]], names, bin_edges,
+               var_floor: float, edge_floor: float,
+               tile: int = 64) -> Tuple[Dict[Tuple[int, int], str], int, int]:
+    """정상 이미지 → ({(i,j): cell}, gw, gh). void 타일은 제외한다.
+
+    격자는 context_features.csv 가 emit 한 타일에서 그대로 읽는다 (절단 격자, F1).
+    void 를 빼두면 footprint void-straddle 판정이 '타일 없음'과 같아진다.
+    """
+    grid: Dict[Tuple[int, int], str] = {}
+    gw = gh = 0
+    for r in rows:
+        pxy = str(r.get("patch_xy", ""))
+        if "_" not in pxy:
+            continue
+        try:
+            x, y = (int(v) for v in pxy.split("_", 1))
+        except (TypeError, ValueError):
+            continue
+        i, j = x // tile, y // tile
+        gw, gh = max(gw, i + 1), max(gh, j + 1)
+        if _patch_void(r, var_floor, edge_floor):
+            continue
+        grid[(i, j)] = _cell_key(r, names, bin_edges)
+    return grid, gw, gh
+
+
+def _ring_keys(si: int, sj: int, bw: int, bh: int) -> List[Tuple[int, int]]:
+    """자리 사각형 [si..si+bw-1] x [sj..sj+bh-1] 의 8이웃 링 좌표."""
+    i1, j1 = si + bw - 1, sj + bh - 1
+    out = []
+    for i in range(si - 1, i1 + 2):
+        out.append((i, sj - 1))
+        out.append((i, j1 + 1))
+    for j in range(sj, j1 + 1):
+        out.append((si - 1, j))
+        out.append((i1 + 1, j))
+    return out
+
+
+def _best_ring_site(grid: Dict[Tuple[int, int], str], gw: int, gh: int,
+                    bw: int, bh: int, tgt: Dict[str, float],
+                    tile: int = 64) -> Optional[Tuple[int, int]]:
+    """ring_sgm: 링 셀 분포와 tgt 의 히스토그램 교집합이 최대인 자리 (픽셀 좌상단).
+
+    footprint 에 void/결측 타일이 하나라도 있으면 그 자리는 버린다. generate 는
+    이 위치를 forced_xy 로 소비하는데, 그 경로가 런타임 void 게이트와 tau 게이트를
+    **우회**하므로(devnote §5-4-2) 여기서 걸러야 한다.
+
+    Returns None when nothing qualifies → 호출부가 position 을 비워 두고
+    generate 가 기존 _positive_place 경로로 자연 폴백한다.
+    """
+    if not tgt or bw <= 0 or bh <= 0 or gw < bw or gh < bh:
+        return None
+    best, best_xy = -1.0, None
+    for sj in range(gh - bh + 1):
+        for si in range(gw - bw + 1):
+            if any((si + a, sj + b) not in grid
+                   for a in range(bw) for b in range(bh)):
+                continue                      # void/결측 footprint
+            ring = [grid[t] for t in _ring_keys(si, sj, bw, bh) if t in grid]
+            if not ring:
+                continue
+            inv = 1.0 / len(ring)
+            hist: Dict[str, float] = {}
+            for c in ring:
+                hist[c] = hist.get(c, 0.0) + inv
+            score = sum(min(v, tgt[c]) for c, v in hist.items() if c in tgt)
+            if score > best:
+                best, best_xy = score, (si * tile, sj * tile)
+    return best_xy
+
+
 def _place_position(wh: Tuple[int, int], dim: Tuple[int, int],
                     want_edge: bool, jitter01: float) -> Optional[List[int]]:
     """Deterministic paste top-left (x,y) that lands the crop at an EDGE (flush
@@ -549,6 +662,52 @@ def _bg_jitter(source_key: str, normal_id: str) -> float:
     return int.from_bytes(h.digest(), "big") / float(1 << 64) * 1e-7
 
 
+def _localize_defect_rows(
+    defect_by_img: Dict[str, List[Dict[str, str]]],
+    defect_tiles: Dict[str, Any],
+    radius: int,
+) -> Tuple[Dict[str, List[Dict[str, str]]], Dict[str, float]]:
+    """Narrow each defect image's rows to the tiles ADJACENT to its defect.
+
+    The query the research defines is "the background touching this defect", not
+    "this image's background". `defect_tiles.json` carries, per image, the
+    defect-pixel-free tiles within `radius` 8-neighbour steps of a defect-carrying
+    tile, keyed by the same `patch_xy` string context_features.csv uses — so the
+    narrowing is a set-membership filter, no coordinate arithmetic.
+
+    Tiles CARRYING defect pixels are deliberately absent from that list: profiling
+    keeps a tile whose defect fraction is <= 0.5, so its context features are
+    computed on a patch holding up to 50% defect texture (severstal mean 15.5%),
+    while every clean-pool tile holds 0%. Including them would search the clean
+    pool for backgrounds resembling defect texture.
+
+    Falls back to the whole image when the tile list is empty — an image whose
+    defect lies entirely inside the grid's truncated right/bottom band has no
+    adjacency at all (mtd 14.4%; see the F1 note in defect_tiles.py). Returns
+    (rows_by_img, stats); stats feeds the summary so the fallback is never silent.
+    """
+    key = "adjacent_r%d" % radius
+    out: Dict[str, List[Dict[str, str]]] = {}
+    n_fallback = 0
+    sizes: List[int] = []
+    for iid, rows in defect_by_img.items():
+        want = set(defect_tiles.get(iid, {}).get(key) or ())
+        sel = [r for r in rows if r.get("patch_xy") in want] if want else []
+        if not sel:
+            n_fallback += 1
+            sel = rows
+        out[iid] = sel
+        sizes.append(len(sel))
+    arr = np.asarray(sizes, dtype=float) if sizes else np.zeros(0)
+    stats = {
+        "adjacent_radius": float(radius),
+        "loc_fallback_frac": round(n_fallback / len(out), 4) if out else 0.0,
+        "query_tiles_mean": round(float(arr.mean()), 2) if arr.size else 0.0,
+        "query_tiles_lt4_frac": round(float((arr < 4).mean()), 4) if arr.size else 0.0,
+    }
+    return out, stats
+
+
 def build_and_rank(
     data: Dict[str, Any],
     valid_ids: List[str],
@@ -556,6 +715,10 @@ def build_and_rank(
     edge_floor: float,
     pool_k: Optional[int],
     geometry_prior: bool = False,
+    adjacent_radius: Optional[int] = None,
+    k_fit: bool = False,
+    site_selection: str = "off",
+    site_pool_cap: int = 16,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, float]]:
     """Two signals per (ROI x valid good) candidate:
       src_fit   = hist∩(good, the ROI's SOURCE-image background)  [Phase 1, E1-faithful]
@@ -578,9 +741,28 @@ def build_and_rank(
     defect_by_img: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     for r in defect_rows:
         defect_by_img[r.get("image_id", "")].append(r)
+
+    # Query localization (devnote aroma_adjacent_context_bg_selection.md §5-2).
+    # OFF by default: src_rows_by_img is defect_by_img and both histograms see the
+    # same rows as before, so the legacy result is reproduced exactly.
+    loc_stats: Dict[str, float] = {"adjacent_radius": 0.0}
+    if adjacent_radius:
+        src_rows_by_img, loc_stats = _localize_defect_rows(
+            defect_by_img, data.get("defect_tiles") or {}, int(adjacent_radius))
+        # Both signals are narrowed: the class aggregate is the same query pooled
+        # over a class, so leaving it global would mix two spatial scales.
+        defect_rows_q = [r for rows in src_rows_by_img.values() for r in rows]
+        logger.info("Query localization ON: adjacent_r%d — %.1f tiles/query, "
+                    "fallback %.1f%%, <4 tiles %.1f%%",
+                    int(adjacent_radius), loc_stats["query_tiles_mean"],
+                    100 * loc_stats["loc_fallback_frac"],
+                    100 * loc_stats["query_tiles_lt4_frac"])
+    else:
+        src_rows_by_img, defect_rows_q = defect_by_img, defect_rows
+
     src_hist_by_img = {iid: _image_hist(rows, names, bin_edges, var_floor, edge_floor)
-                       for iid, rows in defect_by_img.items()}
-    class_hist = _class_bg_hist(defect_rows, names, bin_edges, var_floor, edge_floor,
+                       for iid, rows in src_rows_by_img.items()}
+    class_hist = _class_bg_hist(defect_rows_q, names, bin_edges, var_floor, edge_floor,
                                 iid_to_class)
 
     # Guard: the per-source (E1) signal needs each ROI's image_id to resolve to a
@@ -615,20 +797,41 @@ def build_and_rank(
         good_hist[iid] = _image_hist(rows, names, bin_edges, var_floor, edge_floor)
         good_dim[iid] = _image_dim(rows)
 
+    # §5-4: (k, c) 목표 분포. 1단계 k_fit 과 2단계 ring 자리 선택이 공유한다.
+    tgt_by_k = _target_by_cluster(data.get("compat") or {}) if (k_fit or site_selection == "ring") else {}
+    if (k_fit or site_selection == "ring") and not tgt_by_k:
+        logger.warning("matrix_symmetric 이 없어 k_fit / ring 자리 선택을 끕니다 "
+                       "(--compat_mode symmetric 프로파일링 필요)")
+        k_fit, site_selection = False, "off"
+    # 자리 선택용 타일 격자 — 정상 이미지당 1회, ROI 전체가 재사용
+    grid_cache: Dict[str, Tuple[Dict[Tuple[int, int], str], int, int]] = {}
+
+    def _grid_for(iid: str):
+        g = grid_cache.get(iid)
+        if g is None:
+            g = _tile_grid(good_by_img.get(iid, []), names, bin_edges,
+                           var_floor, edge_floor)
+            grid_cache[iid] = g
+        return g
+
     # ---- Pass 1: score both signals per (ROI, good); collect per-ROI lift ----
     per_roi: List[Dict[str, Any]] = []
     lifts_src: List[float] = []
     lifts_cls: List[float] = []
     lifts_size: List[float] = []
+    lifts_k: List[float] = []
     src_ceilings: List[float] = []
     for roi_idx, r in enumerate(roi):
         axis, cls_val = _roi_class_axis(r, multi_class)
         src_dv = src_hist_by_img.get(str(r.get("image_id", "")), {})
         cls_dv = class_hist.get(str(r.get("class_key") or ""), {})
+        # §5-4-1b — 형태 군집 축. class_fit(도메인 라벨 축)과 겹치지 않는 정보다:
+        # severstal class 4 vs cluster 5, mvtec_leather class 5 vs cluster 3.
+        k_dv = tgt_by_k.get(str(r.get("cluster_id"))) or {} if k_fit else {}
         bbox = _parse_bbox(r.get("defect_bbox"))
         wh = (bbox[2], bbox[3]) if bbox else (0, 0)
-        cand = []  # (normal_id, src_fit, class_fit, size_ok, size_fit)
-        s_scores, c_scores, z_scores = [], [], []
+        cand = []  # (normal_id, src_fit, class_fit, size_ok, size_fit, k_fit)
+        s_scores, c_scores, z_scores, k_scores = [], [], [], []
         for iid in valid_ids:
             sf = _hist_intersection(good_hist[iid], src_dv)
             cf = _hist_intersection(good_hist[iid], cls_dv)
@@ -637,12 +840,15 @@ def build_and_rank(
             # <1=shrink). Constant across same-size backgrounds → 0 lift → 0 weight
             # (auto-downweighted); varies only when backgrounds differ in size.
             zf = _scale_to_fit(wh, good_dim[iid]) if wh != (0, 0) else 1.0
-            cand.append((iid, sf, cf, so, zf))
+            kf = _hist_intersection(good_hist[iid], k_dv) if k_dv else 0.0
+            cand.append((iid, sf, cf, so, zf, kf))
             s_scores.append(sf); c_scores.append(cf); z_scores.append(zf)
+            k_scores.append(kf)
         if s_scores:
             lifts_src.append(max(s_scores) - float(np.median(s_scores)))
             lifts_cls.append(max(c_scores) - float(np.median(c_scores)))
             lifts_size.append(max(z_scores) - float(np.median(z_scores)))
+            lifts_k.append(max(k_scores) - float(np.median(k_scores)))
             src_ceilings.append(max(s_scores))
         per_roi.append({"roi_idx": roi_idx, "axis": axis, "cls_val": cls_val,
                         "cluster_id": r.get("cluster_id"), "cell_key": r.get("cell_key", ""),
@@ -655,22 +861,24 @@ def build_and_rank(
     w_src = float(np.mean(lifts_src)) if lifts_src else 0.0
     w_cls = float(np.mean(lifts_cls)) if lifts_cls else 0.0
     w_size = float(np.mean(lifts_size)) if lifts_size else 0.0
-    lift_src_m, lift_cls_m, lift_size_m = w_src, w_cls, w_size
-    tot = w_src + w_cls + w_size
+    w_k = float(np.mean(lifts_k)) if (k_fit and lifts_k) else 0.0
+    lift_src_m, lift_cls_m, lift_size_m, lift_k_m = w_src, w_cls, w_size, w_k
+    tot = w_src + w_cls + w_size + w_k
     if tot <= 0:                       # all signals flat → fall back to per-source
-        w_src, w_cls, w_size = 1.0, 0.0, 0.0
+        w_src, w_cls, w_size, w_k = 1.0, 0.0, 0.0, 0.0
     else:
-        w_src, w_cls, w_size = w_src / tot, w_cls / tot, w_size / tot
+        w_src, w_cls, w_size, w_k = w_src / tot, w_cls / tot, w_size / tot, w_k / tot
 
     # ---- Pass 2: combine, rank, assign ----
     selected: List[Dict[str, Any]] = []
     pool_sizes: List[int] = []
+    n_site_pos, n_site_none = 0, 0
     for pr in per_roi:
         src_key = pr["src_key"]
-        scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok, size_fit)
-        for iid, sf, cf, so, zf in pr["cand"]:
-            comb = w_src * sf + w_cls * cf + w_size * zf
-            scored.append((comb + _bg_jitter(src_key, iid), iid, sf, cf, so, zf))
+        scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok, size_fit, k_fit)
+        for iid, sf, cf, so, zf, kf in pr["cand"]:
+            comb = w_src * sf + w_cls * cf + w_size * zf + w_k * kf
+            scored.append((comb + _bg_jitter(src_key, iid), iid, sf, cf, so, zf, kf))
         scored.sort(key=lambda t: t[0], reverse=True)
         if scored:
             if pool_k:
@@ -694,24 +902,49 @@ def build_and_rank(
         # the position stays valid — not clamped — when generation shrinks an
         # oversized crop to fit the background.
         def _pos_for(nid):
-            if not geometry_prior or not pr["bbox"]:
+            if not pr["bbox"]:
                 return None
             dim = good_dim.get(nid, (0, 0))
             wh = _effective_wh((pr["bbox"][2], pr["bbox"][3]), dim)
+            if site_selection == "ring":
+                # §5-4-1 ring_sgm: 링의 셀 분포가 tgt[k] 와 가장 겹치는 자리.
+                # EFFECTIVE(fit-rescale 후) 크기로 타일 사각형을 잡아야 generation 이
+                # 실제로 붙일 크기와 일치한다.
+                tgt = tgt_by_k.get(str(pr["cluster_id"])) or {}
+                grid, gw, gh = _grid_for(nid)
+                bw = max(1, -(-int(wh[0]) // 64))
+                bh = max(1, -(-int(wh[1]) // 64))
+                return _best_ring_site(grid, gw, gh, bw, bh, tgt)
+            if not geometry_prior:
+                return None
             want_edge = class_edge.get(str(pr["cls_val"]), global_edge) > global_edge
             j = (_bg_jitter(src_key, nid) / 1e-7)  # blake2b frac in [0,1)
             return _place_position(wh, dim, want_edge, j)
 
+        # ring 모드는 자리 탐색이 비싸므로 pool 상위 N 개만 산출한다. generate 는
+        # rep_idx % len(pool) 로 인덱싱하므로 앞쪽만 실제로 소비된다.
+        def _positions_for(pool_ids):
+            cap = len(pool_ids) if site_selection != "ring" else max(1, site_pool_cap)
+            return [_pos_for(nid) if i < cap else None
+                    for i, nid in enumerate(pool_ids)]
+
         if top:
-            comb_j, best_id, sf, cf, so, zf = top[0]
+            comb_j, best_id, sf, cf, so, zf, kf = top[0]
+            pool_ids = [t[1] for t in top]
+            positions = _positions_for(pool_ids)
+            pos_best = positions[0] if positions else None
+            if site_selection == "ring":
+                n_site_pos += sum(1 for p in positions[:max(1, site_pool_cap)] if p)
+                n_site_none += sum(1 for p in positions[:max(1, site_pool_cap)] if not p)
             selected.append(dict(base,
                                  assigned_normal_id=best_id,
-                                 topk_pool=[t[1] for t in top],
-                                 topk_positions=[_pos_for(t[1]) for t in top],
-                                 position=_pos_for(best_id),
+                                 topk_pool=pool_ids,
+                                 topk_positions=positions,
+                                 position=pos_best,
                                  score=round(comb_j - _bg_jitter(src_key, best_id), 6),
                                  hist_intersection=round(sf, 6),   # per-source (E1-comparable)
                                  class_fit=round(cf, 6),           # class-conditioned (Phase 2)
+                                 k_fit=round(kf, 6),               # §5-4-1b 형태 군집 축
                                  size_ok=bool(so),
                                  size_fit=round(zf, 4),            # Option 1 signal (1=no distortion)
                                  scale_factor=round(zf, 4),        # Option 2: generation's fit-rescale
@@ -720,6 +953,7 @@ def build_and_rank(
             selected.append(dict(base, assigned_normal_id=None, topk_pool=[],
                                  topk_positions=[], position=None,
                                  score=0.0, hist_intersection=0.0, class_fit=0.0,
+                                 k_fit=0.0,
                                  size_ok=False, size_fit=0.0, scale_factor=0.0,
                                  n_valid_bg=0))
 
@@ -728,9 +962,18 @@ def build_and_rank(
         "mean_pool_size": float(np.mean(pool_sizes)) if pool_sizes else 0.0,
         "multi_class": float(multi_class),
         "w_src": round(w_src, 4), "w_class": round(w_cls, 4), "w_size": round(w_size, 4),
+        "w_k": round(w_k, 4),
         "lift_src": round(lift_src_m, 4),
         "lift_class": round(lift_cls_m, 4),
         "lift_size": round(lift_size_m, 4),
+        "lift_k": round(lift_k_m, 4),
+        "k_fit": float(bool(k_fit)),
+        "site_selection": site_selection,
+        "site_pool_cap": float(site_pool_cap),
+        "site_positions": float(n_site_pos),
+        "site_fallback": float(n_site_none),
+        "site_fallback_frac": (n_site_none / (n_site_pos + n_site_none)
+                               if (n_site_pos + n_site_none) else 0.0),
         # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
         "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
         # fraction of ROIs whose image_id resolves to a defect row (E1 signal health);
@@ -740,6 +983,7 @@ def build_and_rank(
         "class_edge_prior": {c: round(v, 3) for c, v in class_edge.items()},
         "global_edge": round(global_edge, 3),
     }
+    derived.update(loc_stats)
     return selected, derived
 
 
@@ -797,13 +1041,31 @@ def _build_summary(selected, derived_pool, derived_void, strategy) -> str:
         f"multi_class={bool(derived_pool['multi_class'])}",
         f"- signal weights (data-derived from lift): "
         f"w_src={derived_pool.get('w_src')}  w_class={derived_pool.get('w_class')}  "
-        f"w_size={derived_pool.get('w_size')}  "
+        f"w_size={derived_pool.get('w_size')}  w_k={derived_pool.get('w_k')}  "
         f"(lift_src={derived_pool.get('lift_src')}, lift_class={derived_pool.get('lift_class')}, "
-        f"lift_size={derived_pool.get('lift_size')})",
+        f"lift_size={derived_pool.get('lift_size')}, lift_k={derived_pool.get('lift_k')})",
+        (f"- **k_fit** (§5-4-1b 형태 군집 축): ON  w_k={derived_pool.get('w_k')}  "
+         f"lift_k={derived_pool.get('lift_k')}  "
+         f"(w_k≈0 이면 cluster 축이 배경을 구분하지 못한다는 뜻 — 자동 소거됨)"
+         if derived_pool.get("k_fit") else "- k_fit: OFF"),
+        (f"- **site_selection=ring** (§5-4-1 ring_sgm): positions "
+         f"{int(derived_pool.get('site_positions', 0))}  "
+         f"fallback {int(derived_pool.get('site_fallback', 0))} "
+         f"({100 * float(derived_pool.get('site_fallback_frac', 0.0)):.1f}%)  "
+         f"pool_cap={int(derived_pool.get('site_pool_cap', 0))}  "
+         f"(fallback 은 position=None → generate 가 _positive_place 로 폴백)"
+         if derived_pool.get("site_selection") == "ring" else "- site_selection: off"),
         f"- src_fit_ceiling_mean={derived_pool.get('src_fit_ceiling_mean')}  "
         f"(E1 reproduction gate — compare to E1 sim_best)",
         f"- src_match_frac={derived_pool.get('src_match_frac')}  "
         f"(ROI image_id ↔ context defect 매칭율; <1.0이면 stale roi/profiling 불일치)",
+        (f"- **query localization**: adjacent_r{int(derived_pool['adjacent_radius'])}  "
+         f"query_tiles_mean={derived_pool.get('query_tiles_mean')}  "
+         f"fallback={100 * float(derived_pool.get('loc_fallback_frac', 0.0)):.1f}%  "
+         f"<4tiles={100 * float(derived_pool.get('query_tiles_lt4_frac', 0.0)):.1f}%  "
+         f"(질의=결함 인접 배경 타일; fallback은 전역 질의로 되돌아간 ROI 비율)"
+         if derived_pool.get("adjacent_radius") else
+         "- query localization: OFF (질의 = 결함 이미지 배경 전체 — legacy)"),
         "",
         "## Sample assignments (top 30)",
         "",
@@ -837,12 +1099,36 @@ def run(
     edge_floor: Optional[float] = None,
     pool_k: Optional[int] = None,
     geometry_prior: bool = False,
+    adjacent_radius: Optional[int] = None,
+    k_fit: bool = False,
+    site_selection: str = "off",
+    site_pool_cap: int = 16,
+    output_tag: str = "",
 ) -> Dict[str, Any]:
+    if site_selection == "ring" and geometry_prior:
+        logger.error("--site_selection ring 과 --geometry_prior 는 배타입니다 "
+                     "(둘 다 topk_positions 를 채운다). 하나만 쓰세요.")
+        return {"status": "conflicting_position_sources"}
     logger.info("Loading inputs: profiling_dir=%s roi_dir=%s", profiling_dir, roi_dir)
     data = load_inputs(profiling_dir, roi_dir)
     if data["status"] != "ok":
         logger.error("Input loading failed: %s", data)
         return data
+
+    # Localization is opt-in and must FAIL LOUD rather than degrade to the global
+    # query: a silent fallback would look like "the change had no effect".
+    if adjacent_radius:
+        if not data.get("defect_tiles"):
+            logger.error("--adjacent_radius %d needs defect_tiles.json in %s. "
+                         "Run scripts/aroma/defect_tiles.py first.",
+                         adjacent_radius, profiling_dir)
+            return {"status": "missing_defect_tiles", "profiling_dir": profiling_dir}
+        radii = [int(r) for r in (data.get("defect_tiles_meta", {}).get("radii") or [])]
+        if radii and int(adjacent_radius) not in radii:
+            logger.error("defect_tiles.json carries radii %s, not %d. Re-run "
+                         "defect_tiles.py with --radii %d.",
+                         radii, adjacent_radius, adjacent_radius)
+            return {"status": "radius_unavailable", "available": radii}
 
     # Data-driven percentile floors (default p15 — see _derive_void_floors), then
     # an absolute per-dataset safety valve: if --var_floor / --edge_floor are
@@ -868,8 +1154,17 @@ def run(
                 len(valid_ids), len(data["good_by_img"]), derived_void["void_frac_max"])
 
     selected, derived_pool = build_and_rank(
-        data, valid_ids, var_floor, edge_floor, pool_k, geometry_prior=geometry_prior
+        data, valid_ids, var_floor, edge_floor, pool_k, geometry_prior=geometry_prior,
+        adjacent_radius=adjacent_radius, k_fit=k_fit,
+        site_selection=site_selection, site_pool_cap=site_pool_cap,
     )
+    if derived_pool.get("site_selection") == "ring":
+        logger.info("ring_sgm 자리 산출: %d positions, fallback %d (%.1f%%), pool_cap=%d",
+                    int(derived_pool["site_positions"]), int(derived_pool["site_fallback"]),
+                    100 * derived_pool["site_fallback_frac"], site_pool_cap)
+    if k_fit:
+        logger.info("k_fit ON: w_k=%.4f (lift_k=%.4f) — 0 에 가까우면 형태 군집 축이 "
+                    "배경을 구분하지 못한다는 뜻", derived_pool["w_k"], derived_pool["lift_k"])
     # attach void provenance to each assignment
     for s in selected:
         aid = s.get("assigned_normal_id")
@@ -884,16 +1179,19 @@ def run(
     # NOTE: the full (roi x good) candidate set is O(n_roi x n_good) (millions on
     # severstal/aitex) — NOT persisted. selected.json keeps each ROI's ranked
     # top-pool + scores, which is the auditable record.
-    save_json(selected, str(out / "clean_bg_selected.json"))
+    # output_tag: 기존 산출물을 덮지 않고 나란히 두기 위한 접미사. 예 '_ring' →
+    # clean_bg_selected_ring.json. generate_defects 는 --clean_bg_json 으로 지정한다.
+    tag = output_tag or ""
+    save_json(selected, str(out / f"clean_bg_selected{tag}.json"))
     rarm = None
     if emit_random_arm:
         rarm = random_arm(selected, valid_ids, seed)
-        save_json(rarm, str(out / "clean_bg_random_arm.json"))
+        save_json(rarm, str(out / f"clean_bg_random_arm{tag}.json"))
 
-    (out / "clean_bg_summary.md").write_text(
+    (out / f"clean_bg_summary{tag}.md").write_text(
         _build_summary(selected, derived_pool, derived_void, strategy), encoding="utf-8"
     )
-    logger.info("Saved clean_bg_selected.json (%d) → %s", len(selected), out)
+    logger.info("Saved clean_bg_selected%s.json (%d) → %s", tag, len(selected), out)
 
     return {
         "status": "ok",
@@ -943,6 +1241,32 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Per-ROI ranked background pool size. Default: DATA-DRIVEN "
                         "(all size-fit candidates; generate_defects indexes rep→pool). "
                         "Set an int to cap.")
+    p.add_argument("--adjacent_radius", type=int, default=None,
+                   help="Narrow the per-source query to background tiles ADJACENT to "
+                        "the defect (N 8-neighbour steps), read from defect_tiles.json. "
+                        "Requires scripts/aroma/defect_tiles.py to have run. Default OFF "
+                        "= whole-image background query (legacy, byte-identical). "
+                        "Recommended: 1 (severstal/kolektor/mvtec_leather), 2 (mtd/aitex)")
+    p.add_argument("--output_tag", default="",
+                   help="산출 파일명 접미사. 예 '_ring' → clean_bg_selected_ring.json / "
+                        "clean_bg_random_arm_ring.json / clean_bg_summary_ring.md. 기존 "
+                        "산출물을 덮지 않고 나란히 둘 때 사용하며, generate_defects 에는 "
+                        "--clean_bg_json 으로 경로를 지정한다. 기본 '' (기존 파일명)")
+    p.add_argument("--k_fit", action="store_true",
+                   help="§5-4-1b — 배경 이미지 랭킹에 형태 군집(k) 축 신호를 추가한다: "
+                        "hist∩(good_hist, L1norm(matrix_symmetric[k])). class_fit 은 도메인 "
+                        "라벨 축이라 겹치지 않는다(severstal class4 vs cluster5, leather "
+                        "class5 vs cluster3). 가중치는 기존 lift 자동 산출이 배분하므로 "
+                        "신호가 평탄하면 w_k≈0 으로 스스로 소거된다. 권장 ON")
+    p.add_argument("--site_selection", default="off", choices=["off", "ring"],
+                   help="§5-4-1 — 'ring': 붙일 자리를 오프라인에서 확정한다. 자리 둘레의 "
+                        "셀 분포와 L1norm(matrix_symmetric[k]) 의 히스토그램 교집합이 최대인 "
+                        "위치(footprint 에 void 있는 자리는 배제). topk_positions/position 에 "
+                        "기록되고 generate 가 forced_xy 로 소비 → generate 측 무변경. "
+                        "--geometry_prior 와 배타. 기본 off (legacy 동일)")
+    p.add_argument("--site_pool_cap", type=int, default=16,
+                   help="ring 모드에서 자리를 산출할 pool 상위 개수. generate 는 "
+                        "rep_idx %% len(pool) 로 인덱싱하므로 앞쪽만 소비된다. 기본 16")
     p.add_argument("--geometry_prior", action="store_true",
                    help="Phase 3 (E2): also precompute a paste POSITION per pool bg "
                         "matching each class's real edge/surface tendency (from "
@@ -967,6 +1291,11 @@ def main(argv=None) -> None:
         edge_floor=args.edge_floor,
         pool_k=args.pool_k,
         geometry_prior=args.geometry_prior,
+        adjacent_radius=args.adjacent_radius,
+        k_fit=args.k_fit,
+        site_selection=args.site_selection,
+        site_pool_cap=args.site_pool_cap,
+        output_tag=args.output_tag,
     )
     if result.get("status") != "ok":
         sys.exit(1)

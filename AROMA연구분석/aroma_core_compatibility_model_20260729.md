@@ -934,7 +934,10 @@ cv2 dtype 버그를 고치면 §6-1 표대로 `void@0.7`이 98~100%가 되어 **
 19. **대칭 항의 효과는 데이터셋 의존** — §5-6. severstal Spearman 0.97(거의 무변화) vs leather 0.72(최대 105계단 재배치). "대칭이 순위를 바로잡는다"를 severstal 결과로 뒷받침할 수 없다.
 20. **severstal에서 `ctx_prior`는 `k`를 거의 구분하지 못한다** — §4-4. cluster 행 간 log `P_def` 상관 0.956~0.991. 어느 cluster를 붙이든 같은 자리를 추천한다. "결함 형태별로 적합한 배경을 고른다"는 aitex(r=0.07~0.71)에서는 성립하나 **severstal에서는 실증되지 않는다.**
 21. **`P_def` 계수 범위가 연구 의도와 어긋난다 (미해결)** — §4-5. 의도는 결함 국소 배경, 구현은 이미지 전역 배경. 학습(전역 ~95타일)–추론(footprint 6타일) 스케일 불일치. 개선 전까지 §3.2.4를 "결함 주변 컨텍스트"로 서술하면 안 된다. → `.claude/.dev_note/aroma_ctxprior_localization_and_normalization.md`
-22. **`P_clean` 곱셈이 매칭 논리가 아니다 (미해결)** — §5-8. `P_def`/`P_clean` = lift 순위와 `ctx_prior` 순위의 Spearman이 −0.28 ~ +0.12로 직교. 도입 경위상 검증된 lever는 patch-gran화·max-norm이고 곱셈 자체의 기여는 분리 입증되지 않았다. "결함 특징에 맞는 배경을 찾는다"로 서술할 근거가 현행 식에는 없다. → 동일 패치 노트 §2
+25. **해결안 확정: `ring_sgm` (2026-08-03)** — 수식 `√(P_def·P_clean)`도 `P_def` 전역 집계도 **그대로 두고**, score 계산만 `footprint 평균` → `링의 셀 분포 vs L1정규화 matrix_symmetric[k] 분포 매칭`으로 바꾼다. P1 개선폭 `ctx_prior` 대비 **5/5**(severstal −0.270 → −0.059). 대조 arm으로 확인한 기여 분리 — 링으로 옮기는 것만으로는 4/5 악화, **개선을 만드는 것은 분포 매칭**이다. 단 `ring_sgm`도 severstal·mtd에서는 random 미달(−0.059/−0.017). → `.claude/.dev_note/aroma_adjacent_context_bg_selection.md` §6-9
+23. **`ctx_prior` footprint 평균이 자리 선택에서 random보다 나쁘다 (실측·2026-08-03)** — P1 분포 정합 벤치(배경 30장×시드 3, 5종 전 결함) 결과 random 대비 개선폭이 severstal **−0.288±0.006**, mtd −0.110, aitex −0.032, kolektor −0.018 (leather만 +0.208). 자리 선택 백분위도 5종 중 4종에서 chance 이하. **§4-5 국소화·§5-8 lift를 둘 다 적용해도 random에 못 미친다** — 병목은 매트릭스 정의가 아니라 `footprint 평균 argmax`가 "가장 평범한 셀"로 수렴하는 구조다. → `.claude/.dev_note/aroma_adjacent_context_bg_selection.md` §6-7
+24. **인접 문맥은 이미지 선택에는 정보를 주지 않는다 (실측)** — self-retrieval MRR에서 전역 질의가 인접 질의를 5종 전부에서 압도(severstal 0.785 vs 0.117). 반면 **자리 선택에서는 own≫other가 5/5** 성립. 인접 문맥의 유효 범위는 placement 한정. → 동 문서 §6-5·§6-6
+22. **`P_clean` 곱셈이 매칭 논리가 아니다 (미해결→기각)** — §5-8. **위 23번으로 기각.** lift 전환은 5종 중 3종에서 오히려 악화(mtd −0.186). `P_def`/`P_clean` = lift 순위와 `ctx_prior` 순위의 Spearman이 −0.28 ~ +0.12로 직교. 도입 경위상 검증된 lever는 patch-gran화·max-norm이고 곱셈 자체의 기여는 분리 입증되지 않았다. "결함 특징에 맞는 배경을 찾는다"로 서술할 근거가 현행 식에는 없다. → 동일 패치 노트 §2
 
 ---
 
