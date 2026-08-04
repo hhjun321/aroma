@@ -15,11 +15,11 @@
 **실행 환경**: ControlNet arm = **GPU 필수**(Colab Pro A100 권장) | copy_paste arm·random arm = **CPU**.
 
 **전제 (방법별로 다름)**:
-- **공통(두 방법)**: `S('profiling',ds)/compatibility_matrix.json`의 `matrix_symmetric` 키(없으면 symmetric hard-fail), `S('roi',ds)/roi_selected.json`·`clean_bg_selected.json`(step3·step3.5), `compat_mode symmetric`일 때 `S('compat_gate',ds)/compat_tau_prescan_{ds}.json`의 `ds_tau`(step4c).
+- **공통(두 방법)**: `S('profiling',ds)/compatibility_matrix.json`의 `matrix_symmetric` 키(없으면 symmetric hard-fail), `S('roi',ds)/roi_selected.json`(step3)·**`clean_bg_selected.json`(step3.5 — `--k_fit --site_selection ring` 판)**, `compat_mode symmetric`일 때 `S('compat_gate',ds)/compat_tau_prescan_{ds}.json`의 `ds_tau`(step4c — ring 채택 후로는 폴백 ROI 안전망).
 - **ControlNet 전용 추가**: `$CN_MODELS/{ds}/best_model/`(step4b 학습본), (**aitex**) `ar_tex_prescan_aitex.json`의 `ar_threshold`·`tex_threshold`.
 - **copy_paste는 CN 학습본·AR 임계 불요** — ControlNet 학습(step4b)을 건너뛴다. (aitex 텍스처 게이트 `tex_threshold`만 선택 사용.)
 
-**데이터셋**: 핵심 4종(severstal·mvtec_leather·mtd·aitex)은 이 문서의 STEP 3/3B/4 루프로 처리한다. aitex = tiled(256×256/stride128, single-class). kolektor(5번째 v2-1 데이터셋)는 **STEP 3(controlnet 2차)를 절대 쓰지 않고** STEP 3B(copy_paste)+STEP 4(random)만 사용하며, STEP 3B의 `--min-bg-quality`는 0.7이 아니라 **0.42로 override**해야 한다(0.7이면 배경 풀 전멸) — 절차는 `kolektor_execute.md` §3-5/3-6 참고.
+**데이터셋**: 핵심 4종(severstal·mvtec_leather·mtd·aitex)은 이 문서의 STEP 3/3B/4 루프로 처리한다. aitex = tiled(256×256/stride128, single-class). kolektor(5번째 v2-1 데이터셋)는 **STEP 3(controlnet 2차)를 절대 쓰지 않고** STEP 3B(copy_paste)+STEP 4(random)만 사용한다. STEP 3B 루프는 kolektor를 포함하며 `--min-bg-quality`만 **0.4로 갈린다**(나머지 0.7) — 데이터셋 준비 등 kolektor 고유 절차는 `kolektor_execute.md` 참고.
 
 ---
 
@@ -139,6 +139,12 @@ if pathlib.Path(ar_p).exists():
     print(f"  AR_T={AR_T}  TEX_T={TEX_T}  (step4c 확정값 — step5 재스캔 금지)")
 elif USE_CN:   # ControlNet + aitex면 AR 임계 필수
     missing.append(f"aitex:ar_tex_prescan → {ar_p}")
+elif "aitex" in DATASETS:
+    # copy_paste 는 텍스처 게이트가 '선택'이라 hard-fail 하지 않는다. 다만 임계가
+    # None 인 채로 STEP 3/4 의 EXTRA 조립에 들어가면 argparse 가
+    # `invalid float value: 'None'` 로 죽는다 → 여기서 명시적으로 알린다.
+    print("  ⚠️ prescan 없음 → aitex 텍스처 게이트 미적용으로 진행(선택 게이트라 정상). "
+          "적용하려면 step4c 를 먼저 돌릴 것.")
 
 print("\nMISSING:", len(missing))
 for m in missing: print("  -", m)
@@ -183,7 +189,14 @@ for DS in DATASETS_GEN:
     if DS == "mvtec_leather":
         os.environ['EXTRA'] = "--cn_no_grayscale"
     elif DS == "aitex":
-        os.environ['EXTRA'] = f"--cn_ar_threshold {AR_T} --texture-dist-threshold {TEX_T}"
+        # None 인 임계는 인자에서 뺀다 (argparse `invalid float value: 'None'` 방지).
+        # ControlNet+aitex 는 AR 임계가 필수라 선결 체크에서 이미 hard-fail 한다.
+        _ex = []
+        if AR_T is not None:
+            _ex.append(f"--cn_ar_threshold {AR_T}")
+        if TEX_T is not None:
+            _ex.append(f"--texture-dist-threshold {TEX_T}")
+        os.environ['EXTRA'] = " ".join(_ex)
     else:
         os.environ['EXTRA'] = ""
     print(f"\n===== AROMA gen {DS}  (τ={os.environ['TAU']}, extra='{os.environ['EXTRA']}') =====")
@@ -206,7 +219,8 @@ for DS in DATASETS_GEN:
 > **활성 확인(로그)**:
 > - `clean_bg assignment ON: clean_bg_selected.json (N ROIs)` — step3.5 사전선정 배경 소비. **파일이 없으면 legacy 생성-시점 선정으로 자동 fallback되는데, 이는 "무해"가 아니다**: legacy는 원본 good 픽셀 재스캔 휴리스틱이라 step3.5의 profiling-파생 배경 선정과 **배경 히스토그램 분포가 다르다** → aroma arm의 배경이 의도와 달라지고 exp4v2 aroma/random 대조의 공정성이 저하될 수 있다. **`clean_bg assignment ON`이 반드시 떠야** 하며, 안 뜨면 step3.5 산출(`S('roi',ds)/clean_bg_selected.json`) 존재·경로를 먼저 확인한다(fallback 상태로 생성 금지).
 > - `clean_bg resolve: used=U fallback=F mismatch=M / T (roi,rep)` — **U가 T에 근접(F·M≈0)해야 정상**. `<90%` 시 WARNING(경로 불일치/staleness). 로컬 mtd 20-ROI 재검증: used=40 fallback=0 mismatch=0.
-> - (step3.5를 `--geometry_prior`로 실행한 경우) precompute된 `position`을 소비해 클래스 기하대로 배치. phase0가 `image_w/image_h`를 방출하면 **clamp-free**(로컬 40/40 정확); 없으면 grid 추정이라 edge-flush가 실제 가장자리보다 안쪽에 놓일 수 있음.
+> - **(step3.5를 `--site_selection ring`으로 실행한 경우 — 2026-08-04 기본)** precompute된 `position`을 `forced_xy`로 소비해 **링 분포 매칭이 고른 자리**에 배치. 그 분기가 `_positive_place`·τ·void 게이트 앞에서 단락하므로, 아래 `placement-gate stats`의 `active`가 **폴백 ROI 수만큼으로 줄어드는 것이 정상**이다. phase0가 `image_w/image_h`를 방출하면 clamp-free.
+> - (step3.5를 `--geometry_prior`로 실행한 경우 — ring 채택 후로는 미사용) precompute된 `position`을 소비해 클래스 기하대로 배치. **`--site_selection ring`과 배타.**
 > - `compat gate ON: threshold=… mode=symmetric` — symmetric 게이트 활성(matrix_symmetric 없으면 hard-fail).
 > - `placement-gate stats: fallback=M%` — positive placement(scan·rank·place). fallback 과다(>50%)면 τ 과대 의심 → step4 사전스캔 재확인(step5에서 튜닝 금지).
 > - (aitex) `controlnet stats`(gen_ok / ar_fallback / blank_rate) + `texture-gate stats` — AR 폴백·텍스처 게이트 동작.
@@ -218,7 +232,7 @@ for DS in DATASETS_GEN:
 
 > **진행 순서(계획)**: **1차 = 이 STEP 3B(copy_paste)** 로 AROMA arm 생성 → STEP 4 random arm과 함께 exp4v2에서 **AROMA(copy_paste) vs random** 비교. **2차 = reviewer report 대응 시 STEP 3(controlnet)** 로 AROMA arm을 추가 생성해 "무학습 vs 생성형" 비교. 1차는 GPU·ControlNet 학습(step4b) 불요.
 >
-> **kolektor(5번째 v2-1 데이터셋) note**: kolektor는 이 STEP 3B 커맨드를 **그대로** 쓰되 `--min-bg-quality`만 0.7 → **0.42로 override**한다(0.7이면 배경 풀이 전멸해 생성이 붕괴함). 아래 for-loop 코드는 4종 전용이라 그대로 두고, kolektor는 `DS='kolektor'`로 별도 셀에서 단독 실행한다(상세 절차: `kolektor_execute.md`).
+> **kolektor(5번째 v2-1 데이터셋)**: 2026-08-04부터 **아래 for-loop 에 포함**한다(`DATASETS_GEN = DATASETS + ["kolektor"]`). 갈리는 것은 `--min-bg-quality` 하나뿐이며 `MIN_BG_Q` 딕셔너리가 처리한다(kolektor 0.4, 나머지 0.7). 별도 셀 단독 실행은 더 이상 불요. 데이터셋 준비·프로파일링 등 kolektor 고유 절차는 `kolektor_execute.md` 참고.
 
 copy-paste 피벗(무학습 기판). ControlNet 생성 대신 **결함 crop을 clean-bg에 직접 합성**한다. STEP 3(controlnet)과 **동일한 clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비**를 쓰되, 생성 방식만 copy_paste다.
 
@@ -231,29 +245,97 @@ copy-paste 피벗(무학습 기판). ControlNet 생성 대신 **결함 crop을 c
 - **출력**: 1차 copy_paste는 `S('synth_aroma', DS)`. 2차에 controlnet과 **비교**하려면 각각 `S('synth_aroma_cp', DS)`·`S('synth_aroma_cn', DS)`로 분리해 exp*에서 `--aroma_synthetic_dir`로 지정.
 
 ```python
-DATASETS_GEN = DATASETS   # 세션 분리 시 좁힘
+# 1차 주 경로는 5종을 한 루프로 돈다. 데이터셋별로 갈리는 것은 min-bg-quality 하나뿐.
+DATASETS_GEN = DATASETS + ["kolektor"]     # 세션 분리 시 좁힘
+
+# --min-bg-quality: kolektor 만 0.4, 나머지는 0.7 (기본).
+# kolektor 는 표면 자체가 어둡고 저대비라 0.7 이면 배경 풀이 전멸한다.
+MIN_BG_Q = {ds: 0.7 for ds in DATASETS_GEN}
+MIN_BG_Q["kolektor"] = 0.4
 
 for DS in DATASETS_GEN:
     os.environ['DS']     = DS
     os.environ['ROI']    = S('roi', DS)
     os.environ['NORMAL'] = normal_dir(DS)
-    os.environ['OUT']    = S('synth_aroma', DS)      # 2차 controlnet과 비교 시 'synth_aroma_cp'
+    os.environ['OUT']    = S('synth_aroma_tobe', DS)  # ring 개정본. 구 synth_aroma 는 보존
     os.environ['COMPAT'] = f"{S('profiling', DS)}/compatibility_matrix.json"
-    os.environ['TAU']    = str(TAU_BY_DS[DS])         # step4c 확정 τ (compat_mode symmetric일 때)
-    os.environ['EXTRA']  = f"--texture-dist-threshold {TEX_T}" if DS == "aitex" else ""  # 텍스처 게이트만
-    print(f"\n===== AROMA copy_paste gen {DS}  (τ={os.environ['TAU']}) =====")
+    os.environ['TAU']    = str(TAU_BY_DS[DS])         # step4c 확정 τ (폴백 ROI에서만 동작 — 아래 주의)
+    os.environ['MINQ']   = str(MIN_BG_Q[DS])
+    # 텍스처 게이트만(선택). TEX_T 가 None 이면 인자를 붙이지 않는다 —
+    # 붙이면 argparse 가 `invalid float value: 'None'` 로 죽는다.
+    os.environ['EXTRA']  = (f"--texture-dist-threshold {TEX_T}"
+                            if (DS == "aitex" and TEX_T is not None) else "")
+    print(f"\n===== AROMA copy_paste gen {DS}  (τ={os.environ['TAU']}, min_bg_q={os.environ['MINQ']}) =====")
     !python $AROMA_SCRIPTS/generate_defects.py \
         --roi_dir     $ROI \
         --normal_dir  $NORMAL \
         --output_dir  $OUT \
         --method      copy_paste \
         --n_per_roi 3 --seed 42 --blend_mode seamless \
-        --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
+        --reject-clean-bg --min-bg-quality $MINQ --bg-blur-threshold 100.0 \
         --compat_mode symmetric --compat_threshold $TAU \
         --compat_matrix_json $COMPAT \
         --local_staging \
         $EXTRA
 ```
+
+> ⚠️ **재실행 전에 스테이징 디렉터리를 비운다 (2026-08-04 발견).**
+>
+> ```python
+> !rm -rf /content/tmp/aroma_step4_*        # normal 스테이징 잔재 제거
+> ```
+>
+> `_stage_inputs`의 normal 스테이징이 `dst.exists()`면 `{stem}_{n}` 으로 개명한다. 첫 실행은 디렉터리가 비어 있어 파일명이 보존되지만, **재실행에서는 이전 실행분과 자기 자신이 충돌해 풀 전체가 개명**된다. 그러면 스테이징된 basename 이 `clean_bg_selected.json` 의 `assigned_normal_id` stem 과 어긋나 **clean_bg 해석이 0% 로 붕괴**한다 (실측: 1회차 `used=3000` → 2회차 `used=0`, 5종 동일). `mismatch` 가드는 `image_id` 만 보므로 이를 잡지 못한다.
+>
+> 코드는 동일 크기 dst 를 재사용하도록 고쳤으나(`generate_defects.py` normal 스테이징), **Colab 저장소를 갱신하지 않았다면 위 `rm -rf` 로 회피**한다. `--local_staging` 을 빼도 회피된다(단 Drive FUSE I/O 로 느려진다).
+>
+> ⚠️ **출력 디렉터리도 확인한다.** `--n_per_roi` 를 바꿔 재실행하면 이전 rep 파일이 남는다 — 3rep(`_00`~`_02`) 산출물 위에 1rep(`_00`)만 덮으면 `_01`·`_02` 가 잔재로 섞여 push 된다. rep 수를 바꿀 때는 `S('synth_aroma_tobe', DS)` 를 비울 것.
+>
+> **`--min-bg-quality` 는 현재 사실상 무력하다 (2026-08-04 확인).** 이 값을 소비하는 `_is_clean_background` 가 cv2 dtype 예외로 **fail-open** 한다(dev_note `aroma_cleanbg_gate_cv2_dtype_failopen.md`). 실제 로그가 증거다 — severstal 에서 `clean-bg pool gate: kept 5902 / 5902 (0 rejected, min_quality=0.70)`. 검은 plate 가 섞인 데이터셋에서 0 거부는 게이트가 죽었다는 뜻이다.
+>
+> | 소비 지점 | 상태 |
+> |---|---|
+> | 배경 풀 게이트 (`generate_defects.py:2743`) | fail-open → 0 rejected |
+> | `_positive_place` void 배제 | fail-open. ring 위치가 있으면 `forced_xy` 가 **아예 건너뜀** |
+> | `_paste_and_finalize` re-pick 루프 | fail-open. 위와 동일 |
+>
+> **실제 void 배제는 step3.5 의 오프라인 `_patch_void`(텍스처 에너지 대리 + p15 데이터-유도 floor)가 전담**한다 — `--min-bg-quality` 와 무관한 별개 경로다. 배경 풀에서 `void_frac > 0.5` 이미지를 빼고, 자리 후보에서 footprint 에 void 타일이 있는 위치를 폐기한다.
+>
+> 그래도 인자를 남기는 이유: cv2 버그가 고쳐지면 즉시 되살아나므로 값을 지금 정해두는 편이 낫다. **kolektor 0.4 는 그 복구 시점을 위한 예약값**이며, 현 상태에서는 5종 모두 동작 차이가 없다.
+>
+> ⚠️ 과거 문서의 *"kolektor 는 0.7 이면 배경 풀 전멸"* 관측은 **cv2 fail-open 이전 것으로 보인다** — 지금은 어떤 값이든 0 거부다. 게이트 수정 후 재확인 대상.
+
+> **2026-08-04 개정 — 배경·자리 산출물이 `ring_sgm` + `k_fit` 판이다.** step3.5를 기본 파일명(무접미사)으로 돌리면 `generate_defects`가 `roi_dir/clean_bg_selected.json`을 **자동 로드**하므로 `--clean_bg_json`은 불요다. 출력은 구 `synth_aroma`와 섞이지 않도록 **`synth_aroma_tobe`로 분리**한다(exp*에서 `--aroma_synthetic_dir`로 지정).
+>
+> ⚠️ **step3.5를 `--output_tag`로 돌린 경우에만** `--clean_bg_json <경로>`를 넣는다. 접미사가 붙으면 기본 파일명이 없어 **구 산출물이 자동 로드되거나 legacy 선정으로 조용히 폴백**한다 — 로그의 `clean_bg assignment ON` 줄로 반드시 확인할 것.
+>
+> ⚠️ **τ는 이제 폴백 ROI에서만 동작한다.** `_ring` 항목의 `position`이 `generate_defects`에서 `forced_xy`로 소비되는데, 그 분기가 `_positive_place` 앞에서 단락하며 `gate_ok=True`를 무조건 반환한다(`:1415-1421`). 즉 **위치가 있는 ROI는 τ·void·stage-2 re-pick을 전부 우회**하고, void 배제는 step3.5가 오프라인에서 이미 수행했다. τ가 실제로 도는 것은 `position=None`인 ROI 뿐이다 — mtd 18.9%, 나머지 0.1~2.6%(step3.5 §2-3). 그래서 `--compat_mode symmetric --compat_threshold $TAU`를 **안전망으로 유지**한다(step4c 재스캔 불요).
+>
+> **⚠ `placement-gate stats` 로는 ring 위치 소비 여부를 알 수 없다.** `gate_stats["active"] = texture_on or compat_on` 은 **CLI 인자가 켜졌는지**만 나타낸다 — `forced_xy` 가 단락해도 `compat_on` 이 True 라 `active` 는 전 paste 수로 찍힌다. 오히려 `fallback=0` · `repick_draws=0` 이 **위치가 소비된 것과 정합**한다(`forced_xy` 분기가 `gate_ok=True` 를 무조건 반환하고 re-pick 도 하지 않으므로).
+>
+> **소비 여부는 붙은 좌표를 직접 대조해 확인한다:**
+>
+> ```python
+> import json, re
+> sel = {s['roi_idx']: s for s in json.load(
+>     open(f"{S('roi', DS)}/clean_bg_selected.json", encoding='utf-8'))}
+> ann = json.load(open(f"{S('synth_aroma_tobe', DS)}/annotations.json", encoding='utf-8'))
+> match = mismatch = nopos = 0
+> for a in ann:
+>     m = re.search(r'syn_(\d+)_(\d+)', a['image_path'])
+>     if not m: continue
+>     ri, rep = int(m.group(1)), int(m.group(2))
+>     s = sel.get(ri)
+>     if not s: continue
+>     poss, pool = s.get('topk_positions') or [], s.get('topk_pool') or []
+>     exp = poss[rep % len(pool)] if pool and rep % len(pool) < len(poss) else None
+>     if exp is None:                                          nopos += 1
+>     elif a['bbox'][0] == exp[0] and a['bbox'][1] == exp[1]:   match += 1
+>     else:                                                    mismatch += 1
+> print(f"좌표 일치 {match}  불일치 {mismatch}  위치없음 {nopos} / {len(ann)}")
+> ```
+>
+> `일치` 가 대부분이고 `위치없음` 이 step3.5 의 ring fallback 비율(§2-3)과 맞으면 정상. `불일치` 는 clamp(`fx = min(pos, W - crop_w)`) 때문일 수 있으니 해당 bbox 가 이미지 우/하단에 붙었는지 확인한다.
 
 > **compat 없이(순수 clean_bg 배치)** 돌리려면 `--compat_mode`·`--compat_threshold`·`--compat_matrix_json`을 빼면 된다(그러면 step4c τ도 불요 → phase0·step1~3·step3.5만으로 완결). 단 2차에서 controlnet arm과 비교할 때는 **placement 게이트를 맞춰야** 공정하다.
 > **활성 확인(로그)**: `clean_bg assignment ON` + `clean_bg resolve used/fallback/mismatch`(U≈T, F·M≈0) + `compat gate ON: threshold=… mode=symmetric` + `placement-gate stats: active=N compat=N fallback=M%`. `--config` 없이도 `compat gate ON`이 떠야 정상(로컬 mtd 20-ROI: active=40 fallback=0, clean_bg used=40/40). `controlnet stats`·`ar_fallback`은 copy_paste에선 안 나온다(정상).

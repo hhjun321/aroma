@@ -10,7 +10,9 @@
 - **random arm**: `generate_random.py` (통제, 동일 clean-bg 게이트)
 - **데이터셋 준비(step -1)**: `prepare_datasets_execute.md` — v2-1 5종(kolektor 포함)을 AROMA 레이아웃으로 준비 + `dataset_config.json` 등록. phase0 앞. (mvtec_leather는 Drive에 표준 레이아웃으로 이미 존재 → 준비 불요, 경로 확인만.)
 - **생성 선결 준비(step4)**: `build_train_jsonl.py` + `train_controlnet.py`(ControlNet 학습) **+ τ 사전스캔**(`compat_gate_cpu_diagnosis §10`). step5 생성이 소비하는 CN 모델·τ를 이 단계에서 모두 확정. step4는 step0·step3 산출(profiling·roi_candidates)을 입력으로 쓰므로 step3 뒤·step5 앞.
-- **실행 순서 체인 = prepare_datasets(step -1) → phase0 → step1 → step2 → step3 → step4(CN 학습+τ) → step5(생성) → exp\***
+- **배경·자리 선정(step3.5)**: `clean_bg_selection.py --k_fit --site_selection ring --emit_random_arm` (**2026-08-04 개정**). 배경 랭킹은 4 cue(src / class / **형태 군집 k** / size, lift 자동 가중), 자리는 **링 분포 매칭**(`hist∩(ring 셀 분포, L1norm(matrix_symmetric[k]))` argmax, footprint void 자리 배제). 논문 수식 `√(P_def·P_clean)`은 **무수정** — 바뀐 것은 배경 cue 하나 추가와 자리 score 계산 방식(footprint 평균 → 링 분포 매칭)뿐이다. 근거: dev_note `aroma_adjacent_context_bg_selection.md`. `--geometry_prior`와 배타. 산출은 기본 파일명(`clean_bg_selected.json`)이며 step5가 자동 로드한다 — 구 산출물과 나란히 두려면 `--output_tag`를 쓰고 step5에 `--clean_bg_json`을 명시. 합성 출력은 구 `synth_aroma`와 섞이지 않게 **`synth_aroma_tobe`로 분리**한다.
+- **실행 순서 체인 = prepare_datasets(step -1) → phase0 → step1 → step2 → step3 → step4(CN 학습+τ) → step3.5 → step5(생성) → exp\***
+- **ring 채택 후 재수행 범위**: step3.5 → step5. `prepare_datasets`·`phase0`·`step1~3`·`step4`는 **재수행 불요**(프로파일링·ROI·CN 모델 무변경, `matrix_symmetric`을 그대로 소비). `defect_tiles.py`도 불요 — `ring_sgm`·`k_fit`이 읽지 않는다. τ 사전스캔(step4c)도 재스캔 불요이나, 링 위치가 있는 ROI에서는 τ가 **우회**되고 폴백 ROI에서만 동작한다는 점을 감안한다.
 - **다운스트림**: `exp4_v2_supervised_detection.py` — **fresh 전조건 학습**(baseline/random/aroma 모두 처음부터, graft 미사용)
 - **데이터셋**: 핵심 4종(공용 stage-first 루프, ControlNet 학습 대상)은 `severstal · mvtec_leather · mtd · aitex`이며, v2-1 유니버스는 여기에 `kolektor`(5번째, domain=mvtec mask resolver·class_mode=single·copy_paste 전용·CN학습 skip)를 더해 정확히 5종이다. **aitex = tiled(256×256/stride128, single-class)**. kolektor 전용 절차는 `kolektor_execute.md` 참고.
 
@@ -52,7 +54,8 @@ def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (
 | `cn_data` | `sym_final/cn_data/{ds}` | step4 | step4 |
 | `controlnet_models` | `sym_final/controlnet_models/{ds}/best_model` | step4 | step5 |
 | `compat_gate` | `sym_final/compat_gate/{ds}` | step4(τ 사전스캔) | step5 |
-| `synth_aroma` | `sym_final/synth_aroma/{ds}` | step5 | exp4v2/exp3/exp5/exp6 |
+| `synth_aroma` | `sym_final/synth_aroma/{ds}` | step5 (구 판) | exp4v2/exp3/exp5/exp6 |
+| `synth_aroma_tobe` | `sym_final/synth_aroma_tobe/{ds}` | step5 (**ring 개정본, 2026-08-04**) | exp* — `--aroma_synthetic_dir $(S('synth_aroma_tobe'))` |
 | `synth_random` | `sym_final/synth_random/{ds}` | step5 | exp4v2/exp3/exp5/exp6 |
 | `exp4v2` | `sym_final/exp4v2` | exp4v2 | — |
 | `exp3` | `sym_final/exp3` | exp3 | — |

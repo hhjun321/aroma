@@ -2542,6 +2542,20 @@ def _stage_inputs(
         if orig not in normal_map and Path(orig).exists():
             p = Path(orig)
             dst = normal_dir_local / p.name
+            # RE-RUN REUSE (must precede the collision suffix). On a second run the
+            # staging dir still holds every normal from the first, so a bare
+            # `dst.exists()` check would suffix the ENTIRE pool to `{stem}_{n}` —
+            # the staged basenames then no longer match the `assigned_normal_id`
+            # stems in clean_bg_selected.json and clean_bg resolution collapses to
+            # 0% (observed 2026-08-04: first run used=3000, second used=0 on all
+            # five datasets). A pre-existing dst of identical size is our own copy
+            # of the same source, so reuse it and skip the copy.
+            if (str(dst) not in _claimed_normal and dst.exists()
+                    and dst.stat().st_size == p.stat().st_size):
+                _claimed_normal.add(str(dst))
+                normal_map[orig] = str(dst)
+                continue
+            # Genuine basename collision between DIFFERENT sources this run.
             if str(dst) in _claimed_normal or dst.exists():
                 n = len(normal_map)
                 dst = normal_dir_local / f"{p.stem}_{n}{p.suffix}"

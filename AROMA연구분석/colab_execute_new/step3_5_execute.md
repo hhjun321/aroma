@@ -52,13 +52,26 @@ for DS in DATASETS:
         --profiling_dir  $PROF \
         --roi_dir        $ROI \
         --output_dir     $ROI \
+        --k_fit --site_selection ring \
         --emit_random_arm
 ```
 
+> **2026-08-04 개정 — `ring_sgm` + `k_fit` 채택.** 근거·실측은 dev_note `aroma_adjacent_context_bg_selection.md`. 논문 수식 `ctx_prior ∝ √(P_def·P_clean)` 은 **무수정**이고, 바뀐 것은 (a) 배경 랭킹에 형태 군집 축 cue 추가, (b) 자리 선택의 score 계산을 footprint 평균 → 링 분포 매칭으로 바꾼 것 둘뿐이다.
+>
+> **신규 인자 3개**
+> - `--k_fit` — 배경 랭킹에 네 번째 cue 추가: `u_mor(g) = hist∩(h_g, L1norm(matrix_symmetric[k]))`. 형태 군집 축은 `class_fit`(도메인 라벨 축)과 다른 분할이다(severstal class 4 vs cluster 5, leather class 5 vs cluster 3). 가중치는 기존 lift 자동 산출이 배분 → 신호가 평탄하면 `w_k≈0` 으로 스스로 소거된다. **로컬 5종 실측 `w_k` = 0.166~0.247 로 전부 가중치를 벌었다.**
+> - `--site_selection ring` — 붙일 자리를 오프라인 확정한다. 자리 둘레(footprint 사각형의 8이웃) 셀 분포와 `L1norm(matrix_symmetric[k])` 의 히스토그램 교집합이 최대인 위치. footprint 에 void/결측 타일이 있는 자리는 후보에서 배제. `position`/`topk_positions` 에 기록되고 step5 가 `forced_xy` 로 소비 → **generate 측 코드 무변경**.
+> - `--output_tag <접미사>` — (선택, 기본 없음) 산출 파일명에 접미사를 붙여 기존 산출물과 나란히 둔다. 예 `_ring` → `clean_bg_selected_ring.json`. **접미사를 쓰면 step5 가 기본 파일명을 자동 로드하지 못하므로 `--clean_bg_json` 으로 명시 지정해야 한다.** 이전 실험과의 비교선을 보존하려는 경우에만 사용하고, **기본 운용은 무접미사**(기존 파일명 덮어쓰기)다 — step5 가 인자 없이 자동 로드한다.
+>
+> ⚠️ **`--site_selection ring` 과 `--geometry_prior` 는 배타** — 둘 다 `topk_positions` 를 채운다. 동시 지정 시 스크립트가 에러 종료한다.
+>
+> ⚠️ **ring 위치는 런타임 τ·void 게이트를 우회한다.** `generate_defects` 의 `forced_xy` 분기가 `_positive_place` 앞에서 단락하고 `gate_ok=True` 를 반환하기 때문이다. 그래서 자리 후보 열거 단계에서 footprint void 를 **오프라인이 직접 배제**한다. τ 는 `position=None` 인 폴백 ROI 에서만 동작한다(§STEP 2-3).
+>
 > `--emit_random_arm`: 대칭 대조군용 `clean_bg_random_arm.json`(동일 ROI 집합, random 배경)을 함께 생성. **AROMA arm vs random arm이 배경 정체성만 다르고 배치/블렌딩은 동일**해지는 계측기(step5에서 `--clean_bg_json`으로 선택).
 >
 > **선택 인자**:
-> - `--geometry_prior` — **Phase 3(E2 레버)**: 클래스별 실제 결함 기하(edge/surface/span prior)를 morphology bbox+실제 dim에서 유도해, 배정 배경 위 **paste 위치를 precompute**(`position`/`topk_positions`). step5가 이 위치를 소비(clamp-free, 아래 §STEP1 주의). 기본 OFF(mAP 효과 GPU-TBD). ON 시 배치가 배경 정체성뿐 아니라 위치까지 결정 → 배경 대칭대조(random arm)와는 별개의 **배치-정책 실험**(AROMA-geo vs AROMA-nogeo)용.
+> - `--site_pool_cap <int>` — ring 자리를 산출할 pool 상위 개수(기본 16). generate 는 `rep_idx % len(pool)` 로 인덱싱하므로 `--n_per_roi 3` 이면 인덱스 0~2 만 소비 → 기본값으로 충분하다. `n_per_roi` 를 16 초과로 올릴 때만 상향.
+> - `--geometry_prior` — **Phase 3(E2 레버)**: 클래스별 실제 결함 기하(edge/surface/span prior)를 morphology bbox+실제 dim에서 유도해, 배정 배경 위 **paste 위치를 precompute**(`position`/`topk_positions`). step5가 이 위치를 소비(clamp-free, 아래 §STEP1 주의). 기본 OFF(mAP 효과 GPU-TBD). **`--site_selection ring` 과 배타** — ring 채택 후로는 사용하지 않는다.
 > - `--pool_k <int>` — per-ROI 배경 풀 크기 상한(기본: 데이터-유도 P95). 명시 시 고정.
 > - `--void_frac_max <float>` — void 컷 상한(기본: 0.5 = 과반-void 경계). 명시 시 고정.
 > - `--void_floor_pct <float>` — void floor 유도 percentile(기본 15, dark-void 클러스터 위). 명시 시 고정.
@@ -96,9 +109,10 @@ for DS in DATASETS:
     ceil = float(m.group(1)) if m else 0.0
     ref = E1_SIM_BEST.get(DS)
     ok = ref is None or abs(ceil - ref) < 0.05
-    # 데이터-유도 3-신호 가중(w_src/w_class/w_size)도 함께 표기 — 정직성/재현
-    w = re.search(r'w_src=([0-9.]+)\s+w_class=([0-9.]+)\s+w_size=([0-9.]+)', sm)
-    wtxt = f" | weights src={w.group(1)} class={w.group(2)} size={w.group(3)}" if w else ""
+    # 데이터-유도 4-신호 가중(w_src/w_class/w_size/w_k)도 함께 표기 — 정직성/재현
+    w = re.search(r'w_src=([0-9.]+)\s+w_class=([0-9.]+)\s+w_size=([0-9.]+)\s+w_k=([0-9.]+)', sm)
+    wtxt = (f" | weights src={w.group(1)} class={w.group(2)} size={w.group(3)}"
+            f" k={w.group(4)}") if w else ""
     # image_id 매칭율 — <1.0이면 stale roi/profiling 불일치(src 신호 전멸의 진짜 원인)
     mf = re.search(r'src_match_frac=([0-9.]+)', sm)
     frac = float(mf.group(1)) if mf else 1.0
@@ -112,6 +126,41 @@ for DS in DATASETS:
 > **3-신호 데이터-유도 가중(no-hardcoding)**: `w_src`(per-source hist) + `w_class`(클래스-조건부 hist, Phase 2) + `w_size`(크기 fit, 옵션1). 각 신호의 관측 lift에 비례하며 정규화. **배경 크기가 균일한 셋은 `w_size≈0`으로 자동 downweight**(변별 불가 신호 자동 억제), 크기 편차 있는 셋(mtd)은 `w_size>0`. 로컬 실측: mtd `src=0.559 class=0.282 size=0.160`(20-ROI 재검증). 값이 데이터셋별로 다른 것이 정상.
 
 > **discretization 갭 해소(`b1bb497`)**: 과거 DRIFT 원인이던 profiling 비-overlap 타일링 ↔ generate_defects 타일링 dim 불일치는, phase0가 `image_w/image_h`를 방출하면 clean_bg가 **실제 dim**을 써서 사라진다(로컬 mtd: patch-격자 63.2px 과소추정 → 0px). `image_w/image_h` 컬럼이 없으면(구 profiling) grid fallback이라 갭이 남을 수 있으니, DRIFT(±0.05 초과) 시 **phase0를 `b1bb497` 이상으로 재실행**했는지 먼저 확인.
+
+### 2-3. `k_fit` · ring 자리 산출 확인 (2026-08-04 신설)
+
+```python
+import re, json
+from pathlib import Path
+for DS in DATASETS:
+    roi = S('roi', DS)
+    sm  = Path(f"{roi}/clean_bg_summary.md").read_text(encoding='utf-8')
+    wk  = re.search(r'w_k=([0-9.]+)', sm)
+    lk  = re.search(r'lift_k=([0-9.]+)', sm)
+    st  = re.search(r'positions (\d+)\s+fallback (\d+) \(([0-9.]+)%\)', sm)
+    sel = json.load(open(f"{roi}/clean_bg_selected.json", encoding='utf-8'))
+    n_pos = sum(1 for s in sel if s.get('position'))
+    print(f"{DS:14s} w_k={wk.group(1) if wk else '?':6s} lift_k={lk.group(1) if lk else '?':6s}"
+          f" | ring positions={st.group(1) if st else '-':>6s}"
+          f" fallback={st.group(3) if st else '-':>5s}%"
+          f" | ROI with position {n_pos}/{len(sel)}")
+    assert wk, f"[{DS}] w_k 없음 — --k_fit 미전달"
+    assert st, f"[{DS}] ring 통계 없음 — --site_selection ring 미전달"
+```
+
+**로컬 실측 기준값** (2026-08-03, 5종):
+
+| ds | `w_k` | `lift_k` | ring fallback |
+|---|---|---|---|
+| kolektor | 0.247 | 0.141 | 2.6% |
+| severstal | 0.219 | 0.200 | 2.2% |
+| mtd | 0.206 | 0.183 | **18.9%** |
+| mvtec_leather | 0.199 | 0.197 | 0.1% |
+| aitex | 0.166 | 0.266 | 0.9% |
+
+> **`w_k`가 0에 가까우면** 그 데이터셋에서는 형태 군집 축이 배경을 구분하지 못한다는 뜻이다(lift 자동 가중이 스스로 소거). 오류가 아니라 관측 결과이므로 그대로 기록한다. `w_size`가 4/5 데이터셋에서 0.0으로 소거되는 것이 같은 메커니즘이다.
+>
+> **mtd fallback 18.9%** 는 격자 4×4 + 절단 밴드 24.5% + footprint void 배제가 겹친 결과다. 그 ROI 는 `position=None` 이라 step5 가 기존 `_positive_place` 경로로 자연 폴백하며, **τ 게이트도 그 ROI 에서만 동작**한다.
 
 ---
 
