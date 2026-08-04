@@ -1,6 +1,6 @@
 # 배경 선택 · 자리 선택 개선 — `ring_sgm` + `k_fit`
 
-## (성격: 채택 확정 · 구현 완료. 합성/다운스트림 미수행)
+## (성격: 채택 확정 · 구현 완료 · **실제 산출물 검증 완료** (2026-08-04). 다운스트림은 범위 밖)
 
 논문의 `(k, c)` 구조와 수식 `ctx_prior(k,c) ∝ √(P_def(k,c)·P_clean(c))`을 **그대로 유지**한 채, 두 지점을 바꾼다.
 
@@ -271,7 +271,77 @@ severstal ROI 1,000건 중 **978건 위치 확정**. fallback은 `position=None`
 
 **`ctx_prior` 대조 시트** — 동일 자리 **1/30 (3%)**. `ctx_prior`(파랑)가 백색 침전물·오염 영역에 자주 붙고 `ring_sgm`(초록)은 피한다. 침전물은 `P_clean`·`P_def` 양쪽에서 어느 정도 흔해 기하평균이 높기 때문이며, 분포 매칭은 국소 이상치 하나로 점수가 오르지 않는다. **§3-1 (b)의 기전이 육안으로 같은 모습이다.**
 
-### 3-5. `defect_tiles.py` 검증
+### 3-5. 실제 합성 산출물 검증 — 파이프라인 끝까지 확인 (2026-08-04) ★
+
+지금까지의 P1(§3-1)은 "알고리즘이 고를 자리"를 계산한 것이었다. 여기서는 **실제로 붙은 좌표**로 다시 잰다 — `--min-bg-quality` fail-open · 스테이징 · 폴백까지 전부 통과한 산출물이다.
+
+**실행 조건**: step3.5 `--k_fit --site_selection ring` → step5 `copy_paste`, `n_per_roi 2`, 출력 `synth_aroma_tobe`. 5종 전량.
+
+#### (a) 배치가 파이프라인 끝까지 살아남았다
+
+`annotations.json`의 `bbox` 좌표를 `clean_bg_selected.json`의 `position`과 대조:
+
+| ds | 좌표 일치 | 불일치 | 위치없음 | step3.5 폴백 예측 |
+|---|---|---|---|---|
+| mvtec_leather | 400 | **0** | 0 (0%) | 0.1% |
+| aitex | 397 | **0** | 3 (0.75%) | 0.9% |
+| severstal | 1969 | **0** | 31 (1.55%) | 2.2% |
+| kolektor | 392 | **0** | 8 (2.0%) | 2.6% |
+| mtd | 325 | **0** | 75 (18.75%) | 18.9% |
+
+**불일치 0** — 오프라인 `_effective_wh` 계산이 generate 측 clamp와 정확히 맞물린다. `위치없음`이 예측 폴백률과 일치.
+
+#### (b) 배치 규칙만 고립해 대조
+
+동일 결함 · **동일 배경**에서 배치 규칙만 갈랐다. `old`는 같은 배경에서 footprint 평균 argmax를 오프라인 재산출한 것이므로, ring과의 차이는 **score 계산 방식 하나**다.
+
+참조 분포 `P_real` = cluster k 결함의 실제 인접 문맥 셀 분포(`defect_tiles.json` `adjacent_r1`). ring이 최적화한 대상은 `matrix_symmetric`이므로 자기참조가 아니다.
+
+**P1 (JS divergence, 낮을수록 실제 결함 문맥에 근접)**
+
+| ds | **ring** | `old` (footprint 평균) | ring 개선 | `rand`(동일 배경 무작위) | `rand_arm`(실제 random arm) |
+|---|---|---|---|---|---|
+| severstal | 0.0917 | 0.0944 | −2.9% | 0.0626 | 0.1131 |
+| mvtec_leather | 0.2093 | 0.2507 | **−16.5%** | 0.1895 | 0.4817 |
+| mtd | 0.2397 | 0.2883 | **−16.9%** | 0.2702 | 0.3637 |
+| aitex | 0.1457 | 0.1667 | −12.6% | 0.1592 | 0.4523 |
+| kolektor | 0.4107 | 0.4297 | −4.4% | 0.3460 | 0.4211 |
+
+**void 침범률** (footprint에 void/결측 타일)
+
+| ds | **ring** | `old` | `rand` | `rand_arm` |
+|---|---|---|---|---|
+| severstal | **1.2%** | 20.4% | 7.5% | 23.3% |
+| mvtec_leather | **0.0%** | 0.0% | 0.5% | 22.5% |
+| mtd | **4.1%** | 8.5% | 10.3% | 35.8% |
+| aitex | **0.8%** | 3.2% | 3.5% | 13.8% |
+| kolektor | **0.0%** | 22.2% | 20.9% | 36.8% |
+
+#### (c) 확인된 것 3건
+
+| # | 주장 | 근거 |
+|---|---|---|
+| 1 | **ring이 구방식(footprint 평균)을 5/5에서 이긴다** | JS −2.9~−16.9%. 동일 배경 고립 대조이므로 score 계산 방식의 기여 |
+| 2 | **오프라인 void 배제가 런타임 fail-open을 대체한다** | severstal 20.4% → **1.2%**, kolektor 22.2% → **0.0%**. 런타임 `_is_clean_background`가 무력한데도 ring 경로가 이를 메웠다 |
+| 3 | **배경 선정(4 cue)이 무작위 배경보다 낫다** | `rand_arm`이 5/5 최악 (JS 0.113~0.482, void 13.8~36.8%). 프레임워크 수준 대조 |
+
+`rand`(동일 배경 균등 무작위)는 배경 선정 기여를 제거한 참고 열이다 — 프레임워크 수준 대조는 `rand_arm`이 맡는다.
+
+#### (d) 부수 관찰
+
+- **배경 다양성이 낮다** — leather 16 vs `rand_arm` 202, kolektor 53 vs 249. pool top-1만 쓰는 구조(§4 위험 7)
+- **mtd skip 59** — `cluster_id`/배경 해석 실패. 폴백 ROI(위치없음 75)와 겹칠 가능성
+
+#### (e) 착수 중 고친 파이프라인 버그 2건
+
+| # | 버그 | 조치 |
+|---|---|---|
+| 1 | **normal 스테이징 재실행 개명** — `_stage_inputs`가 `dst.exists()`면 `{stem}_{n}`으로 개명한다. 재실행에서는 이전 실행분과 자기 자신이 충돌해 **풀 전체가 개명** → 스테이징 basename이 `assigned_normal_id` stem과 어긋나 **clean_bg 해석이 0%로 붕괴**(1회차 `used=3000` → 2회차 `used=0`, 5종 동일). `mismatch` 가드는 `image_id`만 보므로 못 잡는다 | 동일 크기 dst 재사용 분기를 suffix 앞에 추가 (`generate_defects.py`) |
+| 2 | **aitex `TEX_T=None` argparse 사망** — 선결 체크가 `USE_CN`일 때만 prescan 부재를 잡아, copy_paste에서 `--texture-dist-threshold None`이 그대로 전달됐다 | `TEX_T is not None` 가드 + copy_paste 경로 경고 (`step5_execute.md`) |
+
+`placement-gate stats`의 `active`로는 ring 소비 여부를 알 수 없다는 것도 확인했다 — `texture_on or compat_on`(CLI 인자 on/off)일 뿐이다. 판정은 좌표 대조(a)로 한다.
+
+### 3-6. `defect_tiles.py` 검증
 
 | ds | 마스크 해결 | **csv/grid 불일치** | core 없음 | R1 타일 | R1 <4 |
 |---|---|---|---|---|---|
@@ -295,7 +365,7 @@ severstal ROI 1,000건 중 **978건 위치 확정**. fallback은 `position=None`
 |---|---|---|
 | **1** | **`ring_sgm`이 severstal −0.059 / mtd −0.017로 random 미달** — random 초과는 3/5. 논문 구조 유지의 대가로 **감수 결정**(2026-08-03). 인스턴스 질의는 5/5 초과하나 `k`를 버린다 | 감수 |
 | **2** | **radius 2 P1 미측정** — R1만 쟀다. 채택안에서 링 반경 영향 미확인 | 감수 |
-| **3** | **합성·다운스트림 미수행** — 오프라인 산출물까지만. `generate_defects` 실행, 육안(합성 후), exp4v2 전부 남음 | 미착수 |
+| ~~3~~ | ~~합성·다운스트림 미수행~~ → 합성은 **완료·검증**(§3-5). 다운스트림(exp4v2)은 미수행 — 이번 트랙은 **이론적 확인까지**로 범위를 확정했다(2026-08-04) | 범위 밖 |
 | **4** | **64px 격자 절단** — `_context_worker`가 우측·하단 나머지(최대 63px)를 버린다. mtd 면적 **24.5%**(max 54.9%), kolektor 13.2%. 나머지 3종 0%. mtd 56/388은 결함이 100% 격자 밖(§3-5 core 없음). **F1 채택** — 절단 격자 기준으로 산출하고 폴백 감수. F2(far-edge 앵커 추가 + 재프로파일링)는 `compatibility_matrix` 변경 → τ 재캘리브레이션이 필요해 보류 | 감수 |
 | **4b** | **build/runtime 격자 불일치** — `_context_worker`는 far edge를 버리고 `_normal_tile_cells._anchors`·`_tile_anchors`는 포함한다. 프로파일링이 학습하지 않은 타일을 런타임이 조회 → 전부 중립 0.5. mtd·kolektor 결과 해석 시 감안 | 미해결 |
 | **5** | **`_patch_void`의 구조적 한계** — 텍스처 전용이라 밝기를 직접 못 본다. 저분산·저엣지로 대리하므로 **밝고 매끈한 이상**(백색 침전물)을 못 잡는다. §3-4 육안에서 실제로 오염 배경 위에 자리가 잡힌 사례. p15 분위 컷이라 void가 없는 데이터셋에서도 하위 15%를 자른다. **그대로 유지 결정**(2026-08-03) | 감수 |
@@ -311,10 +381,11 @@ severstal ROI 1,000건 중 **978건 위치 확정**. fallback은 `position=None`
 
 1. ✅ `defect_tiles.py` 구현·검증·5종 산출
 2. ✅ `--k_fit` · `--site_selection ring` 구현·5종 실행·legacy 재현 확인
-3. ✅ 육안 검증 (자리만, 합성 전)
-4. **→ 합성 실행** (`generate_defects --clean_bg_json ..._ring.json`, copy_paste, CPU) → 합성 후 육안
-5. Colab 다운스트림 (exp4v2)
-6. 결과 확정 후 논문 반영 (`aroma_paper_gaps_placement.md` §4)
+3. ✅ 육안 검증 (자리만, 합성 전) — §3-4
+4. ✅ **Colab 합성 실행** (step3.5 → step5 copy_paste, `n_per_roi 2`, 5종) — 실행 가이드 갱신 완료
+5. ✅ **실제 산출물 검증** — §3-5. 좌표 일치·불일치 0, ring이 구방식을 5/5 우세, void 침범 20.4%→1.2%
+6. **→ 검증 종료 (2026-08-04).** 다운스트림(exp4v2)은 이번 트랙 범위 밖 — 벤치마크가 아니라 이론적 확인이 목적이었다
+7. 논문 반영은 별건 트랙 (`aroma_paper_gaps_placement.md` §4)
 
 ---
 

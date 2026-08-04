@@ -152,6 +152,12 @@ assert not missing, f"선결 산출 누락 — METHODS={METHODS}: 필요한 상�
 if USE_COMPAT:
     assert set(TAU_BY_DS) == set(DATASETS), f"τ 미로드 데이터셋 존재: {set(DATASETS) - set(TAU_BY_DS)}"
 print("\n✓ 선결 OK — TAU_BY_DS =", {k: round(v, 4) for k, v in TAU_BY_DS.items()})
+
+# ===== rep 수는 두 arm 공통 상수로 묶는다 (arm 간 합성 개수 비대칭 방지) =====
+N_PER_ROI = 2   # 2026-08-04 실행값. AROMA arm(STEP 3/3B)과 random arm(STEP 4)이 같은 값을
+                # 써야 합성 개수가 같아져 exp4v2 대조가 공정하다. 바꿀 때는 두 arm을 함께
+                # 재실행하고, 출력·스테이징 디렉터리를 먼저 비운다(rep 잔재 혼입 방지).
+print(f"N_PER_ROI = {N_PER_ROI}  (AROMA arm / random arm 공통)")
 ```
 
 > - `matrix_symmetric` 없으면 `--compat_mode symmetric`가 설계상 **hard-fail**한다 — phase0에서 symmetric 키를 emit한 profiling인지 확인.
@@ -166,7 +172,7 @@ print("\n✓ 선결 OK — TAU_BY_DS =", {k: round(v, 4) for k, v in TAU_BY_DS.i
 
 `_SPEC §3 step5`. 4종 공통 명령에 **데이터셋별 추가 플래그**만 붙는다.
 
-- **공통**: `--method controlnet --controlnet_path $CN_MODELS/$DS/best_model` + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <compatibility_matrix.json>` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--blend_mode seamless` + `--n_per_roi 3 --seed 42`.
+- **공통**: `--method controlnet --controlnet_path $CN_MODELS/$DS/best_model` + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <compatibility_matrix.json>` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--blend_mode seamless` + `--n_per_roi $NREP --seed 42`(`N_PER_ROI`, STEP 2 선언).
 - **mvtec_leather**: `--cn_no_grayscale` 추가(컬러 가죽 — grayscale 강제 해제).
 - **aitex**: `--cn_ar_threshold $AR_T --texture-dist-threshold $TEX_T` 추가(elongated 왜곡 방지, step4 확정 임계).
 - **`--local_staging` 미사용**(ControlNet): sidecar 캐시가 Drive 직결이어야 세션 재개 시 살아남는다.
@@ -209,7 +215,7 @@ for DS in DATASETS_GEN:
         --morphology_csv   $PROF/morphology_features.csv \
         --context_features $PROF/context_features.csv \
         --config           $PROF/recommended_config.yaml \
-        --n_per_roi 3 --seed 42 --blend_mode seamless \
+        --n_per_roi $NREP --seed 42 --blend_mode seamless \
         --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
         --compat_mode symmetric --compat_threshold $TAU \
         --compat_matrix_json $COMPAT \
@@ -237,7 +243,7 @@ for DS in DATASETS_GEN:
 copy-paste 피벗(무학습 기판). ControlNet 생성 대신 **결함 crop을 clean-bg에 직접 합성**한다. STEP 3(controlnet)과 **동일한 clean-bg 게이트·compat symmetric placement·clean_bg_selected 소비**를 쓰되, 생성 방식만 copy_paste다.
 
 - **선결이 가볍다**: ControlNet 학습(step4b, GPU) **불요**. phase0·step1~3·step3.5 + (compat 쓰면) step4c τ만 있으면 된다. **GPU 불필요(CPU)**.
-- **공통**: `--method copy_paste` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <…>`(positive placement, method-무관) + `--blend_mode seamless`(또는 `alpha`) + `--n_per_roi 3 --seed 42`.
+- **공통**: `--method copy_paste` + clean-bg 게이트(`--reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0`) + `--compat_mode symmetric --compat_threshold $TAU --compat_matrix_json <…>`(positive placement, method-무관) + `--blend_mode seamless`(또는 `alpha`) + `--n_per_roi $NREP --seed 42`(`N_PER_ROI`, STEP 2 선언).
 - **CN 전용 인자 미사용**: `--controlnet_path`·`--morphology_csv`·`--context_features`(CN conditioning), `--cn_ar_threshold`·`--cn_no_grayscale`(ControlNet squash/그레이스케일 전용)는 **넣지 않는다**(copy_paste는 squash가 없어 AR 폴백 자체가 없음).
 - **`--config` 불요**: compat 게이트의 `bin_edges`는 `--compat_matrix_json`(compatibility_matrix.json)에 이미 들어있어 **matrix JSON만으로 자기완결**한다(코드 `299c5b0`). `--config`를 넣어도 무해하나 copy_paste엔 불필요. (구버전 코드는 `--config`를 요구했으니 저장소가 `299c5b0` 이상인지 확인.)
 - **aitex 텍스처 게이트만** 선택 적용: `--texture-dist-threshold $TEX_T`(텍스처 이질 배치 거부는 method-무관). AR 게이트는 미적용.
@@ -261,6 +267,7 @@ for DS in DATASETS_GEN:
     os.environ['COMPAT'] = f"{S('profiling', DS)}/compatibility_matrix.json"
     os.environ['TAU']    = str(TAU_BY_DS[DS])         # step4c 확정 τ (폴백 ROI에서만 동작 — 아래 주의)
     os.environ['MINQ']   = str(MIN_BG_Q[DS])
+    os.environ['NREP']   = str(N_PER_ROI)
     # 텍스처 게이트만(선택). TEX_T 가 None 이면 인자를 붙이지 않는다 —
     # 붙이면 argparse 가 `invalid float value: 'None'` 로 죽는다.
     os.environ['EXTRA']  = (f"--texture-dist-threshold {TEX_T}"
@@ -271,7 +278,7 @@ for DS in DATASETS_GEN:
         --normal_dir  $NORMAL \
         --output_dir  $OUT \
         --method      copy_paste \
-        --n_per_roi 3 --seed 42 --blend_mode seamless \
+        --n_per_roi $NREP --seed 42 --blend_mode seamless \
         --reject-clean-bg --min-bg-quality $MINQ --bg-blur-threshold 100.0 \
         --compat_mode symmetric --compat_threshold $TAU \
         --compat_matrix_json $COMPAT \
@@ -355,12 +362,13 @@ for DS in DATASETS:
     os.environ['ROI']    = S('roi', DS)
     os.environ['NORMAL'] = normal_dir(DS)
     os.environ['OUT_R']  = S('synth_random', DS)                      # ← exp*가 /{ds} 붙임
+    os.environ['NREP']   = str(N_PER_ROI)
     print(f"\n===== random gen {DS} =====")
     !python $AROMA_SCRIPTS/generate_random.py \
         --candidates_json $ROI/roi_candidates.json \
         --normal_dir      $NORMAL \
         --output_dir      $OUT_R \
-        --top_k 200 --n_per_roi 3 --seed 42 \
+        --top_k 200 --n_per_roi $NREP --seed 42 \
         --local_staging
 ```
 
