@@ -3161,6 +3161,8 @@ def run(
             clean_bg_map = None
     # Resolve telemetry (surfaces stale json / id↔path mismatch / leather collision).
     _cbg_used = _cbg_fallback = _cbg_mismatch = 0
+    # position_source consumption tally (devnote aroma_synth_provenance §4-2d).
+    _pos_src_counts: Dict[str, int] = {}
 
     for roi_idx, roi_entry in enumerate(selected):
         for rep_idx in range(n_per_roi):
@@ -3192,6 +3194,12 @@ def run(
                     "deficit":       roi_entry.get("deficit", 0.0),
                     "mask_path":     None,
                     "bbox":          None,
+                    # Provenance (devnote aroma_synth_provenance §4-2c): dry-run
+                    # has no placement at all → source None, scores None.
+                    "position_source": None,
+                    "site_score":    None,
+                    "bg_score":      None,
+                    "bg_k_fit":      None,
                     "dry_run":       True,
                 })
                 n_ok += 1
@@ -3223,16 +3231,25 @@ def run(
                 _cbg_entry = None
             roi_entry.pop("_forced_xy", None)   # clear any prior geometry position
             # Resolve pool ids → paths, carrying the parallel precomputed position
-            # (Phase 3 geometry prior; None when --geometry_prior was off).
+            # (Phase 3 geometry prior; None when --geometry_prior was off) and the
+            # index-aligned ring site score (None for legacy jsons without it).
             _cbg_pairs = []
+            _pick_site_score = None
             if _cbg_entry:
                 _ids = _cbg_entry.get("topk_pool") or []
                 _poss = _cbg_entry.get("topk_positions") or []
+                _sscores = _cbg_entry.get("topk_site_scores") or []
                 for _i, _id in enumerate(_ids):
                     _rp = _resolve_bg(_id)
                     if _rp:
-                        _cbg_pairs.append((_rp, _poss[_i] if _i < len(_poss) else None))
-            _cbg_pool = [p for p, _ in _cbg_pairs]
+                        _cbg_pairs.append((_rp,
+                                           _poss[_i] if _i < len(_poss) else None,
+                                           _sscores[_i] if _i < len(_sscores) else None))
+            _cbg_pool = [p for p, _, _ in _cbg_pairs]
+            # bg_score/bg_k_fit describe the clean_bg assignment — only truthful
+            # when that pool was actually consumed (resolve-failure falls back to
+            # legacy selection, where the entry's scores describe an unused pick).
+            _cbg_consumed = bool(_cbg_pool)
             if clean_bg_map is not None and not _cbg_pool:
                 _cbg_fallback += 1
             if _cbg_pool:
@@ -3243,7 +3260,8 @@ def run(
                 # under partial resolution (some ROIs precomputed, some fallback),
                 # which the 0-draw variant did not guarantee.
                 _ = rng.random()
-                _pick_path, _pick_pos = _cbg_pairs[rep_idx % len(_cbg_pairs)]
+                _pick_path, _pick_pos, _pick_site_score = \
+                    _cbg_pairs[rep_idx % len(_cbg_pairs)]
                 normal_path = _pick_path
                 if _pick_pos:
                     roi_entry["_forced_xy"] = (int(_pick_pos[0]), int(_pick_pos[1]))
@@ -3318,6 +3336,16 @@ def run(
                 # background the composite wasn't made from. copy_paste meta
                 # carries normal_image only after a re-pick (else fallback).
                 ann_normal = meta.get("normal_image") or normal_path
+                # Provenance label. _forced_xy is only ever set from a precomputed
+                # clean_bg position (and that path bypasses stage-2 re-pick, so the
+                # recorded background is the one actually used). site_mode is
+                # written per-record by clean_bg_selection.py; legacy jsons lack
+                # it → "precomputed" (mode unknown, still non-fallback).
+                if roi_entry.get("_forced_xy"):
+                    _pos_src = (_cbg_entry or {}).get("site_mode") or "precomputed"
+                else:
+                    _pos_src = "fallback"
+                _pos_src_counts[_pos_src] = _pos_src_counts.get(_pos_src, 0) + 1
                 annotations.append({
                     "image_path":    final_out_path,
                     "source_roi":    orig_source_roi[roi_idx],
@@ -3338,6 +3366,18 @@ def run(
                     "deficit":       roi_entry.get("deficit", 0.0),
                     "mask_path":     ann_mask_path,
                     "bbox":          meta.get("bbox"),
+                    # Provenance (devnote aroma_synth_provenance §4-2c):
+                    # "ring"/"geometry_prior" when this rep consumed a precomputed
+                    # position ("precomputed" for legacy jsons lacking site_mode);
+                    # "fallback" when placement fell through to _positive_place /
+                    # random. exp4v2 ring-first sampling keys off "fallback".
+                    "position_source": _pos_src,
+                    "site_score":    (_pick_site_score
+                                      if roi_entry.get("_forced_xy") else None),
+                    "bg_score":      ((_cbg_entry or {}).get("score")
+                                      if _cbg_consumed else None),
+                    "bg_k_fit":      ((_cbg_entry or {}).get("k_fit")
+                                      if _cbg_consumed else None),
                     "dry_run":       False,
                 })
             else:
@@ -3355,6 +3395,10 @@ def run(
     drive_out.mkdir(parents=True, exist_ok=True)
     save_json(annotations, str(drive_out / "annotations.json"))
     logger.info("Generated %d images (%d skipped) → %s", n_ok, n_skip, drive_out)
+    if _pos_src_counts:
+        logger.info("position_source: %s / %d",
+                    " ".join(f"{k}={v}" for k, v in sorted(_pos_src_counts.items())),
+                    sum(_pos_src_counts.values()))
     if clean_bg_map is not None:
         _cbg_total = _cbg_used + _cbg_fallback
         logger.info("clean_bg resolve: used=%d fallback=%d mismatch=%d / %d (roi,rep)",

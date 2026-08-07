@@ -866,6 +866,12 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
             # brittle source_roi path re-parse. None for legacy annotations.json
             # (no field) → _resolve_synth_class falls back to path parse.
             "class_key": e.get("class_key"),
+            # Placement provenance (generate_defects; devnote
+            # aroma_synth_provenance §4-3): "ring"/"geometry_prior"/"precomputed"
+            # vs "fallback". Missing key (legacy / random / casda annotations)
+            # stays absent so _ring_first_sample keeps the legacy uniform draw.
+            **({"position_source": e["position_source"]}
+               if "position_source" in e else {}),
         })
 
     log_fn = logger.info if valid else logger.error
@@ -884,6 +890,39 @@ def _load_synth_annotations(synth_root: str, dataset_key: str) -> List[Dict[str,
             dataset_key, len(entries), Path(synth_root) / dataset_key,
         )
     return valid
+
+
+def _ring_first_sample(
+    anns: List[Dict[str, Any]], cap: int, seed: int,
+) -> Tuple[List[Dict[str, Any]], Optional[Tuple[int, int, int, int]]]:
+    """Provenance-aware synth subsample (devnote aroma_synth_provenance §4-3).
+
+    ``position_source`` 가 어느 항목에도 없으면(legacy aroma / random / casda
+    annotations) 기존 균일 무작위와 **완전히 동일한 결과** — 같은
+    ``random.Random(seed)`` 로 같은 ``sample(anns, cap)`` 한 번만 소비한다.
+
+    필드가 있으면 "fallback" 이 아닌 항목(= AROMA 가 실제로 배치한 샘플)을
+    우선 소비하고, 부족분만 fallback 풀에서 채운다. 개수는 항상 cap 으로
+    유지되므로 arm 간 n_synth_train parity 는 불변이다.
+
+    Returns ``(subsample, stats)`` — stats 는 provenance 경로일 때만
+    ``(n_ring_taken, n_fb_taken, ring_pool, fb_pool)``, legacy 경로면 None.
+    """
+    rng_sub = random.Random(seed)
+    if not any("position_source" in a for a in anns):
+        return rng_sub.sample(anns, cap), None          # legacy — byte-identical
+    ring = [a for a in anns if a.get("position_source") != "fallback"]
+    fb = [a for a in anns if a.get("position_source") == "fallback"]
+    if not ring:
+        # 전량 fallback (random/casda arm: generate_defects.run() 위임이라 필드는
+        # 있으나 precomputed 배치가 없다) — 선호할 대상이 없으므로 균일 추출.
+        # provenance 로그·경고 대상 아님 (아니면 arm 마다 오발 경고).
+        return rng_sub.sample(anns, cap), None
+    if len(ring) >= cap:
+        return rng_sub.sample(ring, cap), (cap, 0, len(ring), len(fb))
+    need = cap - len(ring)
+    picked = list(ring) + rng_sub.sample(fb, need)
+    return picked, (len(ring), need, len(ring), len(fb))
 
 
 # ---------------------------------------------------------------------------
@@ -2364,12 +2403,23 @@ def _run_detection_mode(
                 for cond in ("random", "casda", "aroma"):
                     anns = synth_by_cond.get(cond, [])
                     if len(anns) > max_synth_per_ds:
-                        rng_sub = random.Random(seed)
-                        synth_by_cond[cond] = rng_sub.sample(anns, max_synth_per_ds)
+                        synth_by_cond[cond], _prov = _ring_first_sample(
+                            anns, max_synth_per_ds, seed)
                         logger.info(
                             "  [SubSample] %s/%s: %d → %d",
                             ds, cond, len(anns), max_synth_per_ds,
                         )
+                        if _prov:
+                            _n_r, _n_f, _p_r, _p_f = _prov
+                            logger.info(
+                                "  [Provenance] %s/%s: ring=%d fallback=%d "
+                                "(pool ring=%d fallback=%d)",
+                                ds, cond, _n_r, _n_f, _p_r, _p_f)
+                            if _n_f:
+                                logger.warning(
+                                    "  [Provenance] %s/%s: ring pool (%d) < cap "
+                                    "(%d) — %d fallback-placed synth included",
+                                    ds, cond, _p_r, max_synth_per_ds, _n_f)
 
             # Local cache: stage Drive images to /tmp for I/O acceleration.
             # Linux/Colab only (os.name != "nt"). Rewrites lists + synth paths to /tmp.
@@ -2457,12 +2507,23 @@ def _run_detection_mode(
                     anns = synth_by_cond.get(cond, [])
                     cap = max(1, int(n_real_train * synth_ratio))
                     if len(anns) > cap:
-                        rng_sub = random.Random(seed)
-                        synth_by_cond[cond] = rng_sub.sample(anns, cap)
+                        synth_by_cond[cond], _prov = _ring_first_sample(
+                            anns, cap, seed)
                         logger.info(
                             "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (%d -> %d synth)",
                             ds, cond, synth_ratio, n_real_train, cap, len(anns), cap,
                         )
+                        if _prov:
+                            _n_r, _n_f, _p_r, _p_f = _prov
+                            logger.info(
+                                "  [Provenance] %s/%s: ring=%d fallback=%d "
+                                "(pool ring=%d fallback=%d)",
+                                ds, cond, _n_r, _n_f, _p_r, _p_f)
+                            if _n_f:
+                                logger.warning(
+                                    "  [Provenance] %s/%s: ring pool (%d) < cap "
+                                    "(%d) — %d fallback-placed synth included",
+                                    ds, cond, _p_r, cap, _n_f)
                     elif anns:
                         logger.info(
                             "  [SynthRatio] %s/%s: %.2f x %d real_train -> cap=%d  (available=%d, no trim)",

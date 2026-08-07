@@ -583,18 +583,21 @@ def _ring_keys(si: int, sj: int, bw: int, bh: int) -> List[Tuple[int, int]]:
 
 def _best_ring_site(grid: Dict[Tuple[int, int], str], gw: int, gh: int,
                     bw: int, bh: int, tgt: Dict[str, float],
-                    tile: int = 64) -> Optional[Tuple[int, int]]:
+                    tile: int = 64,
+                    ) -> Tuple[Optional[Tuple[int, int]], Optional[float]]:
     """ring_sgm: 링 셀 분포와 tgt 의 히스토그램 교집합이 최대인 자리 (픽셀 좌상단).
 
     footprint 에 void/결측 타일이 하나라도 있으면 그 자리는 버린다. generate 는
     이 위치를 forced_xy 로 소비하는데, 그 경로가 런타임 void 게이트와 tau 게이트를
     **우회**하므로(devnote §5-4-2) 여기서 걸러야 한다.
 
-    Returns None when nothing qualifies → 호출부가 position 을 비워 두고
+    Returns ``(best_xy, best_score)`` — the score is the argmax objective itself
+    (배치 품질↔다운스트림 상관 분석 재료, devnote aroma_synth_provenance §4-1).
+    ``(None, None)`` when nothing qualifies → 호출부가 position 을 비워 두고
     generate 가 기존 _positive_place 경로로 자연 폴백한다.
     """
     if not tgt or bw <= 0 or bh <= 0 or gw < bw or gh < bh:
-        return None
+        return None, None
     best, best_xy = -1.0, None
     for sj in range(gh - bh + 1):
         for si in range(gw - bw + 1):
@@ -611,7 +614,7 @@ def _best_ring_site(grid: Dict[Tuple[int, int], str], gw: int, gh: int,
             score = sum(min(v, tgt[c]) for c, v in hist.items() if c in tgt)
             if score > best:
                 best, best_xy = score, (si * tile, sj * tile)
-    return best_xy
+    return best_xy, (best if best_xy is not None else None)
 
 
 def _place_position(wh: Tuple[int, int], dim: Tuple[int, int],
@@ -873,6 +876,12 @@ def build_and_rank(
     selected: List[Dict[str, Any]] = []
     pool_sizes: List[int] = []
     n_site_pos, n_site_none = 0, 0
+    site_top_scores: List[float] = []   # top-1 site_score per ROI (derived stats)
+    # 레코드별 배치 모드 라벨 — generate 측 position_source 판정 재료. derived 는
+    # summary md 로만 나가 JSON 소비자가 접근할 수 없으므로 레코드에 직접 기록한다
+    # (devnote aroma_synth_provenance §4-2b, §8-1 확정).
+    _site_mode = ("ring" if site_selection == "ring"
+                  else ("geometry_prior" if geometry_prior else "off"))
     for pr in per_roi:
         src_key = pr["src_key"]
         scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok, size_fit, k_fit)
@@ -902,8 +911,9 @@ def build_and_rank(
         # the position stays valid — not clamped — when generation shrinks an
         # oversized crop to fit the background.
         def _pos_for(nid):
+            """(position, site_score). ring 외 경로의 score 는 None."""
             if not pr["bbox"]:
-                return None
+                return None, None
             dim = good_dim.get(nid, (0, 0))
             wh = _effective_wh((pr["bbox"][2], pr["bbox"][3]), dim)
             if site_selection == "ring":
@@ -916,23 +926,31 @@ def build_and_rank(
                 bh = max(1, -(-int(wh[1]) // 64))
                 return _best_ring_site(grid, gw, gh, bw, bh, tgt)
             if not geometry_prior:
-                return None
+                return None, None
             want_edge = class_edge.get(str(pr["cls_val"]), global_edge) > global_edge
             j = (_bg_jitter(src_key, nid) / 1e-7)  # blake2b frac in [0,1)
-            return _place_position(wh, dim, want_edge, j)
+            return _place_position(wh, dim, want_edge, j), None
 
         # ring 모드는 자리 탐색이 비싸므로 pool 상위 N 개만 산출한다. generate 는
         # rep_idx % len(pool) 로 인덱싱하므로 앞쪽만 실제로 소비된다.
         def _positions_for(pool_ids):
+            """(positions, site_scores) — 두 리스트는 동일 index 정렬."""
             cap = len(pool_ids) if site_selection != "ring" else max(1, site_pool_cap)
-            return [_pos_for(nid) if i < cap else None
-                    for i, nid in enumerate(pool_ids)]
+            pos_list, score_list = [], []
+            for i, nid in enumerate(pool_ids):
+                p, s = _pos_for(nid) if i < cap else (None, None)
+                pos_list.append(p)
+                score_list.append(round(s, 6) if s is not None else None)
+            return pos_list, score_list
 
         if top:
             comb_j, best_id, sf, cf, so, zf, kf = top[0]
             pool_ids = [t[1] for t in top]
-            positions = _positions_for(pool_ids)
+            positions, site_scores = _positions_for(pool_ids)
             pos_best = positions[0] if positions else None
+            site_best = site_scores[0] if site_scores else None
+            if site_best is not None:
+                site_top_scores.append(site_best)
             if site_selection == "ring":
                 n_site_pos += sum(1 for p in positions[:max(1, site_pool_cap)] if p)
                 n_site_none += sum(1 for p in positions[:max(1, site_pool_cap)] if not p)
@@ -940,7 +958,10 @@ def build_and_rank(
                                  assigned_normal_id=best_id,
                                  topk_pool=pool_ids,
                                  topk_positions=positions,
+                                 topk_site_scores=site_scores,     # index-aligned with topk_positions
                                  position=pos_best,
+                                 site_score=site_best,             # ring argmax objective (None off-ring)
+                                 site_mode=_site_mode,
                                  score=round(comb_j - _bg_jitter(src_key, best_id), 6),
                                  hist_intersection=round(sf, 6),   # per-source (E1-comparable)
                                  class_fit=round(cf, 6),           # class-conditioned (Phase 2)
@@ -951,7 +972,8 @@ def build_and_rank(
                                  n_valid_bg=len(pr["cand"])))
         else:
             selected.append(dict(base, assigned_normal_id=None, topk_pool=[],
-                                 topk_positions=[], position=None,
+                                 topk_positions=[], topk_site_scores=[],
+                                 position=None, site_score=None, site_mode=_site_mode,
                                  score=0.0, hist_intersection=0.0, class_fit=0.0,
                                  k_fit=0.0,
                                  size_ok=False, size_fit=0.0, scale_factor=0.0,
@@ -974,6 +996,14 @@ def build_and_rank(
         "site_fallback": float(n_site_none),
         "site_fallback_frac": (n_site_none / (n_site_pos + n_site_none)
                                if (n_site_pos + n_site_none) else 0.0),
+        # top-1 ring site score distribution (None 제외; ring OFF 면 전부 0.0) —
+        # 향후 임계/선별 판단 근거 (devnote aroma_synth_provenance §4-1c)
+        "site_score_mean": (round(float(np.mean(site_top_scores)), 6)
+                            if site_top_scores else 0.0),
+        "site_score_p10": (round(float(np.percentile(site_top_scores, 10.0)), 6)
+                           if site_top_scores else 0.0),
+        "site_score_p90": (round(float(np.percentile(site_top_scores, 90.0)), 6)
+                           if site_top_scores else 0.0),
         # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
         "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
         # fraction of ROIs whose image_id resolves to a defect row (E1 signal health);
