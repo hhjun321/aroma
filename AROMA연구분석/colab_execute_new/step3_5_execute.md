@@ -60,7 +60,8 @@ for DS in DATASETS:
 >
 > **신규 인자 3개**
 > - `--k_fit` — 배경 랭킹에 네 번째 cue 추가: `u_mor(g) = hist∩(h_g, L1norm(matrix_symmetric[k]))`. 형태 군집 축은 `class_fit`(도메인 라벨 축)과 다른 분할이다(severstal class 4 vs cluster 5, leather class 5 vs cluster 3). 가중치는 기존 lift 자동 산출이 배분 → 신호가 평탄하면 `w_k≈0` 으로 스스로 소거된다. **로컬 5종 실측 `w_k` = 0.166~0.247 로 전부 가중치를 벌었다.**
-> - `--site_selection ring` — 붙일 자리를 오프라인 확정한다. 자리 둘레(footprint 사각형의 8이웃) 셀 분포와 `L1norm(matrix_symmetric[k])` 의 히스토그램 교집합이 최대인 위치. footprint 에 void/결측 타일이 있는 자리는 후보에서 배제. `position`/`topk_positions` 에 기록되고 step5 가 `forced_xy` 로 소비 → **generate 측 코드 무변경**.
+> - `--site_selection ring` — 붙일 자리를 오프라인 확정한다. 자리 둘레(footprint 사각형의 8이웃) 셀 분포와 `L1norm(matrix_symmetric[k])` 의 히스토그램 교집합이 최대인 위치. footprint 에 void/결측 타일이 있는 자리는 후보에서 배제. `position`/`topk_positions` 에 기록되고 step5 가 `forced_xy` 로 소비.
+> - **(2026-08-07 신설 — provenance·score 기록)** 레코드에 `topk_site_scores`(`topk_positions` 와 index 정렬), `site_score`(top-1 링 매칭 점수), `site_mode`(`"ring"`/`"geometry_prior"`/`"off"`) 필드가 추가됐다. step5 가 이를 annotations 의 `position_source`/`site_score` 로 전파하고, exp4v2 가 폴백 배제 소비에 쓴다(dev_note `aroma_synth_provenance_and_scores.md`). **선택 로직·좌표는 무변경** — kolektor 200 레코드 좌표 완전 일치 실측(2026-08-07). 구(필드 없는) json 도 그대로 동작한다.
 > - `--output_tag <접미사>` — (선택, 기본 없음) 산출 파일명에 접미사를 붙여 기존 산출물과 나란히 둔다. 예 `_ring` → `clean_bg_selected_ring.json`. **접미사를 쓰면 step5 가 기본 파일명을 자동 로드하지 못하므로 `--clean_bg_json` 으로 명시 지정해야 한다.** 이전 실험과의 비교선을 보존하려는 경우에만 사용하고, **기본 운용은 무접미사**(기존 파일명 덮어쓰기)다 — step5 가 인자 없이 자동 로드한다.
 >
 > ⚠️ **`--site_selection ring` 과 `--geometry_prior` 는 배타** — 둘 다 `topk_positions` 를 채운다. 동시 지정 시 스크립트가 에러 종료한다.
@@ -140,12 +141,18 @@ for DS in DATASETS:
     st  = re.search(r'positions (\d+)\s+fallback (\d+) \(([0-9.]+)%\)', sm)
     sel = json.load(open(f"{roi}/clean_bg_selected.json", encoding='utf-8'))
     n_pos = sum(1 for s in sel if s.get('position'))
+    # 2026-08-07 신설 필드 — topk_positions 와 index 정렬돼야 한다
+    n_ss  = sum(1 for s in sel if s.get('site_score') is not None)
+    bad   = sum(1 for s in sel
+                if len(s.get('topk_site_scores') or []) != len(s.get('topk_positions') or []))
     print(f"{DS:14s} w_k={wk.group(1) if wk else '?':6s} lift_k={lk.group(1) if lk else '?':6s}"
           f" | ring positions={st.group(1) if st else '-':>6s}"
           f" fallback={st.group(3) if st else '-':>5s}%"
-          f" | ROI with position {n_pos}/{len(sel)}")
+          f" | ROI with position {n_pos}/{len(sel)}  site_score {n_ss}/{len(sel)}")
     assert wk, f"[{DS}] w_k 없음 — --k_fit 미전달"
     assert st, f"[{DS}] ring 통계 없음 — --site_selection ring 미전달"
+    assert bad == 0, f"[{DS}] topk_site_scores/positions 길이 불일치 {bad}건"
+    assert sel[0].get('site_mode') == 'ring', f"[{DS}] site_mode != ring — 구버전 스크립트로 실행됨"
 ```
 
 **로컬 실측 기준값** (2026-08-03, 5종):

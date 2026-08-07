@@ -320,7 +320,16 @@ for DS in DATASETS_GEN:
 >
 > **⚠ `placement-gate stats` 로는 ring 위치 소비 여부를 알 수 없다.** `gate_stats["active"] = texture_on or compat_on` 은 **CLI 인자가 켜졌는지**만 나타낸다 — `forced_xy` 가 단락해도 `compat_on` 이 True 라 `active` 는 전 paste 수로 찍힌다. 오히려 `fallback=0` · `repick_draws=0` 이 **위치가 소비된 것과 정합**한다(`forced_xy` 분기가 `gate_ok=True` 를 무조건 반환하고 re-pick 도 하지 않으므로).
 >
-> **소비 여부는 붙은 좌표를 직접 대조해 확인한다:**
+> **(2026-08-07 신설) annotations 가 provenance 를 직접 기록한다.** 각 항목에 `position_source`(`"ring"` = precompute 자리 소비 / `"fallback"` = `_positive_place` 폴백 / 구 clean_bg json 이면 `"precomputed"`), `site_score`(소비한 자리의 링 매칭 점수), `bg_score`/`bg_k_fit`(배경 선정 점수)가 붙는다. 실행 로그에도 `position_source: ring=N fallback=M / total` 요약이 찍힌다 — **이 줄이 step3.5 §2-3 의 ring fallback 비율과 맞아야 정상**이다(mtd ≈18.9%, 나머지 0.1~2.6%). exp4v2 는 이 필드로 aroma arm 학습셋에서 폴백 표본을 배제한다(dev_note `aroma_synth_provenance_and_scores.md`).
+>
+> ```python
+> import json, collections
+> ann = json.load(open(f"{S('synth_aroma_tobe', DS)}/annotations.json", encoding='utf-8'))
+> print(collections.Counter(a.get('position_source') for a in ann))
+> # 예상: ring 다수 + fallback 소수. None 뿐이면 구버전 generate 로 돌린 것
+> ```
+>
+> **소비 여부는 붙은 좌표를 직접 대조해 확인한다** (신 필드와 같은 답을 내는지 1회 교차검증 권장):
 >
 > ```python
 > import json, re

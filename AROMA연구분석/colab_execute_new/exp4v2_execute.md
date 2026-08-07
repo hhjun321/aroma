@@ -115,7 +115,11 @@ print("\nMISSING (labelable=0):", need)
 
 ## 운영 노트 — synth_ratio 스윕 & arm parity 범위
 
-**① synth_ratio 스윕은 재생성 불요(한 번 크게 생성 → ratio만 변경)**: exp4v2는 로드된 합성 풀에서 `cap=int(n_real_train*synth_ratio)`만큼 **동일 seed 결정적 subsample**한다(`exp4_v2_supervised_detection.py:2418-2434`). 따라서 step5(`generate_defects`)를 **최대 ratio(≥1.0)를 채울 만큼 크게** 한 번 생성(`--n_per_roi` 상향)해두면, `--synth_ratio`만 바꿔 여러 번 실행하면 된다. 주의: **ratio마다 `--output_dir` 분리**(같은 dir이면 `--resume` skip에 걸려 재학습 안 됨), `--seed`·`--val_frac` 고정.
+**① synth_ratio 스윕은 재생성 불요(한 번 크게 생성 → ratio만 변경)**: exp4v2는 로드된 합성 풀에서 `cap=int(n_real_train*synth_ratio)`만큼 **동일 seed 결정적 subsample**한다(`_ring_first_sample`). 따라서 step5(`generate_defects`)를 **최대 ratio(≥1.0)를 채울 만큼 크게** 한 번 생성(`--n_per_roi` 상향)해두면, `--synth_ratio`만 바꿔 여러 번 실행하면 된다. 주의: **ratio마다 `--output_dir` 분리**(같은 dir이면 `--resume` skip에 걸려 재학습 안 됨), `--seed`·`--val_frac` 고정.
+
+> **(2026-08-07 개정 — ring 우선 소비)** annotations 에 `position_source` 필드가 있으면(신판 step5 산출물) aroma arm 의 subsample 은 **균일 무작위가 아니라 `"fallback"` 이 아닌 표본 우선**으로 뽑는다 — ring 풀 ≥ cap 이면 폴백 표본이 **0건** 섞인다(구판 mtd 는 균일추출로 학습셋의 ≈19% 가 폴백이었다 — dev_note `aroma_synth_provenance_and_scores.md` §2). 부족분만 폴백에서 채우며 이때 warning 이 찍힌다. **총량 cap 은 arm 간 동일 유지**(parity 불변). 필드가 없는 구 annotations 는 기존 균일추출과 **원소 단위 동일**(재현성 보존, 로컬 실측). random/casda arm 은 전량 fallback 이라 자동으로 균일추출.
+>
+> **확인 로그**: `[Provenance] {ds}/aroma: ring=N fallback=M (pool ring=P fallback=F)` — aroma arm 에서 `fallback=0` 이 목표. 이 줄이 안 뜨면 구 annotations(필드 없음)로 돌고 있는 것.
 
 ```python
 for R in ["1.0", "0.8", "0.6", "0.4"]:
@@ -124,7 +128,7 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
         --synth_ratio $R --output_dir ${EXP4V2_OUT}/ratio_$R
 ```
 
-**② arm parity 범위(현행 = 총량 동수만)**: `synth_ratio` cap은 random/aroma/casda에 **동일 cap·동일 seed**를 적용해 **전체 합성 개수**를 맞춘다. **클래스별 개수·라벨화-후 실개수는 강제 매칭하지 않는다**(uniform subsample). 이는 의도적 — 합성 결함의 클래스 분포·bbox 라벨 수율은 AROMA 선택·배치의 **결과(post-treatment)**라, 강제 동일화하면 AROMA의 정당한 이득 경로를 지우는 **bad control**이 된다. 현행은 `n_synth_per_class`·distinct sources 로그로 **계측·보고**만 한다(분해 해석용). per-class stratified cap + 라벨화-후 동수는 **리뷰어가 명시 요청할 때만** 도입(보존 스펙: `.claude/.dev_note/aroma_exp4v2_perclass-parity-cap.md`).
+**② arm parity 범위(현행 = 총량 동수만)**: `synth_ratio` cap은 random/aroma/casda에 **동일 cap·동일 seed**를 적용해 **전체 합성 개수**를 맞춘다. **클래스별 개수·라벨화-후 실개수는 강제 매칭하지 않는다**(subsample — aroma arm 은 위 ①의 ring 우선, 그 외/구 산출물은 uniform). 이는 의도적 — 합성 결함의 클래스 분포·bbox 라벨 수율은 AROMA 선택·배치의 **결과(post-treatment)**라, 강제 동일화하면 AROMA의 정당한 이득 경로를 지우는 **bad control**이 된다. 현행은 `n_synth_per_class`·distinct sources 로그로 **계측·보고**만 한다(분해 해석용). per-class stratified cap + 라벨화-후 동수는 **리뷰어가 명시 요청할 때만** 도입(보존 스펙: `.claude/.dev_note/aroma_exp4v2_perclass-parity-cap.md`).
 
 ---
 
