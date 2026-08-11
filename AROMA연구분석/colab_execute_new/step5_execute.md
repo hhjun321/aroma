@@ -314,6 +314,26 @@ for DS in DATASETS_GEN:
 
 > **2026-08-04 개정 — 배경·자리 산출물이 `ring_sgm` + `k_fit` 판이다.** step3.5를 기본 파일명(무접미사)으로 돌리면 `generate_defects`가 `roi_dir/clean_bg_selected.json`을 **자동 로드**하므로 `--clean_bg_json`은 불요다. 출력은 구 `synth_aroma`와 섞이지 않도록 **`synth_aroma_tobe`로 분리**한다(exp*에서 `--aroma_synthetic_dir`로 지정).
 >
+> **2026-08-11 qf run — step3.5 를 `--site_quality_filter` 로 돌린 판의 합성.** 다음 4가지가 달라진다:
+> 1. **출력 분리**: `synth_aroma_tobe` 를 덮지 말고 **`synth_aroma_qf`** 로 — 20260811 exp4v2 aroma arm(필터 OFF 판)과의 게이트-기여 대조가 성립하려면 두 산출물이 공존해야 한다. `--n_per_roi` 는 tobe 판과 **동일(3)** 유지.
+> 2. **선결 체크 필수**: step3_5_execute.md §STEP 1 의 세대 일치 체크(image_id) + 아래 qf 지문 확인이 통과한 뒤에만 생성 시작. 2026-08-11 사고(로컬 업로드 json → `mismatch 85%` → 합성 무효) 재발 방지.
+> 3. **random arm(STEP 4) 재합성 불요** — `clean_bg_random_arm.json` 은 자리 정보를 갖지 않아 필터와 무관하게 동일하고, exp4v2 도 random 을 resume 재사용한다.
+> 4. **`--reject-clean-bg --min-bg-quality 0.7` 는 그대로 둔다** — 런타임 게이트는 cv2 4.13 fail-open no-op 이라 동작에 영향이 없고, CLI 를 20260811 과 동일하게 유지해야 차이가 "오프라인 필터 하나"로 고립된다. 로그의 `clean-bg pool gate: kept N/N (0 rejected…)` 가 **`0 rejected` 인지 확인** — 0 이 아니면 cv2 환경이 바뀌어 죽은 절대 임계(0.7)가 되살아난 것이므로 **즉시 중단**(64px 기준 98~100% 거부 위험 + 비교선 단절).
+>
+> **qf 판 합성 후 확인 (지문 2개)**:
+>
+> ```python
+> import json, collections
+> ann = json.load(open(f"{S('synth_aroma_qf', DS)}/annotations.json", encoding='utf-8'))
+> print(collections.Counter(a.get('position_source') for a in ann))
+> #   fallback 비율이 step3.5 qf 로그의 site fallback 과 일치해야 정상
+> n_sq = sum(1 for a in ann if a.get('site_quality') is not None)
+> print(f"site_quality 채움: {n_sq}/{len(ann)}")
+> #   ring 비율만큼 채워져야 함. 0 이면 구(필터 OFF) json 으로 합성된 것 — 폐기 후 step3.5 부터 재실행
+> ```
+>
+> `clean_bg resolve` 줄도 재확인: `used≈total, mismatch≈0`. mismatch 가 크면 세대 불일치(위 사고 패턴).
+>
 > ⚠️ **step3.5를 `--output_tag`로 돌린 경우에만** `--clean_bg_json <경로>`를 넣는다. 접미사가 붙으면 기본 파일명이 없어 **구 산출물이 자동 로드되거나 legacy 선정으로 조용히 폴백**한다 — 로그의 `clean_bg assignment ON` 줄로 반드시 확인할 것.
 >
 > ⚠️ **τ는 이제 폴백 ROI에서만 동작한다.** `_ring` 항목의 `position`이 `generate_defects`에서 `forced_xy`로 소비되는데, 그 분기가 `_positive_place` 앞에서 단락하며 `gate_ok=True`를 무조건 반환한다(`:1415-1421`). 즉 **위치가 있는 ROI는 τ·void·stage-2 re-pick을 전부 우회**하고, void 배제는 step3.5가 오프라인에서 이미 수행했다. τ가 실제로 도는 것은 `position=None`인 ROI 뿐이다 — mtd 18.9%, 나머지 0.1~2.6%(step3.5 §2-3). 그래서 `--compat_mode symmetric --compat_threshold $TAU`를 **안전망으로 유지**한다(step4c 재스캔 불요).

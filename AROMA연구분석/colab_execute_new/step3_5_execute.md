@@ -1,7 +1,7 @@
 # Step 3.5 — `clean_bg_selection.py` (clean-bg 사전 선정) Colab 실행
 
 > **목적**: 원본 good을 생성 시점에 재스캔하지 않고, **프로파일링 파생 파일**(`context_features.csv`·`compatibility_matrix.json`)과 `roi_selected.json`으로 clean-background를 **사전 선정**한다. `roi_selection`(profiling→`roi_selected.json`)과 대칭인 신규 단계로, `clean_bg_selected.json`을 산출하고 step5(`generate_defects`)가 소비한다.
-> **실행 환경**: **CPU**. GPU·픽셀 재스캔 불요(셀 정보는 이미 context_features에 있음).
+> **실행 환경**: **CPU**. GPU 불요. 기본 실행은 픽셀 재스캔도 불요(셀 정보는 이미 context_features에 있음) — 단 **qf run(`--site_quality_filter`)은 예외**로, 자리 quality 산출을 위해 good 이미지 픽셀을 읽는다(`--image_dir` 필수, Pillow 사용).
 > **체인 위치**: phase0 → step1 → step2 → **step3(roi_selection)** → **step3.5(clean_bg_selection, 본 문서)** → step5(generate_defects) → exp*.
 > **경로 주의**: `clean_bg_selection.py`는 `scripts/aroma/`에 있다.
 
@@ -34,6 +34,11 @@ def S(stage, ds=None):
 # phase0를 31ee0aa(image_id 고유키) 이상으로 재실행했으면 leather 포함(5종, kolektor 포함).
 # 구 profiling(고유키 이전)만 있으면 leather 제외(4종, kolektor는 leather 조건과 무관하게 포함) — src_match_frac assert가 혼용 검출.
 DATASETS = ["severstal", "mvtec_leather", "mtd", "aitex", "kolektor"]
+
+# qf run(--site_quality_filter) 전용: --image_dir 해석용 (step5와 동일 규약).
+# 기본(필터 OFF) 실행은 픽셀 불요라 이 두 줄을 쓰지 않는다.
+with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
+def normal_dir(ds): return CFG[ds]["image_dir"]     # aitex → aitex_tiled/train/good
 ```
 
 ---
@@ -55,6 +60,40 @@ for DS in DATASETS:
         --k_fit --site_selection ring \
         --emit_random_arm
 ```
+
+**자리 quality 필터 ON 판 (qf run — 2026-08-11 이후 기본 권장)**: 위 셀 대신 아래를 쓴다. 추가 인자는 `--site_quality_filter` + `--image_dir` 둘뿐이다(`--image_dir` 누락 시 에러 종료).
+
+```python
+for DS in DATASETS:
+    os.environ['DS']   = DS
+    os.environ['PROF'] = S('profiling', DS)
+    os.environ['ROI']  = S('roi', DS)
+    os.environ['IMG']  = normal_dir(DS)          # aitex → aitex_tiled/train/good (CFG 규약)
+    print(f"\n===== clean_bg_selection (qf): {DS} =====")
+    !python $AROMA_SCRIPTS/clean_bg_selection.py \
+        --profiling_dir  $PROF \
+        --roi_dir        $ROI \
+        --output_dir     $ROI \
+        --image_dir      $IMG \
+        --k_fit --site_selection ring --site_quality_filter \
+        --emit_random_arm
+```
+
+> ⚠️ **step3.5 는 반드시 Colab(Drive 산출물) 위에서 실행한다 — 로컬 산출 json 업로드 금지.**
+> 2026-08-11 실측 사고: 로컬 `roi_selected.json`(구 세대) 기준으로 만든 `clean_bg_selected.json` 을 Drive 에 업로드해 step5 를 돌리자 staleness 가드가 **`mismatch=2538/3000 (85%)`** 로 거부, 대부분이 legacy 선정으로 합성돼 실험이 무효가 됐다. `clean_bg_selected.json` 은 **같은 세대의** `roi_selected.json`·profiling 과만 유효하다(조인은 roi_idx 위치 + image_id 가드). step3.5 는 CPU 수 분이므로 Colab 재실행이 항상 정답이다.
+>
+> **step5 진행 전 세대 일치 선결 체크** (STEP 2-3 셀에 포함):
+>
+> ```python
+> for DS in DATASETS:
+>     sel = json.load(open(f"{S('roi', DS)}/clean_bg_selected.json"))
+>     roi = json.load(open(f"{S('roi', DS)}/roi_selected.json"))
+>     roi = roi if isinstance(roi, list) else roi.get("selected", roi)
+>     ok = sum(1 for i, s in enumerate(sel)
+>              if s.get("image_id") in (None, "", str(roi[i].get("image_id", ""))))
+>     print(f"{DS:14s} image_id 일치 {ok}/{len(sel)}")
+>     assert ok == len(sel), f"[{DS}] 세대 불일치 — step3.5 를 이 환경에서 재실행할 것"
+> ```
 
 > **2026-08-04 개정 — `ring_sgm` + `k_fit` 채택.** 근거·실측은 dev_note `aroma_adjacent_context_bg_selection.md`. 논문 수식 `ctx_prior ∝ √(P_def·P_clean)` 은 **무수정**이고, 바뀐 것은 (a) 배경 랭킹에 형태 군집 축 cue 추가, (b) 자리 선택의 score 계산을 footprint 평균 → 링 분포 매칭으로 바꾼 것 둘뿐이다.
 >

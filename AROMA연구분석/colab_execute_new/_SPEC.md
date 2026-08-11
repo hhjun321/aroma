@@ -58,6 +58,8 @@ def is_multi(ds):   return CFG[ds].get("class_mode") == "multi" # aitex=single (
 | `compat_gate` | `sym_final/compat_gate/{ds}` | step4(τ 사전스캔) | step5 |
 | `synth_aroma` | `sym_final/synth_aroma/{ds}` | step5 (구 판) | exp4v2/exp3/exp5/exp6 |
 | `synth_aroma_tobe` | `sym_final/synth_aroma_tobe/{ds}` | step5 (**ring 개정본, 2026-08-04**) | exp* — `--aroma_synthetic_dir $(S('synth_aroma_tobe'))` |
+| `synth_aroma_qf` | `sym_final/synth_aroma_qf/{ds}` | step5 (**site-quality-filter 판, 2026-08-11** — step3.5 `--site_quality_filter` 산출 소비) | exp4v2 qf 재실험 — `--aroma_synthetic_dir $(S('synth_aroma_qf'))` (exp4v2_execute.md §운영 노트 2) |
+| `exp4v2_qf` | `sym_final/exp4v2_qf` | exp4v2 qf 재실험 (aroma arm 만 재학습, baseline/random 은 `exp4v2_tobe` 에서 복사·skip) | 분석 |
 | `synth_random` | `sym_final/synth_random/{ds}` | step5 | exp4v2/exp3/exp5/exp6 |
 | `exp4v2` | `sym_final/exp4v2` | exp4v2 | — |
 | `exp3` | `sym_final/exp3` | exp3 | — |

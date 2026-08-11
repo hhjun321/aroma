@@ -2,7 +2,7 @@
 
 ## (사용할 skills: feature-dev)
 
-## (성격: 결함 수정 + 기록 확장 — **구현·로컬 검증 완료 (2026-08-07).** Colab 재실행 대기)
+## (성격: 결함 수정 + 기록 확장 — **구현·검증·Colab 재실행·재실험 완료 (2026-08-11).** 종결 — 결론은 §10)
 
 exp4v2(20260807, 5종 × 3 arm × 3 seed) 완료 후 `ring_sgm`+`k_fit`의 다운스트림 기여가 **미입증**으로 결론났다. 원인 분석 중, 합성 샘플의 **출처(ring 배치인가 폴백인가)와 배치 점수가 파이프라인 단계마다 유실**되어 학습셋 구성·사후 분석 어느 쪽에서도 사용 불가능한 상태임을 코드에서 확인했다.
 
@@ -279,7 +279,7 @@ ring 풀이 cap에 미달해 폴백을 섞은 경우 `logger.warning`.
 | # | 항목 | 상태 |
 |---|---|---|
 | 1 | ~~`clean_bg_selected*.json` 최상위 구조~~ | **해소 (2026-08-07)** — 최상위 = list, `derived`는 JSON에 없음 → 레코드별 `site_mode` 기록으로 대체 (§4-2b) |
-| 2 | exp4v2 재학습 수행 여부 | §6 TODO. 사용자 결정 |
+| 2 | ~~exp4v2 재학습 수행 여부~~ | **수행됨 (2026-08-11)** — 결과·결론은 §10 |
 | 3 | `position_source == "fallback"` 을 **완전 배제**할지, 부족 시 채울지 | 현 설계 = 부족 시 채움(개수 parity 우선). 전량 배제가 필요하면 cap을 ring 풀 크기로 낮춰야 하는데 arm 간 `n_synth_train` 불일치 발생 → **개수 parity 우선으로 확정** |
 | 4 | ③ 점수 기반 within-class 선별 | **범위 밖.** ②로 `site_score`가 확보된 뒤 별도 노트에서 판단 |
 
@@ -292,3 +292,33 @@ ring 풀이 cap에 미달해 폴백을 섞은 경우 `logger.warning`.
 | 3 | `_ring_first_sample`에 **전량-fallback 균일추출 단락** 추가 | `generate_random.py`/`generate_casda.py`도 `generate_defects.run()` 위임이라 재합성 후 random/casda annotations에도 필드가 생긴다(전량 fallback). 단락 없으면 arm마다 경고 오발. 동작은 균일추출로 동일 |
 | 4 | `bg_score`/`bg_k_fit`에 `_cbg_consumed` 가드 | `_cbg_entry`는 있으나 `_resolve_bg` 전멸로 legacy 배경을 쓴 경우, 미사용 할당의 점수를 기록하면 오라벨 → None |
 | 5 | exp4v2 `_load_synth_annotations` 화이트리스트에 `position_source` 추가 | 이 함수가 키 화이트리스트로 레코드를 재구성한다 — 추가하지 않으면 필드가 샘플러 도달 전에 유실 (사양에 없던 필수 지점) |
+
+## 10. Colab 재실행·재실험 결과 (2026-08-10 ~ 08-11) — 종결
+
+### 10-1. 파이프라인 발효 확인 (step3.5 → step5)
+
+- **step3.5 5종 재실행** — `site_score` 개수 == `ROI with position` 개수 5/5 정확 일치(986/986 · 200/200 · 159/159 · 198/198 · 196/196). kolektor는 08-03 산출물과 **완전 동일**(positions 3116, fallback 2.6%). 나머지 4종은 positions +1~+99 소폭 드리프트 — 원인은 입력 측(08-03 이후 phase0 `image_w/image_h`·void-floor 재산출), 총 자리수는 보존(16000/2600/3200/3200). mtd fallback 18.9% → **17.7%**
+- **step5 재합성 (n_per_roi 3)** — `position_source` 로그가 step3.5 site-level 비율과 정확 일치. aitex `fallback=5 ring=595 / 600` = 0.83% ≈ 0.8%. severstal pool `ring=2954 fallback=46` = 1.53% ≈ 1.5%
+- **exp4v2 ring-우선 소비** — `[Provenance] severstal/aroma: ring=2534 fallback=0` 등 5종 전부 **fallback=0** 달성. §2의 오염(구판 mtd ≈19%)이 완전 제거된 학습셋
+
+### 10-2. exp4v2 재실험 (20260811) — baseline·random은 resume 재사용(20260807과 bit 동일), aroma만 재학습
+
+| ds | A−R mean | wins | p (paired t, df=2) | 20260807 대비 |
+|---|---|---|---|---|
+| **severstal** | **+0.0254** | **3/3** | **0.029** | +0.0225 (2/3, p=0.269) → 유의 도달 |
+| mtd | −0.0130 | 0/3 | 0.268 | −0.0110 (0/3) → 열위 지속 |
+| aitex | −0.0320 | 0/3 | 0.160 | +0.0146 (1/3) → 반전 |
+| leather | −0.497 | 1/3 | — | aroma 붕괴 2 seed (0.140/0.055) — 판정 불가 |
+| kolektor | −0.104 | 2/3 | — | aroma 붕괴 1 seed (0.035) — 판정 불가 |
+
+### 10-3. 결론 3건
+
+1. **severstal — 전 run 통틀어 첫 유의 결과.** A−R 3/3·p=0.029, aroma std 최소(0.0130). alloc은 run 간 거의 동일(645/550/721/618 vs 636/545/732/621)이라 **run 간 개선분은 배분 변화가 아니다**(오염 제거 + 재학습). 단 ①배분 confound 자체(random alloc `{374,84,1827,249}` 대 aroma 균형)는 미해소 ②15개 검정 중 유일한 p<0.05라 다중비교 생존 못 함 — "3/3 일관 + 단일 데이터셋 유의"가 서술 상한.
+2. **mtd — 오염 가설 기각 ★.** fallback=0으로 학습해도 0/3 열위(−0.0130). §2의 "mtd 패배 = 폴백 19% 오염" 가설은 **반증됐다**. 오염은 실재했으나 패배 원인이 아님. 잔여 용의자 = [[aroma_adjacent_context_bg_selection]] §4 위험 4(격자 절단 24.5%)·4b(build/runtime 격자 불일치→중립 0.5)·ring 배치 자체의 mtd 비유효(P1↔다운스트림 역상관과 정합).
+3. **aitex — 노이즈 재확인.** +0.0146 → −0.0320 반전. aitex 폴백은 0.8%뿐이라 오염 제거로 설명 불가 — 합성 재생성(n_per_roi 2→3, 포지션 드리프트)+재학습 노이즈. run 간 swing ≈ std. **aitex A−R은 노이즈 안**.
+
+사용 3종 평균 A−R = −0.0065 (전 run +0.0087). **전반 null 유지, ring 배치의 다운스트림 기여는 severstal 특이적.**
+
+### 10-4. 논문 서술 확정
+
+배치 개선(`ring_sgm`+`k_fit`)은 **산출물 품질 주장**으로 위치: P1 개선 5/5(JS −2.9~−16.9%) · void 침범 제거(20.4%→1.2%) · provenance 실측(fallback=0 학습셋). 다운스트림은 "severstal 3/3·p=0.029, 5종 일반화 미확인"이 상한. mtd 체인(오염 발견→제거→재실험→가설 기각)은 threats-to-validity 절의 성실성 자산으로 활용.

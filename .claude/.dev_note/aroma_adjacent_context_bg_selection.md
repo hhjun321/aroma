@@ -374,7 +374,7 @@ severstal ROI 1,000건 중 **978건 위치 확정**. fallback은 `position=None`
 | **8** | **배경 선택과 자리 선택의 상호작용 미측정** — P1은 배경을 무작위 30장으로 고정했다. 실제로는 `clean_bg_selection`이 고른 배경 위에서 자리를 정한다 | 미측정 |
 | **9** | **`ring_hist` vs `ring_cont` 미결** — 인스턴스 질의 두 변형이 P1(hist 우세)과 자리 벤치(cont 압도)에서 반대 답. 채택안이 아니므로 실무 영향 없으나, 인스턴스 arm을 되살릴 경우 선결 | 보류 |
 | **10** | **kolektor 표본 부족** — ROI 52, P1 test 26, mean pool 17. 개선폭 부호는 일관되나 신뢰구간이 넓다 | 감수 |
-| **11** | **synth 출처·배치점수 유실 사슬** (2026-08-07 발견) — ① ring 자리 점수가 계산 후 폐기(`_best_ring_site`가 좌표만 반환) ② 배경 점수(`score`/`k_fit`)가 annotations 미전파 ③ annotations에 ring/폴백 구분 필드 없음 ④ exp4v2 synth cap이 균일 무작위 표본(아무 점수도 안 읽음). 결과: mtd aroma arm의 **약 19%가 ring 배치가 아닌 폴백**(pool 400→cap 272 균일추출, 폴백 75장 잔존 기대 ≈51) — 폴백 전량 배제해도 325≥272로 개수 손실 0이 가능했다. mtd는 exp4v2에서 유일하게 random에 진 데이터셋(A−R −0.011, 0/3 seed) | **수정 완료** — [[aroma_synth_provenance_and_scores]]: `position_source`·`site_score`·`site_mode` 필드 + exp4v2 ring-우선 소비. 반영에는 step3.5→step5 재실행 필요 |
+| **11** | **synth 출처·배치점수 유실 사슬** (2026-08-07 발견) — ① ring 자리 점수가 계산 후 폐기(`_best_ring_site`가 좌표만 반환) ② 배경 점수(`score`/`k_fit`)가 annotations 미전파 ③ annotations에 ring/폴백 구분 필드 없음 ④ exp4v2 synth cap이 균일 무작위 표본(아무 점수도 안 읽음). 결과: mtd aroma arm의 **약 19%가 ring 배치가 아닌 폴백** | **수정·재실험 완료 (2026-08-11)** — [[aroma_synth_provenance_and_scores]] §10. 5종 전부 `fallback=0` 학습셋 달성. **단, mtd 열위는 오염 제거 후에도 지속(0/3)** — "오염이 mtd 패배 원인" 가설은 **기각**. 잔여 용의자 = 위험 4·4b |
 
 ---
 
@@ -385,14 +385,15 @@ severstal ROI 1,000건 중 **978건 위치 확정**. fallback은 `position=None`
 3. ✅ 육안 검증 (자리만, 합성 전) — §3-4
 4. ✅ **Colab 합성 실행** (step3.5 → step5 copy_paste, `n_per_roi 2`, 5종) — 실행 가이드 갱신 완료
 5. ✅ **실제 산출물 검증** — §3-5. 좌표 일치·불일치 0, ring이 구방식을 5/5 우세, void 침범 20.4%→1.2%
-6. ~~검증 종료 (2026-08-04). 다운스트림은 범위 밖~~ → **exp4v2 수행됨 (2026-08-07, 5종 × 3 arm × 3 seed).** 결과:
-   - **AROMA > baseline**: 사용 가능 3종(severstal/mtd/aitex) 전부 양수 — 합성 증강 자체는 유효
-   - **AROMA vs random**: severstal +0.0225(2/3 seed) · aitex +0.0146(1/3) · **mtd −0.0110(0/3, p=0.071)**. 데이터셋 평균 +0.0087
-   - **p<0.05 도달 0건** (n=3 구조 한계). 최강 신호 2건 = aitex random−baseline p=0.054, **mtd aroma−random p=0.071(AROMA 열위 방향)**
-   - leather/kolektor는 seed 붕괴(precision≈0, 3건)로 판정 불가 (n_train 64/36)
-   - **배치 기여 미입증** — severstal 이득은 클래스별 Δsynth↔Δmap50 Spearman +0.95로 균형 배분 효과로 설명 가능. ring 기여 분리 불가 (배치·배분 동시 변경)
+6. ~~검증 종료 (2026-08-04). 다운스트림은 범위 밖~~ → **exp4v2 2회 수행 (2026-08-07 오염판 / 2026-08-11 fallback=0 판).** 최종 결과 (20260811 — baseline·random은 두 run 간 bit 동일, aroma만 100% ring 합성으로 재학습):
+   - **AROMA > baseline**: 사용 가능 3종(severstal/mtd/aitex) 전부 3/3 양수 — 합성 증강 자체는 유효
+   - **AROMA vs random**: **severstal +0.0254 (3/3, p=0.029 — 전 run 통틀어 첫 유의)** · mtd −0.0130(0/3) · aitex −0.0320(0/3, 전 run +0.0146에서 반전 = 노이즈 재확인). 사용 3종 평균 −0.0065
+   - leather/kolektor는 두 run 모두 seed 붕괴(precision≈0)로 판정 불가 (n_train 64/36)
+   - **mtd 오염 가설 기각 ★** — 폴백 19% 오염을 제거(fallback=0 학습셋)하고 재학습해도 mtd 열위 지속(0/3). 잔여 용의자 = 위험 4(격자 절단 24.5%)·4b(build/runtime 격자 불일치→중립 0.5)·ring 배치 자체의 mtd 비유효
+   - **배치 기여 = severstal 특이적** — 배분 confound(random alloc 극단 불균형 vs aroma 균형, Δsynth↔Δmap50 Spearman +0.95)는 미해소이나, severstal의 run 간 개선(2/3→3/3, p 0.269→0.029)은 alloc이 거의 동일해 배분 변화로는 설명 안 됨
    - **P1↔다운스트림 역상관** — ring P1 개선폭 순위(mtd 최대→severstal 최소)가 A−R 순위(severstal 최대→mtd 최소)와 완전 역전 (Spearman −1, n=3). §1-3의 P1 주지표 채택 근거가 다운스트림에서 지지받지 못함
-   - mtd 열위는 위험 11(폴백 19% 오염)·위험 4/4b와 정합 — 오염 제거 후 재실험은 [[aroma_synth_provenance_and_scores]] §6
+   - **다중비교 주의** — 15개 검정 중 p<0.05는 severstal A−R 하나(Bonferroni 미생존). 서술 상한 = "severstal 3/3 일관·p=0.029, 5종 일반화 미확인"
+   - 상세·논문 서술 확정: [[aroma_synth_provenance_and_scores]] §10
 7. 논문 반영은 별건 트랙 (`aroma_paper_gaps_placement.md` §4)
 
 ---

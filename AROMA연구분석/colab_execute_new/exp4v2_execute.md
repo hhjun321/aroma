@@ -132,6 +132,42 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
 
 ---
 
+## 운영 노트 2 — qf 재실험 (aroma arm 만 site-quality-filter 판으로 교체)
+
+step3.5 `--site_quality_filter` → step5 `synth_aroma_qf` 를 거친 뒤, **aroma arm 만** 새 합성으로 재학습하고 baseline·random 은 기존 결과를 재사용하는 절차. (dev_note `aroma_site_quality_filter.md` — 논문 §3.2.6 quality gate 주장과 구현 정합 목적.)
+
+**① 준비 셀 — 기존 결과 복사 + aroma 항목 제거** (`--resume` 는 완료 항목을 skip 하므로, aroma 를 지워야 새 합성으로 재학습된다. 기존 output_dir 는 무접촉 보존 → OFF arm 대조 열로 활용):
+
+```python
+import os, json, shutil
+os.environ['EXP4V2_QF'] = f"{os.environ['SYM_ROOT']}/exp4v2_qf"
+os.makedirs(os.environ['EXP4V2_QF'], exist_ok=True)
+r = json.load(open(f"{os.environ['SYM_ROOT']}/exp4v2_tobe/exp4v2_results.json"))
+for ds in r:
+    for m in list(r[ds]):
+        if isinstance(r[ds][m], dict):
+            r[ds][m].pop("aroma", None)          # aroma 만 제거 → baseline/random 은 skip
+json.dump(r, open(f"{os.environ['EXP4V2_QF']}/exp4v2_results.json", "w"), indent=2)
+print({ds: list(r[ds].get('yolov8n', {}).keys()) for ds in r})   # aroma 가 빠졌는지 확인
+```
+
+**② 실행 — 기존 STEP 2~4 커맨드에서 딱 2개만 변경**:
+
+```
+--aroma_synthetic_dir  $(S('synth_aroma_qf'))     # ← tobe 대신 qf
+--output_dir           $EXP4V2_QF                 # ← 준비 셀의 새 디렉터리
+```
+
+나머지 인자(batch 128 · patience 25 · seeds · imgsz · rect · mtd `--compile` 금지)는 **전부 동일 유지** — 하나라도 다르면 resume 재사용한 baseline/random 과 비교 불가.
+
+**③ 확인 로그**: `[Provenance] {ds}/aroma: ring=cap fallback=0` — 5종 전부. (qf 판의 site fallback 이 커진 aitex 도 ring 풀 ≥ cap 이라 fallback=0 이어야 정상.)
+
+**④ 비교 축 2개** (결과 해석):
+- `aroma_qf vs random` (같은 output) — 논문 취지(quality 고려 합성) 하의 프레임워크 성능
+- `aroma_qf vs aroma(기존 exp4v2_tobe 의 20260811 값)` — **게이트 순수 기여** (동일 프로토콜·동일 baseline/random·paired seed). 기대 관리: 배치 이동은 top-1 기준 4.5~17.5% 뿐이고 P1↔다운스트림 역상관 실측이 있으므로 **ON ≈ OFF 가 최빈 시나리오** — 그 경우 "품질 보증이 성능을 해치지 않는다"로 보고한다.
+
+---
+
 ## STEP 2 — 3종 실행 (severstal · mvtec_leather · mtd)
 
 **그룹 A 파라미터** (`_SPEC §4`): `--class_mode multi` · `--imgsz 640` · `--rect` · `--baseline_epochs 100` · `--patience 25` · `--seeds 42 1 2`. 공통: `--condition all` · `--val_frac 0.3` · `--synth_ratio 1.0` · `--batch 128` · `--cache ram` · `--workers 12` · `--resume`. `--compile`은 **severstal·mvtec_leather만** (아래 ⚠).
