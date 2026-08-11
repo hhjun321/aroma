@@ -134,15 +134,18 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
 
 ## STEP 2 — 3종 실행 (severstal · mvtec_leather · mtd)
 
-**그룹 A 파라미터** (`_SPEC §4`): `--class_mode multi` · `--imgsz 640` · `--rect` · `--baseline_epochs 100` · `--patience 25` · `--seeds 42 1 2`. 공통: `--condition all` · `--val_frac 0.3` · `--synth_ratio 1.0` · `--batch 128` · `--cache ram` · `--workers 12` · `--compile` · `--resume`.
+**그룹 A 파라미터** (`_SPEC §4`): `--class_mode multi` · `--imgsz 640` · `--rect` · `--baseline_epochs 100` · `--patience 25` · `--seeds 42 1 2`. 공통: `--condition all` · `--val_frac 0.3` · `--synth_ratio 1.0` · `--batch 128` · `--cache ram` · `--workers 12` · `--resume`. `--compile`은 **severstal·mvtec_leather만** (아래 ⚠).
 
-세 조건 모두 COCO pretrained에서 fresh 학습(graft 미사용). 학습량 = 3 ds × 3 seed × 3 cond. `--resume`가 완료된 `(seed, ds, cond)`를 skip하고 중단 지점부터 재개한다.
+> ⚠️ **mtd는 `--compile` 금지 (2026-08-07 실측 사고).** mtd는 5종 중 유일하게 이미지 크기가 제각각이라, `--rect`와 결합하면 배치마다 shape이 바뀌어 torch dynamo가 재컴파일을 반복하다 `AssertionError`로 **3조건 전멸**한다(로그 서명: `pow_by_natural([VR[17, int_oo], VR[-1,-1]])` 경고 다발 후 `Condition yolov8n/* failed: AssertionError`). 코드의 compile 폴백은 `SyntaxError`/`TypeError`만 잡으므로(구버전 ultralytics kwarg 거부용) 런타임 컴파일 실패를 흡수하지 못한다. `--compile`은 실행 최적화일 뿐 수치에 영향이 없으므로(≈14% 속도) mtd만 빼는 것이 `--rect`를 빼는 것보다 조건 정합성 훼손이 작다. 고정 해상도인 severstal(1600×256)·leather(1024²)는 단일 batch shape이라 안전.
+
+세 조건 모두 COCO pretrained에서 fresh 학습(graft 미사용). 학습량 = 3 ds × 3 seed × 3 cond. `--resume`가 완료된 `(seed, ds, cond)`를 skip하므로 아래처럼 두 번 호출해도 중복 학습이 없다.
 
 ```python
+# 2-1. severstal · mvtec_leather (--compile ON)
 !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
     --model yolov8n \
     --condition all \
-    --dataset_keys severstal mvtec_leather mtd \
+    --dataset_keys severstal mvtec_leather \
     --class_mode multi \
     --aroma_synthetic_dir  $SYNTH_AROMA \
     --random_synthetic_dir $SYNTH_RANDOM \
@@ -159,6 +162,29 @@ for R in ["1.0", "0.8", "0.6", "0.4"]:
     --rect \
     --workers 12 \
     --compile \
+    --seeds 42 1 2 \
+    --resume
+
+# 2-2. mtd (--compile 없음 — 가변 해상도 × rect = dynamo AssertionError)
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolov8n \
+    --condition all \
+    --dataset_keys mtd \
+    --class_mode multi \
+    --aroma_synthetic_dir  $SYNTH_AROMA \
+    --random_synthetic_dir $SYNTH_RANDOM \
+    --real_data_dir        $AROMA_DATA \
+    --output_dir           $EXP4V2_OUT \
+    --yolo_cache_dir       $YOLO_CACHE \
+    --imgsz 640 \
+    --val_frac 0.3 \
+    --synth_ratio 1.0 \
+    --baseline_epochs 100 \
+    --patience 25 \
+    --batch 128 \
+    --cache ram \
+    --rect \
+    --workers 12 \
     --seeds 42 1 2 \
     --resume
 ```
@@ -288,7 +314,7 @@ for ds in [d for d in ORDER if d in results] + [d for d in results if d not in O
 ## 무결성 / 정직 (`_SPEC §5`)
 
 - **사후 튜닝 금지**: τ·seed·synth_ratio·epochs·imgsz·**batch·patience**는 위 그룹별 확정값을 그대로 쓰고, 결과 보고 후 변경하지 않는다. (patience 25는 early-stop을 통해 보고 metric에 영향을 주므로 frozen 대상이다. batch 128도 고정.) 파라미터를 바꾸면 skip 조건에 걸려 재학습되지 않으니 fresh `--output_dir` 또는 해당 항목 삭제로만 재실행한다.
-- **그룹 파라미터 불변**: 3종 = multi·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2 / aitex = single·256·no-rect·300ep·**batch 128·patience 25**·seeds 1 2 42 / kolektor = single·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2. 공통 속도 인자(`--workers 12`·`--cache ram`, 3종·aitex는 `--compile`도)도 각 그룹 내 3조건 동일 적용. 세 그룹을 섞으면 비교 불가.
+- **그룹 파라미터 불변**: 3종 = multi·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2 / aitex = single·256·no-rect·300ep·**batch 128·patience 25**·seeds 1 2 42 / kolektor = single·640·rect·100ep·**batch 128·patience 25**·seeds 42 1 2. 공통 속도 인자(`--workers 12`·`--cache ram`, severstal·leather·aitex는 `--compile`도 — **mtd는 `--compile` 금지**, STEP 2 ⚠ 참조)도 각 그룹 내 3조건 동일 적용. 세 그룹을 섞으면 비교 불가.
 - **fresh 전조건**: baseline/random/aroma 모두 COCO에서 독립 학습. graft(전학습 weight 재사용) 미사용. 합성은 train에만, test/defect는 항상 real. (kolektor는 ControlNet 학습 자체를 SKIP — copy_paste arm만 사용.)
 - **aitex는 tile-level·single-class** → 절대값 타 데이터셋 직접 비교 금지, Δ만 유효.
 - **테스트 코드 신규 작성·pytest 금지**(CLAUDE.md). 검증은 Colab 실행으로.

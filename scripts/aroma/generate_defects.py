@@ -3198,6 +3198,7 @@ def run(
                     # has no placement at all → source None, scores None.
                     "position_source": None,
                     "site_score":    None,
+                    "site_quality":  None,
                     "bg_score":      None,
                     "bg_k_fit":      None,
                     "dry_run":       True,
@@ -3235,17 +3236,20 @@ def run(
             # index-aligned ring site score (None for legacy jsons without it).
             _cbg_pairs = []
             _pick_site_score = None
+            _pick_site_quality = None
             if _cbg_entry:
                 _ids = _cbg_entry.get("topk_pool") or []
                 _poss = _cbg_entry.get("topk_positions") or []
                 _sscores = _cbg_entry.get("topk_site_scores") or []
+                _squals = _cbg_entry.get("topk_site_quality") or []
                 for _i, _id in enumerate(_ids):
                     _rp = _resolve_bg(_id)
                     if _rp:
                         _cbg_pairs.append((_rp,
                                            _poss[_i] if _i < len(_poss) else None,
-                                           _sscores[_i] if _i < len(_sscores) else None))
-            _cbg_pool = [p for p, _, _ in _cbg_pairs]
+                                           _sscores[_i] if _i < len(_sscores) else None,
+                                           _squals[_i] if _i < len(_squals) else None))
+            _cbg_pool = [p for p, _, _, _ in _cbg_pairs]
             # bg_score/bg_k_fit describe the clean_bg assignment — only truthful
             # when that pool was actually consumed (resolve-failure falls back to
             # legacy selection, where the entry's scores describe an unused pick).
@@ -3260,7 +3264,7 @@ def run(
                 # under partial resolution (some ROIs precomputed, some fallback),
                 # which the 0-draw variant did not guarantee.
                 _ = rng.random()
-                _pick_path, _pick_pos, _pick_site_score = \
+                _pick_path, _pick_pos, _pick_site_score, _pick_site_quality = \
                     _cbg_pairs[rep_idx % len(_cbg_pairs)]
                 normal_path = _pick_path
                 if _pick_pos:
@@ -3373,6 +3377,8 @@ def run(
                     # random. exp4v2 ring-first sampling keys off "fallback".
                     "position_source": _pos_src,
                     "site_score":    (_pick_site_score
+                                      if roi_entry.get("_forced_xy") else None),
+                    "site_quality":  (_pick_site_quality
                                       if roi_entry.get("_forced_xy") else None),
                     "bg_score":      ((_cbg_entry or {}).get("score")
                                       if _cbg_consumed else None),

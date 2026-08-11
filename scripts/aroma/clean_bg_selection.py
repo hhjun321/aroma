@@ -568,6 +568,33 @@ def _tile_grid(rows: List[Dict[str, str]], names, bin_edges,
     return grid, gw, gh
 
 
+def _np_quality(gray: np.ndarray, blur_threshold: float = 100.0) -> float:
+    """CASDA 4-성분 배경 quality (0..1) — numpy 전용 구현.
+
+    generate_defects._background_quality_score 와 같은 수식(blur 30% + contrast
+    30% + brightness 20% + noise 20%)이되 cv2 를 쓰지 않는다(defect_tiles.py 와
+    같은 이유 — cv2 dtype 지뢰 회피). Laplacian 은 3x3 커널의 interior 응답
+    분산, noise 는 5x5 box-mean 잔차. 절대값이 cv2 구현과 미세하게 달라도
+    무방하다 — 플로어가 같은 구현의 분위 분포에서 유도되므로 내부 정합만
+    필요하다 (devnote aroma_site_quality_filter §1-b).
+    """
+    g = gray.astype(np.float32)
+    if g.shape[0] < 7 or g.shape[1] < 7:
+        return 1.0                      # 판정 불가 극소 영역 — 통과
+    lap = (-4.0 * g[1:-1, 1:-1] + g[:-2, 1:-1] + g[2:, 1:-1]
+           + g[1:-1, :-2] + g[1:-1, 2:])
+    blur = 1.0 if float(lap.var()) >= blur_threshold else 0.3
+    contrast = min(float(np.std(g)) / 128.0, 1.0)
+    mb = float(np.mean(g)) / 255.0
+    brightness = 1.0 if 0.3 <= mb <= 0.7 else 0.7
+    k = 5
+    c = np.pad(g, ((1, 0), (1, 0))).cumsum(axis=0).cumsum(axis=1)
+    box = (c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]) / float(k * k)
+    resid = g[k - 3:g.shape[0] - 2, k - 3:g.shape[1] - 2] - box
+    noise = 1.0 - min(float(np.mean(resid ** 2)) / 100.0, 1.0)
+    return 0.30 * blur + 0.30 * contrast + 0.20 * brightness + 0.20 * noise
+
+
 def _ring_keys(si: int, sj: int, bw: int, bh: int) -> List[Tuple[int, int]]:
     """자리 사각형 [si..si+bw-1] x [sj..sj+bh-1] 의 8이웃 링 좌표."""
     i1, j1 = si + bw - 1, sj + bh - 1
@@ -584,6 +611,7 @@ def _ring_keys(si: int, sj: int, bw: int, bh: int) -> List[Tuple[int, int]]:
 def _best_ring_site(grid: Dict[Tuple[int, int], str], gw: int, gh: int,
                     bw: int, bh: int, tgt: Dict[str, float],
                     tile: int = 64,
+                    allowed: Optional[set] = None,
                     ) -> Tuple[Optional[Tuple[int, int]], Optional[float]]:
     """ring_sgm: 링 셀 분포와 tgt 의 히스토그램 교집합이 최대인 자리 (픽셀 좌상단).
 
@@ -601,6 +629,8 @@ def _best_ring_site(grid: Dict[Tuple[int, int], str], gw: int, gh: int,
     best, best_xy = -1.0, None
     for sj in range(gh - bh + 1):
         for si in range(gw - bw + 1):
+            if allowed is not None and (si, sj) not in allowed:
+                continue                      # site quality 필터 탈락 자리
             if any((si + a, sj + b) not in grid
                    for a in range(bw) for b in range(bh)):
                 continue                      # void/결측 footprint
@@ -722,6 +752,8 @@ def build_and_rank(
     k_fit: bool = False,
     site_selection: str = "off",
     site_pool_cap: int = 16,
+    site_quality_pct: Optional[float] = None,
+    image_dir: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, float]]:
     """Two signals per (ROI x valid good) candidate:
       src_fit   = hist∩(good, the ROI's SOURCE-image background)  [Phase 1, E1-faithful]
@@ -882,6 +914,11 @@ def build_and_rank(
     # (devnote aroma_synth_provenance §4-2b, §8-1 확정).
     _site_mode = ("ring" if site_selection == "ring"
                   else ("geometry_prior" if geometry_prior else "off"))
+    # 자리 quality 필터 (devnote aroma_site_quality_filter): ring 전용 2차 게이트.
+    # ON 이면 자리 확정을 루프 뒤로 미룬다(2-phase) — 플로어가 전체 자리 quality
+    # 분포에서 나와야 하기 때문. OFF 경로는 기존 인라인 그대로 (byte-identical).
+    site_q_on = (site_selection == "ring") and (site_quality_pct is not None)
+    _deferred: List[Tuple[int, List[str], Dict[str, Any]]] = []
     for pr in per_roi:
         src_key = pr["src_key"]
         scored = []  # (combined_jittered, normal_id, src_fit, class_fit, size_ok, size_fit, k_fit)
@@ -946,12 +983,20 @@ def build_and_rank(
         if top:
             comb_j, best_id, sf, cf, so, zf, kf = top[0]
             pool_ids = [t[1] for t in top]
-            positions, site_scores = _positions_for(pool_ids)
+            if site_q_on:
+                # 자리 확정은 phase B — 여기서는 자리 배열만 자리표시 (아래에서 패치)
+                positions = [None] * len(pool_ids)
+                site_scores: List[Optional[float]] = [None] * len(pool_ids)
+                site_quals: List[Optional[float]] = [None] * len(pool_ids)
+                _deferred.append((len(selected), pool_ids, pr))
+            else:
+                positions, site_scores = _positions_for(pool_ids)
+                site_quals = [None] * len(positions)
             pos_best = positions[0] if positions else None
             site_best = site_scores[0] if site_scores else None
             if site_best is not None:
                 site_top_scores.append(site_best)
-            if site_selection == "ring":
+            if site_selection == "ring" and not site_q_on:
                 n_site_pos += sum(1 for p in positions[:max(1, site_pool_cap)] if p)
                 n_site_none += sum(1 for p in positions[:max(1, site_pool_cap)] if not p)
             selected.append(dict(base,
@@ -959,8 +1004,10 @@ def build_and_rank(
                                  topk_pool=pool_ids,
                                  topk_positions=positions,
                                  topk_site_scores=site_scores,     # index-aligned with topk_positions
+                                 topk_site_quality=site_quals,     # index-aligned (필터 OFF 면 전부 None)
                                  position=pos_best,
                                  site_score=site_best,             # ring argmax objective (None off-ring)
+                                 site_quality=(site_quals[0] if site_quals else None),
                                  site_mode=_site_mode,
                                  score=round(comb_j - _bg_jitter(src_key, best_id), 6),
                                  hist_intersection=round(sf, 6),   # per-source (E1-comparable)
@@ -973,11 +1020,141 @@ def build_and_rank(
         else:
             selected.append(dict(base, assigned_normal_id=None, topk_pool=[],
                                  topk_positions=[], topk_site_scores=[],
-                                 position=None, site_score=None, site_mode=_site_mode,
+                                 topk_site_quality=[],
+                                 position=None, site_score=None, site_quality=None,
+                                 site_mode=_site_mode,
                                  score=0.0, hist_intersection=0.0, class_fit=0.0,
                                  k_fit=0.0,
                                  size_ok=False, size_fit=0.0, scale_factor=0.0,
                                  n_valid_bg=0))
+
+    # ---- Phase B: 자리 quality 필터 (devnote aroma_site_quality_filter) ----
+    # ① void 게이트(타일, admissibility — _grid_for 가 이미 반영) 위에서
+    # ② admissible 자리별 crop-영역 quality 산출 → ③ 데이터셋 자기 분포의
+    # 하위 site_quality_pct% 배제 → ④ 생존 자리 중 ring argmax.
+    # 자리 단위(타일 아님)라 footprint 1타일 배제로 자리가 전멸하는 비선형이 없다
+    # (타일 단위는 severstal 폴백 +20.2p 로 기각 — 시뮬레이션 2026-08-11).
+    q_floor: Optional[float] = None
+    n_q_filtered = 0
+    n_q_unresolved_bg = 0
+    if site_q_on and _deferred:
+        from PIL import Image  # 가드된 임포트 — run() 이 사전 검증
+
+        stem2p: Dict[str, Path] = {}
+        for p in sorted(Path(image_dir).iterdir()):
+            if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
+                stem2p[p.stem] = p
+        gray_cache: Dict[str, Optional[np.ndarray]] = {}
+
+        def _gray(nid: str) -> Optional[np.ndarray]:
+            if nid in gray_cache:
+                return gray_cache[nid]
+            p = (stem2p.get(nid) or stem2p.get(nid.lstrip("_"))
+                 or stem2p.get("_" + nid))
+            g = None
+            if p is not None:
+                try:
+                    g = np.asarray(Image.open(p).convert("L"), dtype=np.uint8)
+                except Exception as exc:  # noqa: BLE001 — 깨진 파일은 필터만 건너뜀
+                    logger.warning("site_quality: %s 로드 실패 (%s)", p, exc)
+            gray_cache[nid] = g
+            return g
+
+        # (nid, ew, eh) → [((si,sj), quality)] admissible 자리 전수. None = 이미지
+        # 미해석(그 배경만 필터 미적용 — 기존 무필터 자리 선택으로 동작).
+        sites_cache: Dict[Tuple[str, int, int],
+                          Optional[List[Tuple[Tuple[int, int], float]]]] = {}
+
+        def _sites(nid: str, ew: int, eh: int, bw: int, bh: int):
+            key = (nid, ew, eh)
+            if key in sites_cache:
+                return sites_cache[key]
+            g = _gray(nid)
+            if g is None:
+                sites_cache[key] = None
+                return None
+            grid, gw, gh = _grid_for(nid)
+            out: List[Tuple[Tuple[int, int], float]] = []
+            if gw >= bw and gh >= bh:
+                for sj in range(gh - bh + 1):
+                    for si in range(gw - bw + 1):
+                        if any((si + a, sj + b) not in grid
+                               for a in range(bw) for b in range(bh)):
+                            continue
+                        if not any(t in grid for t in _ring_keys(si, sj, bw, bh)):
+                            continue
+                        x, y = si * 64, sj * 64
+                        out.append(((si, sj), _np_quality(g[y:y + eh, x:x + ew])))
+            sites_cache[key] = out
+            return out
+
+        def _slot_geo(pr_bbox, nid):
+            dim = good_dim.get(nid, (0, 0))
+            ew, eh = _effective_wh((pr_bbox[2], pr_bbox[3]), dim)
+            bw = max(1, -(-int(ew) // 64))
+            bh = max(1, -(-int(eh) // 64))
+            return int(ew), int(eh), bw, bh
+
+        cap = max(1, site_pool_cap)
+        # 플로어 산출 — cap 이내 슬롯의 admissible 자리 quality 전수
+        all_q: List[float] = []
+        for _idx, pool_ids, pr in _deferred:
+            if not pr["bbox"]:
+                continue
+            for nid in pool_ids[:cap]:
+                ew, eh, bw, bh = _slot_geo(pr["bbox"], nid)
+                s = _sites(nid, ew, eh, bw, bh)
+                if s:
+                    all_q.extend(q for _, q in s)
+        if all_q:
+            q_floor = float(np.percentile(np.asarray(all_q), float(site_quality_pct)))
+
+        # 자리 확정 — 생존 자리 중 ring argmax
+        for idx, pool_ids, pr in _deferred:
+            rec = selected[idx]
+            positions = rec["topk_positions"]
+            site_scores = rec["topk_site_scores"]
+            site_quals = rec["topk_site_quality"]
+            tgt = tgt_by_k.get(str(pr["cluster_id"])) or {}
+            if pr["bbox"]:
+                for i, nid in enumerate(pool_ids[:cap]):
+                    ew, eh, bw, bh = _slot_geo(pr["bbox"], nid)
+                    s = _sites(nid, ew, eh, bw, bh)
+                    grid, gw, gh = _grid_for(nid)
+                    if s is None:
+                        # 이미지 미해석 — 필터 없이 기존 자리 선택
+                        n_q_unresolved_bg += 1
+                        xy, sc = _best_ring_site(grid, gw, gh, bw, bh, tgt)
+                        qv = None
+                    else:
+                        survivors = {xy for xy, q in s
+                                     if q_floor is None or q >= q_floor}
+                        n_q_filtered += len(s) - len(survivors)
+                        if survivors:
+                            xy, sc = _best_ring_site(grid, gw, gh, bw, bh, tgt,
+                                                     allowed=survivors)
+                            _qmap = {xy_: q for xy_, q in s}
+                            qv = (_qmap.get((xy[0] // 64, xy[1] // 64))
+                                  if xy is not None else None)
+                        else:
+                            xy, sc, qv = None, None, None   # 자리 전멸 → 폴백
+                    positions[i] = xy
+                    site_scores[i] = round(sc, 6) if sc is not None else None
+                    site_quals[i] = round(qv, 6) if qv is not None else None
+            rec["position"] = positions[0] if positions else None
+            rec["site_score"] = site_scores[0] if site_scores else None
+            rec["site_quality"] = site_quals[0] if site_quals else None
+            if rec["site_score"] is not None:
+                site_top_scores.append(rec["site_score"])
+            n_site_pos += sum(1 for p in positions[:cap] if p)
+            n_site_none += sum(1 for p in positions[:cap] if not p)
+        logger.info(
+            "site quality filter ON: pct=%.1f floor=%s — 자리 %d개 배제, "
+            "미해석 배경 슬롯 %d, positions=%d fallback=%d",
+            float(site_quality_pct),
+            ("%.6f" % q_floor) if q_floor is not None else "n/a",
+            n_q_filtered, n_q_unresolved_bg, n_site_pos, n_site_none,
+        )
 
     derived = {
         "pool_cut": "p95" if not pool_k else ("k=%d" % pool_k),
@@ -1004,6 +1181,11 @@ def build_and_rank(
                            if site_top_scores else 0.0),
         "site_score_p90": (round(float(np.percentile(site_top_scores, 90.0)), 6)
                            if site_top_scores else 0.0),
+        # 자리 quality 필터 (devnote aroma_site_quality_filter; OFF 면 0.0/-1)
+        "site_quality_pct": float(site_quality_pct) if site_q_on else 0.0,
+        "site_quality_floor": (round(q_floor, 6) if q_floor is not None else -1.0),
+        "site_quality_filtered": float(n_q_filtered),
+        "site_quality_unresolved_bg": float(n_q_unresolved_bg),
         # per-source ceiling (E1 reproduction gate — independent of Phase-2 weights)
         "src_fit_ceiling_mean": round(float(np.mean(src_ceilings)), 4) if src_ceilings else 0.0,
         # fraction of ROIs whose image_id resolves to a defect row (E1 signal health);
@@ -1133,12 +1315,31 @@ def run(
     k_fit: bool = False,
     site_selection: str = "off",
     site_pool_cap: int = 16,
+    site_quality_filter: bool = False,
+    site_quality_pct: float = 15.0,
+    image_dir: Optional[str] = None,
     output_tag: str = "",
 ) -> Dict[str, Any]:
     if site_selection == "ring" and geometry_prior:
         logger.error("--site_selection ring 과 --geometry_prior 는 배타입니다 "
                      "(둘 다 topk_positions 를 채운다). 하나만 쓰세요.")
         return {"status": "conflicting_position_sources"}
+    # 자리 quality 필터 선결 검증 (devnote aroma_site_quality_filter §1-a)
+    if site_quality_filter:
+        if site_selection != "ring":
+            logger.error("--site_quality_filter 는 --site_selection ring 전용입니다 "
+                         "(자리 개념이 ring 에서만 정의됨).")
+            return {"status": "site_quality_requires_ring"}
+        if not image_dir or not Path(image_dir).is_dir():
+            logger.error("--site_quality_filter 는 --image_dir <good 이미지 디렉터리> "
+                         "가 필요합니다 (자리 quality 는 픽셀에서 산출). got: %s",
+                         image_dir)
+            return {"status": "site_quality_needs_image_dir"}
+        try:
+            from PIL import Image  # noqa: F401
+        except ImportError:
+            logger.error("--site_quality_filter 는 Pillow 가 필요합니다.")
+            return {"status": "site_quality_needs_pillow"}
     logger.info("Loading inputs: profiling_dir=%s roi_dir=%s", profiling_dir, roi_dir)
     data = load_inputs(profiling_dir, roi_dir)
     if data["status"] != "ok":
@@ -1187,6 +1388,8 @@ def run(
         data, valid_ids, var_floor, edge_floor, pool_k, geometry_prior=geometry_prior,
         adjacent_radius=adjacent_radius, k_fit=k_fit,
         site_selection=site_selection, site_pool_cap=site_pool_cap,
+        site_quality_pct=(site_quality_pct if site_quality_filter else None),
+        image_dir=image_dir,
     )
     if derived_pool.get("site_selection") == "ring":
         logger.info("ring_sgm 자리 산출: %d positions, fallback %d (%.1f%%), pool_cap=%d",
@@ -1294,6 +1497,19 @@ def _parse_args(argv=None) -> argparse.Namespace:
                         "위치(footprint 에 void 있는 자리는 배제). topk_positions/position 에 "
                         "기록되고 generate 가 forced_xy 로 소비 → generate 측 무변경. "
                         "--geometry_prior 와 배타. 기본 off (legacy 동일)")
+    p.add_argument("--site_quality_filter", action="store_true",
+                   help="ring 자리에 2차 quality 게이트 적용 (기본 OFF). "
+                        "① void 게이트 → ② admissible 자리의 crop-영역 quality "
+                        "분위 필터 → ③ 생존 자리 중 ring argmax. "
+                        "--site_selection ring + --image_dir 필수 "
+                        "(devnote aroma_site_quality_filter)")
+    p.add_argument("--site_quality_pct", type=float, default=15.0,
+                   help="자리 quality 분위 플로어 (하위 X%% 배제, 기본 15.0 — "
+                        "void_floor_pct 와 통일). 절대 임계 아님 — 데이터셋 자기 "
+                        "분포 기준이라 leather 포화 없음")
+    p.add_argument("--image_dir", default=None,
+                   help="good 이미지 디렉터리 (자리 quality 는 픽셀에서 산출). "
+                        "--site_quality_filter ON 일 때 필수")
     p.add_argument("--site_pool_cap", type=int, default=16,
                    help="ring 모드에서 자리를 산출할 pool 상위 개수. generate 는 "
                         "rep_idx %% len(pool) 로 인덱싱하므로 앞쪽만 소비된다. 기본 16")
@@ -1325,6 +1541,9 @@ def main(argv=None) -> None:
         k_fit=args.k_fit,
         site_selection=args.site_selection,
         site_pool_cap=args.site_pool_cap,
+        site_quality_filter=args.site_quality_filter,
+        site_quality_pct=args.site_quality_pct,
+        image_dir=args.image_dir,
         output_tag=args.output_tag,
     )
     if result.get("status") != "ok":
