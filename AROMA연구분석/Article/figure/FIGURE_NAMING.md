@@ -23,11 +23,13 @@
 | `[figure 3.2.2 3] morph_features.png` | §3.2.2 | Figure 3.2.2-3 | 형태 특징 6종의 검사 영역 (k의 입력 벡터) |
 | `[figure 3.2.2 4] context_cell.png` | §3.2.2 | Figure 3.2.2-4 | 64px 패치 → context cell 환산 4단계 |
 | `[figure 3.2.3 1 <ds>] morphology_distribution.png` | §3.2.3 | Figure 3.2.3-1 | defect morphology feature 분포 (5종) |
-| `[figure 3.2.4 1 <ds>] compatibility_heatmap.png` | §3.2.4 | Figure 3.2.4-1 | symmetric compatibility 히트맵 (5종) |
-| `[figure 3.2.4 2] placement_ring.png` | §3.2.4 | Figure 3.2.4-2 | ring 분포 매칭으로 붙일 좌표 결정 (4패널) |
-| ~~`[figure 3.2.4 2] placement_footprint.png`~~ | — | — | **대체됨 (2026-08-03).** footprint mean-compat / top-K 샘플 / τ 게이트를 설명했으나 채택안(`ring_sgm`)에서 그 세 요소가 사라졌다. 이력 보존용으로 남기되 본문 미인용 |
-| `[figure 3.2.4 3] bg_cue_decomposition.png` | §3.2.4 | Figure 3.2.4-3 | clean 배경 랭킹 4 cue 분해 + 데이터셋별 lift 가중치 |
-| `[figure 3.2.5 3] roi_selection_flow.png` | §3.2.5 | Figure 3.2.5-3 | ROI 선택·배치 흐름 |
+| `[figure 3.2.4 1] roi_selection_flow.png` | §3.2.4 | Figure 3.2.4-1 | ROI 선택→배경 배정→자리 확정 3단 흐름도 (§3.2.4 도입, 구 `3.2.5 3`에서 이동, 신 3단 흐름으로 재생성 완료 2026-08-14) |
+| `[figure 3.2.4 2 <ds>] compatibility_heatmap.png` | §3.2.4 | Figure 3.2.4-2 | symmetric compatibility 히트맵 (5종) (구 `3.2.4 1`) |
+| `[figure 3.2.4 3] roi_score_composition.png` | §3.2.4 | Figure 3.2.4-3 | ROI_score 가중항 분해 (severstal·aitex 2패널, 구 휴면 `3.2.5 1` 부활 2026-08-14) |
+| `[figure 3.2.4 4 <ds>] bg_score_composition.png` | §3.2.4 | Figure 3.2.4-4 | 배경 배정 top-3 대조 (5종) — 원본+crop(≈30%) / src_fit top-3 / class_fit top-3 / bg_score top-3(★=배정) (2026-08-14 최종안: size 패널 제거, 대표 ROI = 면적비 0.30 근접 규칙) |
+| `[figure 3.2.4 5 <ds>] placement_ring.png` | §3.2.4 | Figure 3.2.4-5 | 자리 확정 (5종) — -4와 표본 연속(동일 crop·배정 배경, 변 지배 60% 금지 규칙 공유): A 원본 결함의 실제 ring 타일 tgt[k] tint / B 배정 배경 best·mid·worst 자리(best ring tint) / C 실측 h_ring·h_s* vs tgt[k] 분포 대조. rank-1 폴백 시 제목 명기 (2026-08-14 2차 개정 단순 대조판, 구 severstal 단일 4패널→3패널판 대체) |
+| ~~`_retired/[figure 3.2.4 2] placement_footprint.png`~~ | — | — | **대체됨 (2026-08-03) → `_retired/` 이동 (2026-08-14).** footprint mean-compat / top-K 샘플 / τ 게이트 — 채택안(`ring_sgm`)에서 제거된 요소들 |
+| ~~`_retired/[figure 3.2.4 3] bg_cue_decomposition.png`~~ | — | — | **은퇴 (2026-08-14) → `_retired/`.** §3.2.4 본문이 3-cue 요약판으로 개편되며 4 cue·lift 가중 삽화 제거 (사유: `_retired/README.md`) |
 | `[figure 4.1 1] roi_coverage.png` | §4.1 | Figure 4.1-1 | ROI 커버리지 지표 |
 | `[figure 4.1 2] roi_bbox_qualitative.png` | §4.1 | Figure 4.1-2 | qualitative ROI placement |
 | `[figure 4.1 3] bg_similarity_datasets.png` | §4.1 | Figure 4.1-3 | background-selection compatibility |
@@ -73,3 +75,16 @@
 - 운영 함수는 **import해서 호출**하고 재구현하지 않는다(값 불일치 방지). 중간량을 자체 계산해야 하면 최종값이 운영 함수 결과와 일치하는지 `assert`로 확인한다
 - 데이터 루트는 `AROMA_DATASET_ROOT`, 리포 루트는 `AROMA_REPO` 환경변수로 재지정 가능하게 한다
 - 라벨 언어는 영문이 기본. `[figure 3.2.2 3]`·`[figure 3.2.2 4]` 2건은 현재 한글이며 영문 교체 대기(2026-07-31). `[figure 3.2.4 2]`는 `placement_ring` 재제작으로 영문화 완료(2026-08-03)
+
+## 정정 이력 (2026-08-14) — §3.2.4 재편에 따른 재번호
+
+| 이전 | 이후 | 비고 |
+|---|---|---|
+| `[figure 3.2.5 3] roi_selection_flow` | `[figure 3.2.4 1]` | §3.2.4 도입 흐름도로 이동 (본문 §3.2.5에는 콜아웃이 원래 없었음). script `_mod` 쌍도 함께 리네임. PNG·스펙 신판 재생성 완료 (`_mod` 쌍은 구식 — 스펙 비고 참조) |
+| `[figure 3.2.4 1 <ds>] compatibility_heatmap` | `[figure 3.2.4 2 <ds>]` | 콜아웃 순서 캐스케이드 |
+| `[figure 3.2.4 2] placement_ring` | `[figure 3.2.4 3]` | 〃 (은퇴한 구 -3 번호 재사용) |
+| `[figure 3.2.4 2] placement_footprint` | `_retired/` | 2026-08-03 대체본의 물리 이동 |
+| `[figure 3.2.4 3] bg_cue_decomposition` | `_retired/` | §3.2.4 3-cue 요약 개편으로 은퇴 |
+| `[figure 3.2.5 1] roi_score_composition` (PNG 미생성 휴면) | `[figure 3.2.4 3]` **부활·PNG 생성** | Defect Crop Selection 삽화. 경로 수정(AROMA_DATASET_ROOT)·주석 추가 후 생성 |
+| `[figure 3.2.4 3] placement_ring` (당일 재번호분) | `[figure 3.2.4 4]` | 신규 -3 삽입에 따른 2차 캐스케이드 |
+| `[figure 3.2.4 4] placement_ring` (당일 재번호분) | `[figure 3.2.4 5]` | 신규 -4(bg_score 과정도) 삽입에 따른 3차 캐스케이드 |

@@ -98,78 +98,57 @@ As shown in Figure 3.2.3-1, the per-dataset distributions of the profiled morpho
 
 ###3.2.4 ROI Selection and Compatibility-Aware Placement
 
-Synthesis placement decomposes into three sequential decisions: (i) which defect to use as the source (ROI selection), (ii) which clean background image to paste it onto (background assignment), and (iii) at which position on that background the paste lands (site resolution). The three decisions share one common basis — the defect–background compatibility model that profiling builds once per dataset — which background assignment queries at the scale of a whole image and site resolution queries at the scale of a candidate position's local surroundings. This section describes the model once and then the three decisions in order.
+Synthesis placement decomposes into three sequential decisions: (i) which defect to use as the source (ROI selection), (ii) onto which normal background image it should be placed (background assignment), and (iii) at which position on that background (site resolution). All three stages consult a single compatibility model, defined first. Figure 3.2.4-1 presents the overall flow before each stage is described in turn.
 
-**ROI selection.** ROI selection ranks all candidate defect–context pairs by a compatibility score and retains the top-K; a base quota per morphology cluster guarantees coverage, and for multi-class datasets a uniform per-class floor prevents any class from being starved. Candidates are ordered by
+**Figure 3.2.4-1.** ROI selection and compatibility-aware placement flow. A defect crop's morphology cluster k and its context cell yield morph_prior and ctx_prior, whose weighted sum ROI_score ranks defect candidates and retains the top-K; each selected ROI is then assigned a normal background by the three fitness measures, and the paste position is fixed by matching the ring histogram h_s of each candidate position against the cluster's target profile tgt[k]. All three stages consult the single compatibility model matrix_symmetric.
 
-ROI_score = 0.6 · ctx_prior + 0.4 · morph_prior,
-
-where ctx_prior is the profiled defect–background compatibility defined below, and morph_prior is the morphology-cluster prior P(k) of Section 3.2.2. The two mixing weights are fixed at 0.6 and 0.4 for every dataset, so the ranking introduces no dataset-specific tuning, even though the mixture itself is not derived from the data; the compatibility term dominates the score, while the cluster prior mainly orders candidates whose compatibility is saturated (ctx_prior = 1). To prevent morphological collapse, each source defect crop is selected at most once.
-
-**The compatibility model.** All placement decisions consult a symmetric compatibility gate that scores a defect morphology cluster k against a 64-pixel context cell c by the geometric mean of two profiled occurrence probabilities:
+-Compatibility Model: matrix_symmetric
+matrix_symmetric models the compatibility between a morphology cluster (k) and a 64-px discrete context cell (c). It is built from two observed distributions over the same context-cell space — P_def(k, c), the context cells observed in images containing cluster-(k) defects, and P_clean(c), the context cells observed across all normal images — combined by their geometric mean:
 
 ctx_prior(k, c) ∝ √(P_def(k, c) · P_clean(c)),
 
-where k indexes a morphology cluster and c a context cell. Both factors are cell-frequency distributions over the same discrete cell space, each obtained by counting 64-pixel background patches and normalising the counts to sum to one. P_clean(c) is estimated over the patches of all normal images, whereas P_def(k, c) is estimated over the patches of those defect images whose defect belongs to cluster k, each patch inheriting its image's cluster label; patches overlapping a defect region are excluded during profiling, so P_def describes the background context surrounding cluster k's defects rather than the defects themselves. The square root of the product is the geometric mean of the two factors: it is symmetric in them and collapses to zero if either vanishes, which is what the additive smoothing below prevents. The relation is written as a proportionality because the score that is stored is this geometric mean divided by its per-cluster maximum, so that each cluster's most compatible cell equals 1. Additive smoothing (ε = 10⁻³) is applied to both factors, and each cluster's scores are rescaled so that its most compatible cell equals 1; the row-normalized values are what the profiling stage stores as matrix_symmetric. The geometric mean is high only where both probabilities are high, weighting the defect and background sides symmetrically. The patch grid is truncated to whole tiles, so a right- or bottom-edge remainder narrower than one tile carries no context cell; such tiles are unobserved and are excluded wherever the model is queried.
+so that a cell scores high only when defects of that cluster are actually observed near it *and* the cell exists in normal images. Each row is then normalised per cluster, so that a row expresses the relative compatibility of every context cell with cluster (k), peaking at 1 for the most compatible cell.
 
-The compatibility row of a cluster is consumed as a **target context distribution** rather than as a per-tile score. Renormalising the row to sum to one — a monotone rescaling that leaves its relative shape unchanged — gives
+As shown in Figure 3.2.4-2, each morphology cluster's compatibility concentrates on a few context cells: on heterogeneous surfaces (AITeX, MTD) different clusters prefer different cells, whereas on the near-uniform Severstal surface all clusters share one dominant cell.
 
-q_k(c) = ctx_prior(k, c) / Σ_{c'} ctx_prior(k, c'),
+**Figure 3.2.4-2.** Symmetric compatibility (ctx_prior) across the five datasets, as morphology-cluster × context-cell heatmaps (top-20 most-compatible cells, row-normalized so each cluster peaks at 1; each cluster's peak cell boxed). ctx_prior is high only where a cell is both a typical background for the defect cluster and a common clean background. Clusters prefer different cells on heterogeneous surfaces (AITeX, MTD) but share a dominant cell on the near-uniform Severstal surface. Each row is consumed at placement time as a target distribution to be matched by the ring around a candidate position (Section 3.2.4), not as a per-tile score to be averaged; on a surface such as Severstal, where the rows are nearly identical, averaging would collapse every cluster onto the same dominant cell, whereas distribution matching still discriminates positions by the composition of their surroundings.
 
-and background assignment and site resolution below query this single distribution rather than two separate quantities.
+-1. Defect Crop Selection
+This stage determines which defects to use as sources. Each candidate is scored by combining its context-based compatibility with the cluster prior,
 
-**Background assignment.** Before synthesis, a clean background is assigned to each ROI by ranking candidate backgrounds against cues derived from the profiling stage. All cues are histogram intersections over the discrete context-cell space, written for two distributions a and b as
+ROI_score = 0.6 · ctx_prior + 0.4 · morph_prior,
 
-∩(a, b) = Σ_c min( a(c), b(c) ).
+where ctx_prior is read from matrix_symmetric and morph_prior is the cluster prior P(k) of Section 3.2.2. The top (K) candidates by ROI_score become the sources for the placement stages that follow.
 
-Let v denote the ROI's source defect, k its morphology cluster, (w, h) its bounding-box size, and g a candidate clean background with dimensions (W_g, H_g). Writing h_g for the context-cell histogram of g over its non-void tiles, p_src(v) for the background cell distribution of v's own source image, and p_cls for the aggregate background distribution of v's class, the four cues are
+As shown in Figure 3.2.4-3, the compatibility term dominates the score and sets the ranking, while the cluster prior adds a small per-cluster offset that orders the candidates whose compatibility is saturated (ctx_prior = 1).
 
-u_src(g) = ∩( h_g, p_src(v) ),
-u_cls(g) = ∩( h_g, p_cls ),
-u_mor(g) = ∩( h_g, q_k ),
-u_siz(g) = min( 1, 0.95 · W_g / w, 0.95 · H_g / h ),
+**Figure 3.2.4-3.** Composition of ROI_score = 0.6 · ctx_prior + 0.4 · morph_prior for the top-ranked candidate defect–context pairs on Severstal and AITeX. Each bar splits into the weighted compatibility term (0.6 · ctx_prior, blue) and the weighted cluster prior (0.4 · morph_prior, grey): compatibility dominates the score and sets the ranking, while the cluster prior orders the compatibility-saturated peaks (ctx_prior = 1) at the top of each panel.
 
-where u_siz is the fit-rescale factor the paste would apply, equal to one when the crop fits without distortion. The ranking score is their weighted sum,
+-2. Background Assignment
+This stage determines the normal background image for each selected ROI. Candidates are ranked by three fitness measures, all built on the histogram intersection ∩(a, b) = Σ_c min( a(c), b(c) ):
 
-U(g) = Σ_j w_j · u_j(g),   j ∈ { src, cls, mor, siz },
+src_fit(g) = ∩( h_g, p_src(v) )
+class_fit(g) = ∩( h_g, p_cls )
+size_fit(g) = min( 1, 0.95 · W_g / w, 0.95 · H_g / h )
 
-and the weights are not set by hand but derived from each cue's measured discriminative lift. Writing G for the valid background pool of one ROI, the lift of cue j is the gap between its best and its median candidate, averaged over ROIs,
+bg_score = src_fit + class_fit + size_fit
 
-λ_j = E_ROI [ max_{g ∈ G} u_j(g) − median_{g ∈ G} u_j(g) ],   w_j = λ_j / Σ_{j'} λ_{j'},
+and the normal image with the highest score is assigned as the background.
 
-so a cue that is flat across the pool contributes nothing and cannot distort the ranking. The cue u_mor asks whether a candidate background actually supplies the context cells that cluster k's defects occupy; it is not redundant with u_cls, because the class axis and the morphology-cluster axis are distinct partitions of the same defect population — Severstal has four classes but five clusters, MVTec Leather five classes but three, so defects of one class routinely split across clusters and the reverse.
+As shown in Figure 3.2.4-4, the two histogram measures respond to different aspects of the pool — for the same defect crop their top candidates differ — and the final bg_score ranking combines them into the assigned background.
 
-**Site resolution.** The paste position is resolved at selection time, before composition; synthesis consumes the coordinate fixed here and performs no further position search. Resolution proceeds on the same 64-pixel tile grid at which the model was built. A candidate position s is any tile offset at which the defect's (fit-rescaled) bounding box fits — the size and aspect ratio of the candidate window are set by the individual defect's bounding box, while its cluster contributes only the target distribution q_k — and it determines two tile sets: the **footprint** F(s), the tiles the defect would cover, and the **ring** R(s), the eight-neighbour tiles of that rectangle. A position is admissible only when its whole footprint is observed and non-void,
+**Figure 3.2.4-4.** Background assignment on real images (one panel set per dataset). For one representative defect crop — shown with its source image, bbox in red — the valid clean pool's top-3 candidates are displayed under src_fit (blue) and class_fit (orange), followed by the top-3 under the final bg_score (green; rank 1, ★, is the assigned background, with its full score decomposition). Each image's 64-px tiles are tinted by that tile's cell mass in the row's reference histogram (row 1: p_src, row 2: p_cls; brighter = heavier; untinted tiles are void, unobserved, or defect-overlapping), so a high histogram intersection is visible as a similar tint mixture between the source image and a candidate; the final row is shown untinted.
 
-valid(s) ⟺ ∀ t ∈ F(s) : t is observed and not void,
+-3. Site Resolution
+This stage determines where on the assigned background the defect is placed. A candidate position (s) is the top-left coordinate of the defect crop; the ring region around the crop represents the local context that would surround the defect after insertion. Positions whose crop rectangle overlaps void tiles or unobserved tiles (tiles outside the whole-tile grid) are excluded before scoring (Section 3.2.6). The ring of each remaining candidate is converted into a context-cell histogram (h_s) and compared against the matrix_symmetric row of the defect's cluster (k), renormalised to sum to one and denoted tgt[k] (q_k in the figures), as the target profile:
 
-which discards any candidate straddling an unusable region before it is scored (Section 3.2.6). The footprint is subject only to this existence check — its cell values are never read, since the paste will overwrite them; cell values enter the scoring through the ring alone. For an admissible position the ring's context cells are counted into a normalised histogram over its non-void tiles,
+site_score = ∩( h_s, tgt[k] )
 
-h_s(c) = | { t ∈ R(s) : cell(t) = c } | / | { t ∈ R(s) } |,
+The position with the highest site_score is selected; it is resolved at selection time and consumed as-is by synthesis. Placement therefore relies neither on geometric heuristics nor on random selection, but on the position whose surroundings most closely resemble the context in which that defect morphology was observed in the real data.
 
-and the position is scored, and selected, by
+As shown in Figure 3.2.4-5, the resolved site reproduces the ring context of the real defect: the tiles ringing the defect in its source image and the tiles ringing the selected position in the assigned background are tinted by the same target mass tgt[k] under one colour scale, so the resemblance the intersection score rewards is directly visible.
 
-score(k, s) = ∩( h_s, q_k ),   s* = argmax_{ s : valid(s) } score(k, s).
-
-The rule is a ranking, not a filter: no acceptance threshold is imposed on admissible positions — the relative best is taken — and absolute suitability is the responsibility of the background-assignment stage above.
-
-Two properties of this rule are deliberate. First, the ring is read rather than the footprint, because the footprint is precisely the region the pasted defect overwrites; what survives composition, and what borders the defect after blending, is the ring. Second, the ring is matched as a distribution rather than averaged into a scalar. Averaging a compatibility row over tiles rewards positions holding many individually high-scoring cells, and because the row is high exactly where a cell is common in both populations, that objective drives placement toward the most ordinary surface of the dataset — the opposite of reproducing the context distribution that real defects occupy. Matching the ring's composition against q_k removes that pull: a position scores well only when the mixture of surfaces around it resembles the mixture observed around cluster k's defects, and an abundance of merely common cells does not by itself raise the score, because the elementwise minimum truncates any excess at the target value.
-
-A background may admit no position satisfying valid(s) at all — for instance when the defect's tile rectangle exceeds the truncated grid, or the usable area is fragmented. In that case the selection stage emits no position and the ROI reverts to the compositor's own placement search, so the rule is a preference over admissible positions rather than a hard requirement.
-
-This data-driven compatibility gate automatically replaces CASDA's handcrafted compatibility matrix with a dataset-specific counterpart derived directly from the profiling statistics. In contrast, the Random baseline performs no compatibility-based ranking, differing from AROMA only in the ROI placement mechanism.
-
-As shown in Figure 3.2.4-1, each morphology cluster's compatibility concentrates on a few context cells: on heterogeneous surfaces (AITeX, MTD) different clusters prefer different cells, whereas on the near-uniform Severstal surface all clusters share one dominant cell.
-
-**Figure 3.2.4-1.** Symmetric compatibility (ctx_prior) across the five datasets, as morphology-cluster × context-cell heatmaps (top-20 most-compatible cells, row-normalized so each cluster peaks at 1; each cluster's peak cell boxed). ctx_prior is high only where a cell is both a typical background for the defect cluster and a common clean background. Clusters prefer different cells on heterogeneous surfaces (AITeX, MTD) but share a dominant cell on the near-uniform Severstal surface. Each row is consumed at placement time as a target distribution to be matched by the ring around a candidate position (Section 3.2.4), not as a per-tile score to be averaged; on a surface such as Severstal, where the rows are nearly identical, averaging would collapse every cluster onto the same dominant cell, whereas distribution matching still discriminates positions by the composition of their surroundings.
-
-As shown in Figure 3.2.4-2, the target distribution turns into a pixel coordinate through the ring: candidate positions differ in the mixture of surfaces surrounding them, and the intersection with q_k separates them by a factor of 4.3 on this background even though the footprints they would overwrite are visually similar.
-
-**Figure 3.2.4-2.** Ring-matched placement on a Severstal background for morphology cluster k=1. (A) 64-pixel tile grid coloured by the target probability q_k of each tile's context cell, void tiles hatched. (B) Three candidate positions with their footprint F(s), the region the paste overwrites, and their ring R(s), the region that survives; 3 of 60 enumerated positions are rejected by valid(s). (C) Ring histogram h_s against q_k for the best and the median candidate, filled bars marking the elementwise minimum whose sum is the score. (D) Score across the 57 admissible positions with the selected one starred.
-
-As shown in Figure 3.2.4-3, the four background cues are not interchangeable: the source and class cues respond to the surface as a whole, the morphology-cluster cue reorders candidates that those two rank alike, and the size cue is flat wherever the background pool is dimensionally uniform, in which case its derived weight is zero.
-
-**Figure 3.2.4-3.** Decomposition of the clean-background ranking for one ROI, with the four cues scored over the valid background pool and combined by their lift-derived weights. Candidates are ordered by the combined score U(g); the panel on the right reports the per-dataset weights the lift derivation yields. A cue's weight reflects how far it separates candidates, not how large its values are — u_src is small in absolute terms among the leading candidates yet carries the largest weight on every dataset, whereas u_siz is flat across this pool and is therefore weighted zero.
+**Figure 3.2.4-5.** Site resolution — ring context of the source defect versus the resolved site (one figure per dataset; sample continuity with Figure 3.2.4-4 — the same defect crop and its assigned background are carried forward). (A) The source defect image with the tiles ringing the real defect bbox tinted by the target mass tgt[k] of their context cell (value printed; untinted ring tiles were excluded from profiling as defect-overlapping, void, or unobserved), with the ring/target intersection reported. (B) The assigned background with the best, median, and worst admissible positions — footprint solid, ring dashed — where the resolved position s* additionally has its ring tiles tinted under the same colour scale. (C) The measured cell histogram of the real defect's ring and of the resolved site's ring, each against the target tgt[k], with both intersections reported. Where the rank-1 background admits no valid position, the title notes the runtime fallback and the highest-ranked background that does is shown.
 
 ###3.2.5 Blending Synthesis
 Each selected defect crop is placed at the designated bounding box on the target normal image. The same blend operator is applied identically to the AROMA and random arms, ensuring blending is not a confounding factor. For each synthesized image, the corresponding defect mask and bounding box are co-saved, providing pixel-level localization for downstream detection.
