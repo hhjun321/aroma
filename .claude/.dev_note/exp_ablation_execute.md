@@ -9,7 +9,10 @@
 - [x] **smoke (top_k=20, arm당 40장)**: 3 arm 분리·전 단계 지표 산출 성공, 전체 ~5분
 - [x] **k200 (top_k=200, arm당 400장)**: smoke 결론 유지, p-value 강화, 전체 ~35분 (합성 3 arm 병렬)
 - [x] **sanity**: ring arm의 저장 `site_score` 완전 재현 (평균 오차 2.5×10⁻⁷) — 분석 스크립트가 파이프라인 스코어링과 수치 동일
-- [ ] downstream mAP (exp4v2 YOLO 3-seed) — Colab GPU. **proxy 결과만으로 mAP 주장 금지** (기존 정직성 원칙)
+- [x] **A1 (random ROI + AROMA bg/site) arm 완성 (2026-08-19)**: clean_bg ring+qf 200/200 (ring 3139 positions, fallback 1.9%) → 합성 400장 (`position_source: ring=397/400`, used=400 fallback=0 mismatch=0) → site_score **0.120** (n=398, full 0.131 근접) — site 메커니즘이 ROI 선정과 독립적으로 작동함을 확인. A1의 변별 지표는 Stage 1 (ctx_prior 0.013 vs 0.183)
+- [x] **Colab mAP 실행 가이드 작성 (2026-08-19)**: `AROMA연구분석/colab_execute_new/exp_ablation_mAP_execute.md` — arm 3종 Colab 재생성(remap 불필요) → exp4v2 `--condition aroma` 단독 + `--aroma_synthetic_dir` 교체 + arm별 output_dir × 3 seeds → 취합표
+- [x] **Colab 1차 합성 실행 (2026-08-19)**: A2 2000장·A1 400장 생성 — **parity 결함 발견**: Drive sym_final은 1000 ROI 스케일인데 가이드 STEP 1이 로컬값 top_k=200을 사용 → A1만 400장. 가이드 수정 완료(top_k를 기존 roi_selected 수에 동적 일치 + STEP 4 진입 전 parity 검수 셀). **A1은 top_k=1000으로 재선정·재합성 필요** (STEP 1→2(a)→3 a1만 재실행, 기존 synth_a1_roirand 디렉터리 비우고). A2는 2000장 정상(재사용 가능), A3는 1000-ROI 소비라 2000장 예상 — 완료 로그로 확인할 것
+- [ ] downstream mAP (exp4v2 YOLO 3-seed) — Colab GPU에서 위 가이드 실행. **proxy 결과만으로 mAP 주장 금지** (기존 정직성 원칙)
 - [ ] 타 데이터셋 확장 (aitex / mvtec_leather 우선)
 
 ---
@@ -56,6 +59,7 @@
 | arm | site_score mean | footprint void | vs ring p |
 |---|---|---|---|
 | ring (full) | **0.131** (n=394) | 5/400 | — |
+| A1 roi-random | 0.120 (n=398) | 3/400 | (site 유지 arm — 변별은 Stage 1 지표) |
 | site-off (A3) | 0.081 (n=391) | 66/400 | 1.1×10⁻⁶⁰ |
 | bg-random (A2) | 0.061 (n=373) | 110/400 | 3.2×10⁻⁸⁶ |
 
@@ -164,7 +168,6 @@ python D:/project/AROMA_DATASET/ablation_smoke/severstal/analyze_smoke_arms.py <
 
 ## 미확정 사항
 
-- TODO: A1(random ROI) arm 합성·채점 — roi_random 선정본까지 완료, 이후 단계 미실행
 - TODO: 논문 반영 위치 — §4에 ablation 소절 신설 vs 리뷰어 응답문서 전용 (리뷰 코멘트 수신 후 결정)
 - TODO: aitex(신호 강함)·mvtec_leather(A2 서사) 확장 시 remap 규칙 데이터셋별 재확인 (마스크 파일명 규약 상이 가능)
 - <결정 필요> proxy 지표를 논문에 실을 경우 §4.1과의 수치 차이 설명 필요 — smoke/k200의 Δ(+0.163)는 top-K 집중 선택분이라 §4.1 전체분포 Δ(+0.032)보다 큼. 동일 지표·다른 모집단임을 명기할 것
