@@ -1,0 +1,11 @@
+저자에 대한 논평 및 제안
+
+본 원고는 산업 시각 검사를 위한 적응형 ROI 기반 증강 프레임워크인 AROMA를 제시한다. 데이터셋 복잡도 지수(MCI 및 CCI)를 통해 결함 배치를 특성화한다는 전제는 흥미롭지만, 일부 주장들은 심각한 논리적 모순과 빈약한 실증적 검증의 문제를 안고 있다. 원고 개선에 도움이 되도록 다음과 같이 논평한다:
+
+1. 서론과 방법론에서는 기존 프레임워크(CASDA 등)가 "도메인 특화 수작업 규칙(domain-specific handcrafted rules)"에 의존한다고 강하게 비판하며, AROMA가 수동 튜닝을 "데이터 기반(data-driven)" 접근으로 완전히 대체한다고 주장한다. 그러나 이 주장은 저자들 자신의 방법론에 비추어 볼 때 근본적으로 거짓이다. Table 3은 배경 카테고리를 정의하기 위해 하드코딩된, 수동으로 설계된 백분위수 캐스케이드를 명시적으로 사용한다(예: "Smooth"는 Local Variance ≤ P25를 요구). 나아가 Table 4는 결함 하위 유형에 대해 전적으로 자의적인 하드코딩 규칙을 규정한다(예: "linear_scratch"는 Linearity > 0.9 AND AspectRatio > 5로 엄격히 정의됨). 이들은 수동으로 설정된 상수로서, 전적으로 데이터 기반이라는 논문의 핵심 방법론적 주장과 모순된다.
+2. 다운스트림 검출 결과는 AROMA 프레임워크의 우수성을 입증하지 못한다. Kolektor 데이터셋에서 AROMA(0.9870 mAP@0.5)는 Random 베이스라인(0.9938 mAP@0.5)보다 명백히 더 나쁘다. MTD 데이터셋에서도 AROMA(0.9440 mAP@0.5)는 Random 베이스라인(0.9465 mAP@0.5)에 다시 뒤처진다. 가장 심각하게는, MVTec Leather 데이터셋에서 AROMA(0.8052 mAP@0.5)는 성능을 크게 저하시켜, 원본 Baseline(0.8321 mAP@0.5)과 Random 접근법(0.8543 mAP@0.5) 모두에 패배한다. 평가된 5개 데이터셋 중 3개에서 단순 균등 랜덤 배치 베이스라인조차 이기지 못하는 제안 파이프라인을 견고한 발전이라고 주장할 수 없다.
+3. ROI 스코어링 수식(수식 2)은 0.6⋅ctx_prior+0.4⋅ 에 기반하여 점수를 규정한다. 저자들은 "이 랭킹은 수동 설정 상수를 도입하지 않는다"고 기술하지만, 가중치 0.6과 0.4는 문자 그대로 수동 설정 상수이다. 이 특정 가중치가 왜 최적인지를 입증하는 실증적 정당화나 ablation 연구가 제공되지 않았다. 마찬가지로 수식 4는 품질 점수 계산에 자의적인 가중치(blur 0.30, contrast 0.30, brightness 0.20, noise 0.20)를 할당한다.
+4. 데이터의 시각적 표현이 심각하게 미흡하다. Figure 3, 4, 5, 6의 텍스트, 축 레이블, 범례, 주석이 판독하기에는 너무 작다.
+5. 문헌 검토 또한 개선될 수 있다. 문헌 검토 개선을 위한 몇 가지 추천 문헌을 첨부하니 참고하기 바란다:
+6. Panagiotis Stavropoulos, Alexios Papacharalampopoulos, Dimitris Petridis, A vision-based system for real-time defect detection: a rubber compound part case study, Procedia CIRP, Volume 93, 2020, Pages 1230-1235, ISSN 2212-8271, https://doi.org/10.1016/j.procir.2020.04.159.
+7. Bergmann, P., Batzner, K., Fauser, M. et al. The MVTec Anomaly Detection Dataset: A Comprehensive Real-World Dataset for Unsupervised Anomaly Detection. Int J Comput Vis 129, 1038–1059 (2021). https://doi.org/10.1007/s11263-020-01400-4

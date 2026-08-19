@@ -1,0 +1,10 @@
+Comments and Suggestions for Authors
+The paper proposes AROMA (Adaptive ROI-based Morphology-Aware Augmentation) to address issues in industrial visual inspection, such as the scarcity of defect samples, class imbalance, and mismatches between synthetic defects and backgrounds. The author should prepare a major revision to improve the submission.
+
+ 
+
+1. The AROMA framework still incorporates a significant number of pre-defined structures and empirical rules. It is necessary to demonstrate that these manually set parameters do not dominate the final performance through systematic sensitivity analysis or learning-based parameter determination methods.
+2. CCI is further used to explain when AROMA is effective, yet this conclusion is actually based on only five datasets. Five data points are insufficient to demonstrate a consistent relationship between CCI and the performance gains achieved by AROMA.
+3. It is recommended to at least include comparisons with more representative methods, such as copy-paste, context-aware placement, hard-sample augmentation, and relevant generative defect augmentation techniques.
+4. Please further explain why AROMA is ineffective—or even leads to a performance decline—on certain datasets.
+5. Data decentralization is an important issue in the field. The authors could discuss this by considering some works. -Balance recovery and collaborative adaptation approach for federated fault diagnosis of inconsistent machine groups.

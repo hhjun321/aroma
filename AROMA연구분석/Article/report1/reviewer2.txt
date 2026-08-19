@@ -1,0 +1,10 @@
+Comments and Suggestions for Authors
+This paper proposes a data-driven placement framework that automates the handcrafted defect-background compatibility matrix. However, several issues remain; if properly addressed, the manuscript could be considered for publication in Applied Sciences.
+
+1. The paper repeatedly claims to be "free of manual tuning" and "without hand-set constants," yet the hyperparameters in Equations (2) and (4) are manually set.
+2. Only YOLOv8n is used as the downstream detector; it is recommended to supplement the experiments with more recent mainstream detectors.
+3. Fixed thresholds are used for defect subtype classification without providing a threshold sensitivity analysis.
+4. The CCI formula lists only three components, whereas the text explicitly states "four normalized components."
+5. Quantitative results for Shannon entropy and the Gini coefficient are not reported.
+6. The keywords include "ControlNet" and "Stable Diffusion," despite neither technique being used in the proposed method.
+7. The references lack relevant works published within the last three years.

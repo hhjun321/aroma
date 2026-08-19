@@ -1,0 +1,11 @@
+저자에 대한 논평 및 제안
+
+본 논문은 산업 시각 검사에서의 결함 샘플 부족, 클래스 불균형, 합성 결함과 배경 간의 불일치 문제를 해결하기 위해 AROMA(Adaptive ROI-based Morphology-Aware Augmentation)를 제안한다. 저자는 제출물을 개선하기 위해 대폭 수정(major revision)을 준비해야 한다.
+
+
+
+1. AROMA 프레임워크는 여전히 상당수의 사전 정의된 구조와 경험적 규칙을 포함하고 있다. 이러한 수동으로 설정된 파라미터가 최종 성능을 지배하지 않는다는 것을 체계적인 민감도 분석 또는 학습 기반 파라미터 결정 방법을 통해 입증할 필요가 있다.
+2. CCI는 AROMA가 언제 효과적인지를 설명하는 데 추가로 사용되지만, 이 결론은 실제로 단 5개의 데이터셋에만 기반하고 있다. 5개의 데이터 포인트는 CCI와 AROMA가 달성한 성능 향상 간의 일관된 관계를 입증하기에 불충분하다.
+3. 최소한 copy-paste, 컨텍스트 인지 배치(context-aware placement), 하드 샘플 증강(hard-sample augmentation), 관련 생성형 결함 증강 기법과 같은 더 대표적인 방법들과의 비교를 포함할 것을 권장한다.
+4. 특정 데이터셋에서 AROMA가 왜 효과가 없는지—또는 심지어 성능 저하로 이어지는지—를 추가로 설명해 주기 바란다.
+5. 데이터 분산화(data decentralization)는 이 분야에서 중요한 이슈이다. 저자들은 몇몇 연구들을 고려하여 이를 논의할 수 있을 것이다. -Balance recovery and collaborative adaptation approach for federated fault diagnosis of inconsistent machine groups.
