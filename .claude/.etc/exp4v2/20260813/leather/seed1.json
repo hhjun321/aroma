@@ -1,0 +1,145 @@
+{
+  "mvtec_leather": {
+    "yolov8n": {
+      "baseline": {
+        "map50": 0.7082,
+        "map50_95": 0.4358,
+        "precision": 0.7824,
+        "recall": 0.5953,
+        "n_train": 64,
+        "n_real_train": 64,
+        "n_synth_train": 0,
+        "per_class": {
+          "color": {
+            "map50": 0.8172,
+            "map50_95": 0.5936,
+            "precision": 1.0,
+            "recall": 0.5772
+          },
+          "cut": {
+            "map50": 0.6905,
+            "map50_95": 0.4166,
+            "precision": 0.6031,
+            "recall": 0.7143
+          },
+          "fold": {
+            "map50": 0.3672,
+            "map50_95": 0.1796,
+            "precision": 0.4301,
+            "recall": 0.5714
+          },
+          "glue": {
+            "map50": 0.8879,
+            "map50_95": 0.7312,
+            "precision": 0.8785,
+            "recall": 0.75
+          },
+          "poke": {
+            "map50": 0.7783,
+            "map50_95": 0.2581,
+            "precision": 1.0,
+            "recall": 0.3635
+          }
+        },
+        "n_synth_per_class": {},
+        "weights_path": "/content/drive/MyDrive/data/Aroma/aroma_output/sym_final/exp4v2_tobe_gate_leather/_seeds/seed1/mvtec_leather/yolov8n/baseline/weights/best.pt"
+      },
+      "random": {
+        "map50": 0.7403,
+        "map50_95": 0.4622,
+        "precision": 0.804,
+        "recall": 0.5081,
+        "n_train": 128,
+        "n_real_train": 64,
+        "n_synth_train": 64,
+        "per_class": {
+          "color": {
+            "map50": 0.995,
+            "map50_95": 0.7413,
+            "precision": 1.0,
+            "recall": 0.5047
+          },
+          "cut": {
+            "map50": 0.6189,
+            "map50_95": 0.3214,
+            "precision": 0.6511,
+            "recall": 0.7143
+          },
+          "fold": {
+            "map50": 0.6694,
+            "map50_95": 0.2737,
+            "precision": 0.6049,
+            "recall": 0.5714
+          },
+          "glue": {
+            "map50": 0.8879,
+            "map50_95": 0.7596,
+            "precision": 0.7638,
+            "recall": 0.75
+          },
+          "poke": {
+            "map50": 0.5304,
+            "map50_95": 0.215,
+            "precision": 1.0,
+            "recall": 0.0
+          }
+        },
+        "n_synth_per_class": {
+          "0": 13,
+          "1": 15,
+          "2": 17,
+          "3": 9,
+          "4": 10
+        }
+      },
+      "aroma": {
+        "map50": 0.8515,
+        "map50_95": 0.5111,
+        "precision": 0.8867,
+        "recall": 0.6216,
+        "n_train": 128,
+        "n_real_train": 64,
+        "n_synth_train": 64,
+        "per_class": {
+          "color": {
+            "map50": 0.995,
+            "map50_95": 0.7271,
+            "precision": 1.0,
+            "recall": 0.7905
+          },
+          "cut": {
+            "map50": 0.933,
+            "map50_95": 0.5195,
+            "precision": 0.8196,
+            "recall": 0.8571
+          },
+          "fold": {
+            "map50": 0.5279,
+            "map50_95": 0.2371,
+            "precision": 0.6138,
+            "recall": 0.5714
+          },
+          "glue": {
+            "map50": 0.995,
+            "map50_95": 0.7872,
+            "precision": 1.0,
+            "recall": 0.8888
+          },
+          "poke": {
+            "map50": 0.8067,
+            "map50_95": 0.2847,
+            "precision": 1.0,
+            "recall": 0.0
+          }
+        },
+        "n_synth_per_class": {
+          "0": 15,
+          "1": 17,
+          "2": 7,
+          "3": 10,
+          "4": 15
+        }
+      }
+    }
+  }
+}
