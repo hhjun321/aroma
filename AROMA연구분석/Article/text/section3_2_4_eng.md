@@ -16,7 +16,7 @@ This stage determines **which defects to use as sources**. Each candidate is sco
 
 ROI_score = 0.5 · ctx_prior + 0.3 · morph_prior + 0.2 · quality
 
-where ctx_prior is read from `matrix_symmetric`, morph_prior is the cluster prior P(k) of §3.2.2, and quality is the crop's photometric quality score (blur/contrast/brightness/noise, fixed weights ported from CASDA's background-extraction criterion). The top (K) candidates by `ROI_score` become the sources for the placement stages that follow.
+where ctx_prior is read from `matrix_symmetric`, morph_prior is the cluster prior P(k) of §3.2.2, and quality is a graded subtype-suitability score inherited unchanged from CASDA's ROI suitability evaluation (crop subtype of §3.2.3 → discrete plausibility score for the inspected surface). The top (K) candidates by `ROI_score` become the sources for the placement stages that follow.
 
 ### 2. Background Assignment
 

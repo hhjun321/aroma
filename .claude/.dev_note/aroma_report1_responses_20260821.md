@@ -35,6 +35,13 @@ Applied Sciences 1차 심사(Reviewer 1/2/3, Major Revision) 19개 항목에 대
 
 **후속 주의**: 로컬 미러 기반의 다른 분석(예: 기존 weight sensitivity의 S1)은 유효하나, 저장 subtype/quality를 그대로 쓰는 분석은 fixed-era임을 인지할 것. Drive 정본과의 byte 대조는 미수행.
 
+## 2b. 신규 실측 — 0.6/0.4 기준 sweep (2026-08-21 추가, 사용자 지시)
+
+- 스크립트: 같은 폴더 `sensitivity_0604_baseline.py` → `sensitivity_0604_results.json`
+- 설계: 기준 선택을 제출본 표기(0.6·ctx+0.4·morph, quality 무)로 생성 후 (a) w_q=0 평면 ctx:morph 비율 0.1/0.9~0.9/0.1 (b) ±0.1 이웃 (c) 참조점 스윕.
+- 결과: **(a) 비율은 무의미** — 0.9/0.1↔0.1/0.9 반전에도 87.5–100% 유지(aitex 100%·kolektor 98.5% 전 구간). **(b/c) quality 항 참여가 유일한 분기** — w_q=0.1만 넣어도 50–63%(kolektor 86.5 예외), production/등가중 동일 overlap. 기존(0.5/0.3/0.2 기준) 분석의 거울상 — "값 비민감·항 참여 민감" 결론이 기준 선택에 독립.
+- 반영: §4.5 Table 12를 2-블록(값 변경=worst-case 2행 / 항 참여 변경 3행)으로 재구성 + 문단 재서술. R3-3 답변에 "0.6/0.4 비율 자체가 inoperative" 정면 문장 추가.
+
 ## 3. 신규 실측 ② — entropy/Gini 재계산 (R2-5/D6 근거)
 
 - 스크립트: 같은 폴더 `entropy_gini_recompute.py` (exp2 `compute_metrics` 재사용, percentile 재구성 AROMA arm vs 동일 풀 균등 Random arm seed 42, equal budget)
@@ -47,7 +54,7 @@ Applied Sciences 1차 심사(Reviewer 1/2/3, Major Revision) 19개 항목에 대
 
 | 파일 | 수정 |
 |---|---|
-| `section3_2.txt` | **Eq.2 → 3-성분 전환**: `ROI_score = 0.5·ctx + 0.3·morph + 0.2·quality` + fixed-design 문장 + §4.5 cross-ref. Figure 3.2.4-1/-3 캡션 동기화 (**figure 이미지 재생성 필요**). **§3.2.6 전체 삭제 (T4 원안 확정 — 사용자 직접 삭제, 2026-08-21)**: quality 정의는 Eq.2 자리에 인라인(CASDA 승계 명시, 가중치 값·0.7 임계 미기재), §3.2.4:143 "(Section 3.2.6)" cross-ref 제거, void admissibility 문장·figure 캡션 void 언급은 유지(D1) |
+| `section3_2.txt` | **Eq.2 → 3-성분 전환**: `ROI_score = 0.5·ctx + 0.3·morph + 0.2·quality` + fixed-design 문장 + §4.5 cross-ref. Figure 3.2.4-1/-3 캡션 동기화 (**figure 이미지 재생성 필요**). **§3.2.6 전체 삭제 (T4 원안 확정 — 사용자 직접 삭제, 2026-08-21)**: §3.2.4:143 "(Section 3.2.6)" cross-ref 제거, void admissibility 문장·figure 캡션 void 언급은 유지(D1). **Eq.2 quality 항 서술 정정 주의**: 처음 넣은 인라인(blur/contrast/brightness/noise photometric)은 삭제된 §3.2.6 배경 게이트 설명으로 **오기** — Eq.2의 quality 실체는 `matching_score(subtype, background_type)` = CASDA SuitabilityEvaluator의 subtype-적합성 이산 점수({0.4,0.7,1.0}; roi_selection.quality_proxy). 최종 서술 = "graded subtype-suitability score inherited unchanged from CASDA's ROI suitability evaluation [8]" (CASDA.txt:53 'matching quality' 성분과 대응 — 인용 안전). production background_type은 전 데이터셋 "directional"(step3 기본값)이므로 per-dataset 적응 주장 금지 |
 | `section3_2_4_eng.md` / `_kor.md` | Eq.2 동기화 |
 | `section2.txt` | §2.1 Stavropoulos[46]·one-class에 [3]·data decentralization 문단[43] / §2.3 AnomalyDiffusion[44]·RealNet[45] / §2.5 InstaBoost[42] + 설정 차이 문장 |
 | `section3_1.txt` | Random-ROI = canonical uniform copy-paste [21,22] 명시 |
