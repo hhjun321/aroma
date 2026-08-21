@@ -38,7 +38,7 @@ with open(os.environ['DATASET_CONFIG']) as f: CFG = json.load(f)
 def normal_dir(ds): return CFG[ds]["image_dir"]
 
 DS = "severstal"          # 본 문서는 단일 데이터셋 단위 실행
-N_PER_ROI = 2             # step5와 동일 — arm 간 수량 parity 필수
+N_PER_ROI = 3             # ⚠️ step5 full run(NREP=3)과 동일해야 함 — 2026-08-19 2차 parity 결함: 2로 돌리면 pool 2000 < exp4v2 cap 2534라 full(3000→2534 소비) 대비 수량 confound
 os.environ['DS'] = DS
 os.environ['PROF']   = S('profiling', DS)
 os.environ['NORMAL'] = normal_dir(DS)
@@ -129,13 +129,13 @@ for tag, roi, cbj in ARMS:
         --normal_dir  $NORMAL \
         --output_dir  $OUT_D \
         --method      copy_paste $CBJ \
-        --n_per_roi 2 --seed 42 --blend_mode seamless \
+        --n_per_roi 3 --seed 42 --blend_mode seamless \
         --reject-clean-bg --min-bg-quality 0.7 --bg-blur-threshold 100.0 \
         --compat_mode symmetric --compat_threshold $TAU \
         --compat_matrix_json $COMPAT
 ```
 
-> 검수 (T = N_ROI × n_per_roi. sym_final 1000 ROI 기준 T=2000 — Colab 1차 실행 실측치):
+> 검수 (T = N_ROI × n_per_roi. sym_final 1000 ROI × 3 = **T=3000** — full `synth_aroma_tobe`와 동일해야 함. 2026-08-19 2차 실행이 n_per_roi=2로 돌아 2000이 나온 것이 parity 결함 2호. rep **상향**(2→3) 재실행은 copy_paste가 전량 재생성하지만 파일명이 superset(`_00`·`_01` 덮어씀 + `_02` 추가)이고 annotations.json도 전체 재작성이라 **디렉터리 비우기 불필요** — 반대로 rep을 **낮출** 때만 잔재가 남으므로 비워야 한다. 소요는 1차 실행의 ~1.5배):
 > - 공통: `Generated T images (0 skipped)`, `clean_bg resolve: used=T fallback=0 mismatch=0`
 > - A1: `position_source: ring≈T` (1차 실측 397/400 — ring-무효 자리 소수 폴백 정상) / A2·A3: `position_source: fallback=T`
 > - A2: `repick_draws>0` + `placement gate exhausted` WARNING 소수 정상 (compat 게이트가 랜덤 배경 재추첨, 소진 시 마지막 후보 paste — Colab 실측 repick 140, exhausted 28/2000 = 1%). **exhausted가 수 % 를 크게 넘으면 τ 재확인**
@@ -148,70 +148,104 @@ for tag, roi, cbj in ARMS:
 >     n = len(json.load(open(os.path.expandvars(f"$ABL/synth_{tag}/$DS/annotations.json"))))
 >     print(tag, n)
 > n_full = len(json.load(open(os.path.expandvars(f"$SYM_ROOT/synth_aroma_tobe/$DS/annotations.json"))))
-> print("full", n_full)   # 4개 값 전부 동일해야 함. 불일치 arm은 출력 디렉터리 비우고 재합성
+> print("full", n_full)   # 4개 값 전부 동일(=3000)해야 함. ablation arm이 부족하면 n_per_roi=3으로 동일 셀 재실행(전량 재생성, 파일명 superset이라 dir 비우기 불필요). full보다 크면 해당 디렉터리 비우고 재합성
+> # parity 기준은 pool ≥ exp4v2 cap(severstal 2534)이 4 arm 공통으로 성립하는 것 — full은 기존 학습에서 3000 중 2534를 소비했다
+
 > ```
 
 ---
 
-## STEP 4 — exp4v2 downstream mAP (GPU, 3 seeds)
+## STEP 4 — exp4v2 downstream mAP (GPU, 그룹 A 프로토콜, 3 seeds)
 
 exp4v2의 condition 축은 `baseline/random/casda/aroma`로 고정이므로, **ablation arm은 `--aroma_synthetic_dir` 교체 + `--condition aroma` 단독 실행**으로 넣고 output_dir을 arm별로 분리한다. baseline·random·full-aroma는 기존 exp4v2 결과를 그대로 쓴다(재학습 금지 — 비교 기준 동결).
 
+> ⚠️ **프로토콜 결함 3호 (2026-08-19/20 1차 GPU 실행 실측)**: 아래 커맨드에 그룹 A 플래그가 없던 판으로 실행되어 **exp4v2 기본값(epochs 50·batch 16·imgsz 256·patience 0·rect off·synth cap 미적용)으로 학습**됨 → Table 8 비교 무효. 1차 결과(A1 .3061 > A3 .3033 > A2 .2826, 상대 순위만 유효)는 `.claude/.dev_note/exp_ablation_execute.md` "downstream 상대 결과" 절에 보존. **현재 커맨드는 그룹 A 플래그 전체를 내장** — 기본값에 의존하는 인자가 하나도 없어야 한다.
+
 ```python
-SEEDS = [42, 1, 2]
+os.environ['YOLO_CACHE'] = f"{os.environ['AROMA_OUT']}/yolo_cache"
 ABL_ARMS = ["a1_roirand", "a2_bgrand", "a3_siteoff"]
 
 for tag in ABL_ARMS:
-    for seed in SEEDS:
-        os.environ['SYNTH'] = os.path.expandvars(f"$ABL/synth_{tag}")     # {dir}/{ds}/annotations.json 규약
-        os.environ['OUT_E'] = os.path.expandvars(f"$ABL/exp4v2_{tag}/seed{seed}")
-        os.environ['SEED']  = str(seed)
-        print(f"\n===== exp4v2 {tag} seed={seed} =====")
-        !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
-            --condition aroma \
-            --dataset_keys $DS \
-            --aroma_synthetic_dir  $SYNTH \
-            --random_synthetic_dir $SYM_ROOT/synth_random \
-            --real_data_dir $DRIVE \
-            --output_dir    $OUT_E \
-            --seed $SEED --resume
+    os.environ['SYNTH'] = os.path.expandvars(f"$ABL/synth_{tag}")       # {dir}/{ds}/annotations.json 규약
+    os.environ['OUT_E'] = os.path.expandvars(f"$ABL/exp4v2_ga_{tag}")   # ga = 그룹 A 판. 1차(기본값 판) exp4v2_{tag}/seed*와 분리 보존
+    print(f"\n===== exp4v2 groupA {tag} =====")
+    !python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+        --model yolov8n \
+        --condition aroma \
+        --dataset_keys $DS \
+        --class_mode multi \
+        --aroma_synthetic_dir  $SYNTH \
+        --random_synthetic_dir $SYM_ROOT/synth_random \
+        --real_data_dir        $DRIVE \
+        --output_dir           $OUT_E \
+        --yolo_cache_dir       $YOLO_CACHE \
+        --imgsz 640 \
+        --val_frac 0.3 \
+        --synth_ratio 1.0 \
+        --baseline_epochs 100 \
+        --patience 25 \
+        --batch 128 \
+        --cache ram \
+        --rect \
+        --workers 12 \
+        --compile \
+        --seeds 42 1 2 \
+        --resume
 ```
 
-> - epochs·imgsz·batch 등 나머지 하이퍼파라미터는 **기존 severstal exp4v2 run과 동일 값**을 명시 전달할 것 (기존 exp4v2_execute 문서의 severstal 값 확인 — 프로토콜 divergence는 곧 비교 무효).
+> - **arm당 1회 호출 + `--seeds 42 1 2`** (per-seed 루프 아님) — 집계(mean/std/ci95)가 results.json에 자동 생성되고 resume가 seed 단위로 skip한다.
+> - 플래그는 `exp4v2_execute.md` STEP 2-1(severstal 그룹 A)과 자구 동일. severstal은 고정 해상도(1600×256)라 `--compile` 안전. **소형셋 확장 시(kolektor/leather) batch16+patience0 강제 — batch128 collapse 회피, `--compile`은 mtd 금지.**
 > - `--random_synthetic_dir`는 required라 전달하지만 `--condition aroma`만 돌므로 소비되지 않는다.
-> - 소형셋 확장 시(kolektor/leather) batch16+patience0 강제 — batch128 collapse 회피.
-> - resume는 per-seed JSON — 세션 끊기면 동일 셀 재실행.
+
+### STEP 4 종료 후 프로토콜 검증 셀 (필수 — 결함 1·2·3호 전부 "가정 ≠ 실상"에서 발생)
+
+```python
+import yaml, json, glob, os
+for tag in ["a1_roirand", "a2_bgrand", "a3_siteoff"]:
+    for seed in [42, 1, 2]:
+        a = yaml.safe_load(open(os.path.expandvars(
+            f"$ABL/exp4v2_ga_{tag}/_seeds/seed{seed}/{DS}/yolov8n/aroma/args.yaml")))
+        assert a["epochs"] == 100 and a["imgsz"] == 640 and a["batch"] == 128 \
+           and a["patience"] == 25 and a["rect"] is True, (tag, seed, a)
+    m = json.load(open(os.path.expandvars(f"$ABL/exp4v2_ga_{tag}/exp4v2_results.json")))[DS]["yolov8n"]["aroma"]
+    assert m["n_synth_train"] == 2534 and m["n_real_train"] == 2534, (tag, m["n_synth_train"])
+    print(tag, "OK — protocol=groupA, cap=2534, n_seeds=", m["n_seeds"])
+```
+
+> **Provenance 확인** (학습 로그에서): A1은 `[Provenance] severstal/aroma: ring=2534 fallback=0` (ring 풀 2919 ≥ cap이라 성립해야 정상). A2·A3는 풀 전량이 fallback이라 uniform subsample — **confound 아님, position-source 구성 자체가 arm의 처치(treatment)다.**
 
 ---
 
 ## STEP 5 — 결과 취합
 
+arm당 1개 results.json에 3-seed 집계가 이미 들어있다 (`--seeds 42 1 2` 단일 호출의 산출):
+
 ```python
-import json, glob, statistics
-rows = {}
+import json, os
 for tag in ["a1_roirand", "a2_bgrand", "a3_siteoff"]:
-    vals = []
-    for seed in [42, 1, 2]:
-        p = os.path.expandvars(f"$ABL/exp4v2_{tag}/seed{seed}/exp4v2_results.json")
-        r = json.load(open(p))
-        vals.append(r[DS]["aroma"]["yolov8n"]["map50"])   # 실제 키 구조는 파일서 확인
-    rows[tag] = (statistics.mean(vals), statistics.stdev(vals))
-for k, (m, s) in rows.items():
-    print(f"{k:12s} mAP@0.5 = {m:.4f} ± {s:.4f}")
+    m = json.load(open(os.path.expandvars(f"$ABL/exp4v2_ga_{tag}/exp4v2_results.json")))[DS]["yolov8n"]["aroma"]
+    print(f"{tag:12s} mAP@0.5 = {m['map50']:.4f} ± {m['std']['map50']:.4f}  "
+          f"per-seed={ {k: v['map50'] for k, v in m['per_seed'].items()} }")
 ```
 
-비교표 (기존 값과 병합):
+비교표 (기존 값과 병합 — 그룹 A 프로토콜 동일이므로 병기 성립):
 
 | Method | 구성 | mAP@0.5 |
 |---|---|---|
-| Baseline | real-only | 기존 Table 8 |
-| all-random | R+R+R | 기존 Table 8 |
+| Baseline | real-only | 기존 Table 8 (.5033) |
+| all-random | R+R+R | 기존 Table 8 (.5065) |
 | A1 | **R**+A+A | 본 실행 |
-| A2 | A+**R**+(rand pos) | 본 실행 |
+| A2 | A+**R**+(**R** 연쇄) | 본 실행 |
 | A3 | A+A+**R** | 본 실행 |
-| full AROMA | A+A+A | 기존 Table 8 |
+| full AROMA | A+A+A | 기존 Table 8 (.5197) |
 
-해석 축: full−A1 = ROI selection 기여, full−A2 = BG assignment(+site 연쇄) 기여, full−A3 = site resolution 단독 기여. n=3 시드라 유의성 주장은 방향성+로컬 proxy 병기로 한정.
+### 해석 가정 (명문화 — 결과 보고 시 함께 기술)
+
+1. **A2는 순수 Stage 2 제거가 아니다**: random 배경엔 ring 위치 정보가 없어 Stage 3도 연쇄 붕괴(`position_source: fallback=T`). full−A2 = **BG+site 결합 기여**. 순수 Stage 2 단독은 **A3−A2 산술 추정**이며, 이는 **stage 간 가산성 가정**을 요구한다 — 근거는 로컬 proxy의 가산성 실측(site_score 0.131→0.081(−site)→0.061(−site−bg), 독립·누적 분리, p<1e-12).
+2. **full−A1 = ROI(crop) selection 기여, full−A3 = site resolution 단독 기여** — 이 둘은 연쇄 없이 깨끗함.
+3. **subsample 구성 차이는 confound가 아니다**: aroma-계열 arm(A1)은 ring-우선 소비, A2·A3는 전량 fallback → uniform. position-source 구성이 곧 arm의 처치다.
+4. **주장 한계**: n=3 seed — 유의성 주장은 per-seed 부호 일치(3/3) + 로컬 proxy 삼각측량 병기로 한정. 미세 격차(1차 실행의 A1↔A3 0.3pt 규모)는 방향성 언급도 하지 않는다.
+5. 1차(기본값 프로토콜) 상대 결과 **A1 .3061 > A3 .3033 > A2 .2826**은 프로토콜 강건성의 보조 증거로만 인용 (절대치 인용 금지).
 
 ---
 
