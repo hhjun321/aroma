@@ -66,9 +66,9 @@ The reviewer's reading of the submitted numbers was fair, and this comment promp
 
 **Response.**
 
-We agree and have regenerated the figures. All plots in the revised manuscript are re-rendered with legibility as an explicit constraint: axis labels, tick labels, legends, and in-figure annotations are enforced to a minimum effective size of 7–8 pt at the final single-column print width, line widths and marker sizes are increased accordingly, and dense annotation overlays are either enlarged or moved into captions. We note additionally that a substantial fraction of the figures were replaced or newly created in the course of this revision — the placement mechanism of §3.2.4 was revised (new pipeline, compatibility-heatmap, background-assignment, and site-resolution figures), the results of §4 were re-measured under the multi-seed protocol, and new figures accompany the sensitivity and ablation analyses — so the figures the reviewer cites have been superseded rather than merely reformatted.
+We agree and have regenerated the figures. All plots in the revised manuscript are re-rendered with legibility as an explicit constraint: axis labels, tick labels, legends, and in-figure annotations are enforced to a minimum effective size of 7–8 pt at the final single-column print width, line widths and marker sizes are increased accordingly, and dense annotation overlays are either enlarged or moved into captions. We note additionally that a substantial fraction of the figures were replaced or newly created in the course of this revision — the placement mechanism of §3.2.4 was revised (new pipeline, compatibility-heatmap, background-assignment, and site-resolution figures), the results of §4 were re-measured under the multi-seed protocol, and new tables accompany the sensitivity and ablation analyses — so the figures the reviewer cites have been superseded rather than merely reformatted.
 
-**Manuscript changes:** all figures regenerated under an explicit legibility standard; new figures for §3.2.4, §4.4, and the sensitivity subsection.
+**Manuscript changes:** all figures regenerated under an explicit legibility standard; new figures for the revised §3.2.4; new tables for §4.4 and §4.5.
 
 ---
 

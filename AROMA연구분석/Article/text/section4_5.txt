@@ -21,6 +21,4 @@ Beyond the per-dataset parameters that AROMA estimates from data (Sections 3.2.2
 | Single boundary ±5 pt | 3.1–9.1% | 67.5–98.0% |
 | Both boundaries ±5 pt | 7.7–14.5% | 64.0–94.5% |
 
-**Figure 4.5-1.** Top-K selection retention across the ROI-score weight simplex for the five datasets, with the adopted configuration marked. Retention remains near 100% throughout the interior of the simplex and degrades only where a component's weight reaches zero.
-
 Together with the ablation of Section 4.4, these results locate the source of AROMA's effect precisely: downstream gains require the presence of each scoring mechanism (removing a stage or a score component changes the outcome), while the numerical constants configuring those mechanisms can be varied within a broad neighborhood without materially changing what is selected.

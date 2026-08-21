@@ -120,10 +120,6 @@ ROI_score = 0.5 · ctx_prior + 0.3 · morph_prior + 0.2 · quality,
 
 where ctx_prior is read from matrix_symmetric, morph_prior is the cluster prior P(k) of Section 3.2.2, and quality is the crop's photometric quality score — blur, contrast, brightness, and noise terms, each normalized to [0, 1] and combined with fixed weights ported from CASDA's background-extraction criterion [8]. The weights are fixed design choices encoding a priority order (context > morphology > quality); a sensitivity analysis over the full weight simplex (Section 4.5) shows the resulting top-K selection is stable under ±0.1 perturbations of these weights on all five datasets, while removing any single term substantially alters the selection. The top (K) candidates by ROI_score become the sources for the placement stages that follow.
 
-As shown in Figure 3.2.4-3, the compatibility term dominates the score and sets the ranking, while the cluster prior and the quality term add smaller offsets that order the candidates whose compatibility is saturated (ctx_prior = 1).
-
-**Figure 3.2.4-3.** Composition of ROI_score = 0.5 · ctx_prior + 0.3 · morph_prior + 0.2 · quality for the top-ranked candidate defect–context pairs on Severstal and AITeX. Each bar splits into the weighted compatibility term (0.5 · ctx_prior, blue), the weighted cluster prior (0.3 · morph_prior, grey), and the weighted quality term (0.2 · quality, green): compatibility dominates the score and sets the ranking, while the remaining terms order the compatibility-saturated peaks (ctx_prior = 1) at the top of each panel.
-
 -2. Background Assignment
 This stage determines the normal background image for each selected ROI. Candidates are ranked by three fitness measures, all built on the histogram intersection ∩(a, b) = Σ_c min( a(c), b(c) ):
 
