@@ -47,7 +47,7 @@ Applied Sciences 1차 심사(Reviewer 1/2/3, Major Revision) 19개 항목에 대
 
 | 파일 | 수정 |
 |---|---|
-| `section3_2.txt` | **Eq.2 → 3-성분 전환**: `ROI_score = 0.5·ctx + 0.3·morph + 0.2·quality` + fixed-design 문장 + §4.5 cross-ref. Figure 3.2.4-1/-3 캡션 동기화 (**figure 이미지 재생성 필요**) |
+| `section3_2.txt` | **Eq.2 → 3-성분 전환**: `ROI_score = 0.5·ctx + 0.3·morph + 0.2·quality` + fixed-design 문장 + §4.5 cross-ref. Figure 3.2.4-1/-3 캡션 동기화 (**figure 이미지 재생성 필요**). **§3.2.6 전체 삭제 (T4 원안 확정 — 사용자 직접 삭제, 2026-08-21)**: quality 정의는 Eq.2 자리에 인라인(CASDA 승계 명시, 가중치 값·0.7 임계 미기재), §3.2.4:143 "(Section 3.2.6)" cross-ref 제거, void admissibility 문장·figure 캡션 void 언급은 유지(D1) |
 | `section3_2_4_eng.md` / `_kor.md` | Eq.2 동기화 |
 | `section2.txt` | §2.1 Stavropoulos[46]·one-class에 [3]·data decentralization 문단[43] / §2.3 AnomalyDiffusion[44]·RealNet[45] / §2.5 InstaBoost[42] + 설정 차이 문장 |
 | `section3_1.txt` | Random-ROI = canonical uniform copy-paste [21,22] 명시 |
@@ -73,11 +73,11 @@ Applied Sciences 1차 심사(Reviewer 1/2/3, Major Revision) 19개 항목에 대
 2. **Figure**: 전면 재생성(R3-4 legibility 7–8pt) + Figure 3.2.4-3 3-성분 bar + Figure 4.5-1 신규(simplex retention)
 3. **keywords 교체** (제출 시스템): R2-6 확정 8개 — industrial visual inspection; defect detection; data augmentation; copy-paste synthesis; context-aware placement; defect–background compatibility; dataset complexity index; YOLOv8
 4. **Reference 등장순 재정렬** [36]–[46] + 본문 번호 갱신 (section2/3_2/3_3/5/AROMA.txt)
-5. **F1 최종 검수**: Abstract–§6 정합 감사 + 삼중 대조. 확인 포인트 — Eq.2 3-성분 전파, §4 도입부의 §4.4/4.5 안내, Eq.4 번호 불변(§3.2.6 유지로 T4 삭제 폐기됨 — SOP와 다른 최종 결정), RealNet DOI 확정
+5. **F1 최종 검수**: Abstract–§6 정합 감사 + 삼중 대조. 확인 포인트 — Eq.2 3-성분 전파, §4 도입부의 §4.4/4.5 안내, **Eq.4 삭제 후 수식 번호**(답변서가 "Eq.(1)–(3) 불변, Eq.(4) 뒤 번호 수식 없음"이라 단정 — 조판본에서 실제 번호 매김 확인 필수), RealNet DOI 확정, AROMA.txt(조립본)에 §3.2.6 잔존 — 재조립 시 text/ 정본 반영
 
 ## 7. 관련 파일
 
 - 답변서: `Article/report1/reviewer{1,2,3}_response.md`
 - 분석: `D:\project\AROMA_DATASET\roi_weight_sensitivity\{subtype_threshold_perturbation, entropy_gini_recompute}.py` + 결과 json 2건
-- 계획 정본: `Article/report1/대응계획_SOP.md` (T4 §3.2.6 삭제 → 유지+공개인정으로 결정 변경됨을 주의)
+- 계획 정본: `Article/report1/대응계획_SOP.md` (T4 §3.2.6 삭제 — 세션 중 일시적으로 유지+공개인정으로 갔다가 **최종 T4 원안 복귀**: 사용자 직접 삭제. 답변서 R2-1(3)/R3-3(4)는 삭제 경위 문안으로 교체됨 — F1 2-1 침묵삭제 금지 이행)
 - 메모리: `memory/project_report1_responses.md`

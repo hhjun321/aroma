@@ -118,7 +118,7 @@ This stage determines which defects to use as sources. Each candidate is scored 
 
 ROI_score = 0.5 · ctx_prior + 0.3 · morph_prior + 0.2 · quality,
 
-where ctx_prior is read from matrix_symmetric, morph_prior is the cluster prior P(k) of Section 3.2.2, and quality is the crop's photometric quality score (Section 3.2.6). The weights are fixed design choices encoding a priority order (context > morphology > quality); a sensitivity analysis over the full weight simplex (Section 4.5) shows the resulting top-K selection is stable under ±0.1 perturbations of these weights on all five datasets, while removing any single term substantially alters the selection. The top (K) candidates by ROI_score become the sources for the placement stages that follow.
+where ctx_prior is read from matrix_symmetric, morph_prior is the cluster prior P(k) of Section 3.2.2, and quality is the crop's photometric quality score — blur, contrast, brightness, and noise terms, each normalized to [0, 1] and combined with fixed weights ported from CASDA's background-extraction criterion [8]. The weights are fixed design choices encoding a priority order (context > morphology > quality); a sensitivity analysis over the full weight simplex (Section 4.5) shows the resulting top-K selection is stable under ±0.1 perturbations of these weights on all five datasets, while removing any single term substantially alters the selection. The top (K) candidates by ROI_score become the sources for the placement stages that follow.
 
 As shown in Figure 3.2.4-3, the compatibility term dominates the score and sets the ranking, while the cluster prior and the quality term add smaller offsets that order the candidates whose compatibility is saturated (ctx_prior = 1).
 
@@ -140,7 +140,7 @@ As shown in Figure 3.2.4-4, the two histogram measures respond to different aspe
 **Figure 3.2.4-4.** Background assignment on real images (one panel set per dataset). For one representative defect crop — shown with its source image, bbox in red — the valid clean pool's top-3 candidates are displayed under src_fit (blue) and class_fit (orange), followed by the top-3 under the final bg_score (green; rank 1, ★, is the assigned background, with its full score decomposition). Each image's 64-px tiles are tinted by that tile's cell mass in the row's reference histogram (row 1: p_src, row 2: p_cls; brighter = heavier; untinted tiles are void, unobserved, or defect-overlapping), so a high histogram intersection is visible as a similar tint mixture between the source image and a candidate; the final row is shown untinted.
 
 -3. Site Resolution
-This stage determines where on the assigned background the defect is placed. A candidate position (s) is the top-left coordinate of the defect crop; the ring region around the crop represents the local context that would surround the defect after insertion. Positions whose crop rectangle overlaps void tiles or unobserved tiles (tiles outside the whole-tile grid) are excluded before scoring (Section 3.2.6). The ring of each remaining candidate is converted into a context-cell histogram (h_s) and compared against the matrix_symmetric row of the defect's cluster (k), renormalised to sum to one and denoted tgt[k] (q_k in the figures), as the target profile:
+This stage determines where on the assigned background the defect is placed. A candidate position (s) is the top-left coordinate of the defect crop; the ring region around the crop represents the local context that would surround the defect after insertion. Positions whose crop rectangle overlaps void tiles or unobserved tiles (tiles outside the whole-tile grid) are excluded before scoring. The ring of each remaining candidate is converted into a context-cell histogram (h_s) and compared against the matrix_symmetric row of the defect's cluster (k), renormalised to sum to one and denoted tgt[k] (q_k in the figures), as the target profile:
 
 site_score = ∩( h_s, tgt[k] )
 
@@ -152,12 +152,3 @@ As shown in Figure 3.2.4-5, the resolved site reproduces the ring context of the
 
 ###3.2.5 Blending Synthesis
 Each selected defect crop is placed at the designated bounding box on the target normal image. The same blend operator is applied identically to the AROMA and random arms, ensuring blending is not a confounding factor. For each synthesized image, the corresponding defect mask and bounding box are co-saved, providing pixel-level localization for downstream detection.
-
-###3.2.6 Quality Gate
-A quality gate filters unusable background patches before clean-background assignment and foreground-void rejection. Each candidate patch is scored by four weighted components — a blur term (Laplacian variance thresholded against a fixed cutoff), a contrast term (pixel-intensity standard deviation), a brightness term (mean intensity centered in the mid-range), and a noise term (local variance from a 5×5 mean filter) — each normalized to [0, 1]. The quality score is
-
-quality = 0.30 · blur + 0.30 · contrast + 0.20 · brightness + 0.20 · noise,
-
-ported from CASDA's background-extraction criterion. A patch is accepted as a usable clean background iff quality ≥ 0.7; the same score also rejects flat/void foreground regions (dark or bright) that would otherwise be mistaken for a real defect object. Retention is a fixed absolute threshold, not a per-dataset adaptive fraction.
-
-Because placement is resolved at selection time (Section 3.2.4), void rejection is applied there as well: a candidate position is discarded outright when any tile of the rectangle the defect would occupy is void or unobserved, so no position that straddles an unusable region can be emitted. Void tiles are likewise excluded from the ring before its histogram is formed, so an unusable neighbour contributes neither to the score nor to the composition being matched. Working from the profiled context features rather than from pixels, the offline gate identifies void tiles by their texture energy — a void region is flat and edge-free — with the acceptance floor taken as a low percentile of each dataset's own observed distribution, so the criterion adapts per dataset without a hand-set constant.
