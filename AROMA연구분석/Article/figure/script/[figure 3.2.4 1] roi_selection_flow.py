@@ -57,7 +57,7 @@ arrow(4.0, 25.2, 2.5, 24.1)                     # defect -> cluster
 arrow(6.0, 25.2, 7.5, 24.1, color=BLUE)         # defect -> context cell
 
 box(2.4, 19.6, 5.2, 1.7,
-    "ROI_score = 0.6·ctx_prior + 0.4·morph_prior\n= 0.6·1.00 + 0.4·0.24 = 0.70",
+    "ROI_score = ctx_prior + morph_prior\n= 1.00 + 0.24 = 1.24",
     BLUE, "white", fs=9.2)
 arrow(2.5, 22.4, 4.3, 21.3, color=GREY)
 arrow(7.5, 22.4, 5.7, 21.3, color=BLUE)
@@ -94,7 +94,7 @@ arrow(cx, 8.3, cx, 7.4, color=STAR)
 # legend
 ax.text(0.1, 4.6, "blue = compatibility signal read from matrix_symmetric (core placement signal)",
         fontsize=7.8, color=BLUE)
-ax.text(0.1, 4.1, "grey = morphology-cluster prevalence prior (mild weighting)",
+ax.text(0.1, 4.1, "grey = morphology-cluster prevalence prior (population regularizer)",
         fontsize=7.8, color=GREY)
 ax.text(0.1, 3.6, "stage-1 values: real Severstal linear-scratch example; stages 2–3 symbolic",
         fontsize=7.8, color="#444444")

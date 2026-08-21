@@ -2,7 +2,16 @@
 
 ## (성격: 세션 기록 · **완료분 + 잔여 작업 목록**. 답변서는 완성, 실험 E4·figure·재정렬은 미착수)
 
-> **⚠️ 최종 결정 A안 (2026-08-21 세션 말미) — Eq.2는 2-항 표기 유지**: 세션 중 Eq.2를 3-성분(0.5/0.3/0.2)으로 전환했다가 **최종적으로 제출본 2-항(0.6·ctx + 0.4·morph) 표기로 회귀** (사용자 결정: 수식 단순화 취지 유지, 수식 변경 가시성 리스크 회피). 이에 따라:
+> **🔴 최종 번복 B안 (2026-08-21 후속 세션) — 아래 A안을 대체. Eq.2 = 무가중 합, §4.5 sweep 제거**
+> R2-1·R3-3 공통 지적(0.6/0.4 hand-set constants)에 대해 **가중치 자체를 제거**하는 것으로 최종 결정:
+> - **Eq.2 = `ROI_score = ctx_prior + morph_prior` (상수항 없음)**. 논리: §3.2.4 3단계 재편으로 compat model이 선택·배경할당·위치해상 모두에서 직접 소비되므로 선택 점수 내 priority weighting 불필요. §3.2.4 정당화 문단 재작성(항 필요성은 §4.4 ablation 인용).
+> - **§4.5 가중치 sweep(구 Table 12) 통째 제거** — 방어할 상수가 없어 존재 이유 소멸. §4.5는 "Sensitivity of the Tertile Partition Boundaries"로 개제, tertile 섭동 표가 **Table 12** 승계. (아래 2b의 sweep 실측은 재심 대비 예비 데이터로 보존)
+> - **E4 완료 및 반영**: YOLO11n 3-seed 결과(`.claude/.etc/exp4v2/20260821/yolo11/exp4v2_results_{1,2,42}.json`, casda arm은 오수행으로 제외) → §4.3 말미 "Cross-architecture validation (YOLO11n)" 소절 신설. **Table 13**(Severstal, Table 8 형식 per-class) + **Table 14**(AITeX, Table 6 형식 mAP@0.5 단일 열). Severstal AROMA 3-seed 전승(+1.48pp, c2/c4 집중), AITeX comparable(+0.97pp, seed 분산 이내). R2-2 placeholder 실수치로 채움.
+> - 답변서 3건 모두 동기화: R1-1(2) "가중치 제거+tertile 민감도", R2-1(2)·R3-3(1,2) "removed rather than defended", R3-1(2) 인용 수치를 §4.5 실제 수치(3.1–14.5% relabel)로 정정.
+> - **잔존 리스크 갱신**: 논문 무가중 vs production 코드 0.5/0.3/0.2 불일치는 여전(형태는 다르나 동일 지뢰). sweep 실측("값 비민감·항 참여 민감")이 완화 근거로 유효.
+> - **잔여**: figure `[figure 3.2.4 1] roi_selection_flow*.py`(0.6/0.4 하드코딩) 수정·재생성, `[figure 4.5 1] weight_simplex*` retired 처리, section3_2_4_eng/kor.md 초안·AROMA.txt 조립본 미반영, SOP "0.6/0.4 유지 결정" 기록 갱신.
+>
+> **⚠️ (구) 최종 결정 A안 (2026-08-21 세션 말미, 위 B안으로 대체됨) — Eq.2는 2-항 표기 유지**: 세션 중 Eq.2를 3-성분(0.5/0.3/0.2)으로 전환했다가 **최종적으로 제출본 2-항(0.6·ctx + 0.4·morph) 표기로 회귀** (사용자 결정: 수식 단순화 취지 유지, 수식 변경 가시성 리스크 회피). 이에 따라:
 > - §3.2.4 Eq.2 = 0.6/0.4 + fixed-design·priority-order(context>morphology) 이론 근거 (quality 서술 제거)
 > - §4.5 = **2-항 비율 sweep** (`sensitivity_0604_results.json` 기준: 비율 0.1/0.9~0.9/0.1 → 87.5–100%, ctx-only 83.5–100%, morph-only kolektor 37.5% 붕괴), Table 13 = subtype 라벨 안정성만(재배정률; retention 열 제거 — 2-항 세계에선 Eq.2가 subtype 미소비)
 > - 답변서 3건에서 "three-component 정정" 주장 전부 소거, 비율-inoperative 논증으로 대체
@@ -83,11 +92,11 @@ Applied Sciences 1차 심사(Reviewer 1/2/3, Major Revision) 19개 항목에 대
 
 ## 6. 잔여 작업
 
-1. **E4 Colab 실행** → `reviewer2_response.md` R2-2의 placeholder 2곳(`[numbers TBD after E4]`, `new Table X, §X`) 채우기 + 원고 detector-generality 소절 신설
+1. ~~**E4 Colab 실행** → placeholder 채우기 + detector-generality 소절 신설~~ **완료 (B안 배너 참조)** — §4.3 Tables 13–14, R2-2 실수치 반영. 단, YOLO11 casda arm `no_synth_annotations` 오류는 원인 미수정(비교군에서 제외로 종결)
 2. **Figure**: 전면 재생성(R3-4 legibility 7–8pt)만 잔여. **Figure 4.5-1도 미채택(2026-08-21)** — §4.5는 Table 12 참조로 종결(0.6/0.4/0.0 행이 가중치 영향 전달), 생성본은 figure/_retired/ 보존. **Figure 3.2.4-3은 삭제 확정(2026-08-21)** — 근거: 구판은 row-normalized matrix_symmetric로 후보를 합성했으나 production 후보 ctx_prior는 raw 스케일(≈0.08대)이라 "ctx=1 saturation·compatibility dominates" 시각 서사가 채점 실체와 불일치 위험(코드 공개 시 대조 공격 표면), 실후보 재렌더는 top-N 동률 퇴화. 본문 해당 문단·캡션 삭제, 스크립트·png는 figure/_retired/ 이동. **Figure 3.2.4-4/-5 번호 재정렬 안 함** (조판 전역 재번호 전제, 작업 라벨 gap 유지 — F1에서 확인)
 3. **keywords 교체** (제출 시스템): R2-6 확정 8개 — industrial visual inspection; defect detection; data augmentation; copy-paste synthesis; context-aware placement; defect–background compatibility; dataset complexity index; YOLOv8
 4. **Reference 등장순 재정렬** [36]–[46] + 본문 번호 갱신 (section2/3_2/3_3/5/AROMA.txt)
-5. **F1 최종 검수**: Abstract–§6 정합 감사 + 삼중 대조. 확인 포인트 — Eq.2 3-성분 전파, §4 도입부의 §4.4/4.5 안내, **Eq.4 삭제 후 수식 번호**(답변서가 "Eq.(1)–(3) 불변, Eq.(4) 뒤 번호 수식 없음"이라 단정 — 조판본에서 실제 번호 매김 확인 필수), RealNet DOI 확정, AROMA.txt(조립본)에 §3.2.6 잔존 — 재조립 시 text/ 정본 반영
+5. **F1 최종 검수**: Abstract–§6 정합 감사 + 삼중 대조. 확인 포인트 — **Eq.2 무가중 표기 전파(B안)** + 표 번호 최종 확인(§4.4 T11 → §4.5 T12 → §4.3 말미 T13–14), §4 도입부의 §4.4/4.5 안내, **Eq.4 삭제 후 수식 번호**(답변서가 "Eq.(1)–(3) 불변, Eq.(4) 뒤 번호 수식 없음"이라 단정 — 조판본에서 실제 번호 매김 확인 필수), RealNet DOI 확정, AROMA.txt(조립본)에 §3.2.6 잔존 — 재조립 시 text/ 정본 반영
 
 ## 7. 관련 파일
 

@@ -9,7 +9,7 @@ Severstal linear-scratch 실측 수치를 박스에 병기했으나, 본 `_mod` 
 1. Defect crop — morphology features (linearity, solidity, aspect ratio)
    - 좌분기: GMM → morphology cluster k, morph_prior P(k)
 2. Candidate background patch → context cell c, ctx_prior(k, c) = matrix_symmetric(k, c)
-3. ROI_score(k, c) = 0.6·ctx_prior(k, c) + 0.4·morph_prior(k)
+3. ROI_score(k, c) = ctx_prior(k, c) + morph_prior(k)
 4. Rank all candidates, take Top-K
 5. Clean-bg assignment
 6. Compat gate: 64px tiling scan–rank–place, accept if best_mean ≥ τ

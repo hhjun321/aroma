@@ -49,7 +49,7 @@ arrow(6.0, 24.0, 7.5, 22.9, color=BLUE)         # defect -> bg cell
 
 # 3. ROI_score
 box(2.4, 18.4, 5.2, 1.7,
-    "ROI_score(k, c) =\n0.6·ctx_prior(k, c) + 0.4·morph_prior(k)",
+    "ROI_score(k, c) =\nctx_prior(k, c) + morph_prior(k)",
     BLUE, "white", fs=9.2)
 arrow(2.5, 21.2, 4.3, 20.1, color=GREY)         # cluster -> score
 arrow(7.5, 21.2, 5.7, 20.1, color=BLUE)         # bg cell -> score

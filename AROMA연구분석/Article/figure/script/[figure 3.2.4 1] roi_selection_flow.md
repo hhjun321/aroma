@@ -17,7 +17,7 @@
   - morphology_features: `class1_00ac8372f` → linearity 0.961 / solidity 0.882 / AR 5.09
   - morphology_clusters: cluster k=1, morph_prior P(k) = 0.24 (859/3620)
   - compatibility_matrix.json: `matrix_symmetric["1"]` peak cell `0_0_0_1_0` = 1.00
-  - ROI_score = 0.6·1.00 + 0.4·0.24 = 0.70
+  - ROI_score = 1.00 + 0.24 = 1.24 (무가중 합 — 2026-08-21 Eq.2 상수항 제거 반영)
 - stage 2–3은 기호만 (특정 표본 수치 미표기 — 세대 혼입 방지)
 
 ## 구성 (세로, 스테이지 라벨 이탤릭)
@@ -26,7 +26,7 @@
 1. defect crop selection
    Defect crop (lin/sol/AR) ─┬→ [회색] GMM cluster k=1, P(k)=0.24
                              └→ [파랑] source context cell, ctx_prior=1.00
-   → ROI_score = 0.6·ctx + 0.4·morph = 0.70
+   → ROI_score = ctx + morph = 1.24
    → Rank all → keep Top-K sources
 2. background assignment
    [파랑] bg_score = src_fit + class_fit + size_fit → Assign highest-scoring normal image

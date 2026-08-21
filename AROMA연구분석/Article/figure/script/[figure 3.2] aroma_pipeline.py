@@ -4,7 +4,7 @@ Figure 2 -- AROMA Pipeline Architecture (regenerated)
 
 Static architecture/data-flow diagram (no data file dependency).
 Stage structure aligned 1:1 to the §3.2 subsections of the current
-section3_2.txt (3.2.1 .. 3.2.6); dataset roster from dataset_config.json
+section3_2.txt (3.2.1 .. 3.2.5); dataset roster from dataset_config.json
 (ground truth): 5 datasets (severstal, mvtec_leather, mtd, aitex,
 kolektor).
 
@@ -34,7 +34,8 @@ from matplotlib.patches import FancyBboxPatch
 OUT_DIR = r"D:\project\aroma\AROMA연구분석\Article\figure\image"
 OUT_PATH = os.path.join(OUT_DIR, "[figure 3.2] aroma_pipeline.png")
 
-# title-only -- aligned to §3.2.1-3.2.6 (see pipeline_spec.md for the
+# title-only -- aligned to §3.2.1-3.2.5; Quality Gate stage removed
+# 2026-08-21 with the deletion of §3.2.6 (see pipeline_spec.md for the
 # one-line description of each stage; kept out of the diagram itself)
 STAGES = [
     "Dataset Complexity Analysis",
@@ -42,7 +43,6 @@ STAGES = [
     "ROI Extraction & Defect Subtype Classification",
     "ROI Selection & Compatibility-Aware Placement",
     "Blending Synthesis",
-    "Quality Gate",
 ]
 
 INPUT_TITLE = "Industrial Datasets"

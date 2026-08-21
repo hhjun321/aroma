@@ -2,9 +2,11 @@
 
 ## 목적 (연결 section)
 
-§3.2 opening (현재 `section3_2.txt` 실제 문장): "The AROMA pipeline progresses from dataset profiling and complexity analysis to defect synthesis and quality control."
+§3.2 opening (현재 `section3_2.txt` 실제 문장): "The AROMA pipeline progresses from dataset profiling and complexity analysis to defect synthesis."
 
-파이프라인의 입력(**5종** 산업 데이터셋) → 출력(YOLOv8n 다운스트림 검출)까지의 **data flow**를 시각화한다. 다이어그램의 스테이지 박스는 현행 §3.2의 **6개** 하위절(3.2.1~3.2.6)에 **1:1 정렬**한다. 데이터셋 로스터는 `dataset_config.json`(정본), 생성 엔진은 **copy-paste**(ControlNet 아님)를 정본으로 한다.
+파이프라인의 입력(**5종** 산업 데이터셋) → 출력(YOLOv8n 다운스트림 검출)까지의 **data flow**를 시각화한다. 다이어그램의 스테이지 박스는 현행 §3.2의 **5개** 하위절(3.2.1~3.2.5)에 **1:1 정렬**한다.
+
+> 🔴 **정렬 갱신(2026-08-21)** — §3.2.6(Quality Gate) 본문 삭제(T4)에 따라 **Quality Gate 스테이지 박스 제거**(6→5 스테이지). Eq.2 상수항 제거에 따라 stage 4 수식을 **무가중 합**으로 갱신: `ROI_score = ctx_prior + morph_prior`. 아래 2026-07-27 노트의 6-하위절·Quality Gate 서술은 구판 이력. 데이터셋 로스터는 `dataset_config.json`(정본), 생성 엔진은 **copy-paste**(ControlNet 아님)를 정본으로 한다.
 
 > ⚠️ **정렬 갱신(2026-07-27, 사용자 확인)**
 > 1. **§ 번호 재정렬**: 구 spec은 §3.2.3(ROI Extraction)·§3.2.4(Seed Defect Classification)를 분리했으나, 실제 `section3_2.txt`는 이 둘을 **§3.2.3 하나로 병합**(Background Categories and Defect Subtypes). 이후 ROI Selection→**§3.2.4**, Blending Synthesis→**§3.2.5**, Quality Gate→**§3.2.6**으로 한 칸씩 당겨짐(§3.2.7 없음, 총 **6개** 하위절).
@@ -18,16 +20,15 @@
 
 **재생성 완료** (`[figure 3.2] aroma_pipeline.py`, 2026-07-27 — §3.2 6-하위절 정렬 + matrix_symmetric 용어 통일 + Quality Gate 내용 정정 + 라벨 제목-only 단순화 반영).
 
-## 다이어그램 스테이지 (§3.2.1~3.2.6 정렬)
+## 다이어그램 스테이지 (§3.2.1~3.2.5 정렬)
 
 | # | §    | 박스 제목 | 한 줄 설명 (spec·본문 참고용 — 다이어그램 라벨에는 미표시) |
 |---|------|-----------|-----------|
 | 1 | 3.2.1 | Dataset Complexity Analysis | MCI / CCI from patch profiling |
 | 2 | 3.2.2 | Morphology & Context Modeling | Data-driven clusters (GMM+BIC) + tertile context cells |
 | 3 | 3.2.3 | ROI Extraction & Defect Subtype Classification | Otsu + connected-components ROI extraction; SAM seed masks → 5 morphology subtypes |
-| 4 | 3.2.4 | ROI Selection & Compatibility-Aware Placement | ROI_score = 0.6·ctx_prior + 0.4·morph_prior; symmetric compatibility gate (matrix_symmetric) |
+| 4 | 3.2.4 | ROI Selection & Compatibility-Aware Placement | ROI_score = ctx_prior + morph_prior (unweighted); symmetric compatibility gate (matrix_symmetric) |
 | 5 | 3.2.5 | Blending Synthesis | Same blend operator for AROMA and Random arms; mask + bbox co-saved |
-| 6 | 3.2.6 | Quality Gate | Background-patch quality gate (blur/contrast/brightness/noise), accept iff quality ≥ 0.7 |
 
 - **입력**: 데이터셋 **5종** — `severstal` · `mvtec_leather` · `mtd` · `aitex` · `kolektor`
 - **출력**: YOLOv8n 지도학습 검출 헤드라인(baseline / random / aroma 3조건)
@@ -46,7 +47,7 @@
 
 ## Caption 작성
 
-**Figure 2.** AROMA pipeline architecture and data flow, aligned to §3.2. Inputs are the five industrial datasets (severstal, mvtec_leather, mtd, aitex, kolektor). The pipeline profiles dataset complexity (MCI, CCI; §3.2.1), builds data-driven morphology clusters and context cells (§3.2.2), extracts candidate ROIs and classifies seed defects into morphology subtypes (§3.2.3), and ranks defect–context pairs by ROI_score = 0.6·ctx_prior + 0.4·morph_prior under a symmetric compatibility gate (matrix_symmetric) with offline clean-background assignment (§3.2.4). The selected crops are composited by the same blend operator for the AROMA and random arms (§3.2.5), and a background-patch quality gate (blur, contrast, brightness, and noise; accept iff quality ≥ 0.7) admits usable clean backgrounds and rejects flat/void foreground regions (§3.2.6) before the synthesized samples feed the downstream detector.
+**Figure 2.** AROMA pipeline architecture and data flow, aligned to §3.2. Inputs are the five industrial datasets (severstal, mvtec_leather, mtd, aitex, kolektor). The pipeline profiles dataset complexity (MCI, CCI; §3.2.1), builds data-driven morphology clusters and context cells (§3.2.2), extracts candidate ROIs and classifies seed defects into morphology subtypes (§3.2.3), and ranks defect–context pairs by ROI_score = ctx_prior + morph_prior under a symmetric compatibility gate (matrix_symmetric) with offline clean-background assignment (§3.2.4). The selected crops are composited by the same blend operator for the AROMA and random arms (§3.2.5) before the synthesized samples feed the downstream detector.
 
 ---
 

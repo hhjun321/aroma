@@ -46,3 +46,31 @@
 **MVTec Leather (Table 10, Figure 4.3-3)** shows strong but placement-agnostic augmentation gains on a monotone background. Both methods add roughly +9 pp over Baseline (Random +9.03 pp, AROMA +8.92 pp), yet the AROMA−Random gap is null (−0.11 pp): the two placement strategies are statistically indistinguishable, with seed-level differences swinging between −10.1 pp and +11.1 pp. Per-class movements likewise offset one another (Cut +3.66 pp and Poke +1.55 pp for AROMA vs. Random, against Glue −3.43 pp and Fold −2.30 pp), and the dominant gain—Fold, +27–29 pp for both methods—is shared rather than method-specific. The parity has a concrete mechanism: on this near-uniform surface the similarity-ranked background assignment collapses onto a small background pool, so compatibility ranking carries no positional signal and AROMA's selection reduces to a diversity-restricted variant of random placement. Augmentation itself is highly effective on Leather; which backgrounds are chosen is not the operative variable.
 
 Across the three multi-class datasets, the AROMA−random gap responds to baseline headroom and surface heterogeneity: Severstal (heterogeneous, low-baseline, +1.32 pp) shows positive direction; MTD (near-ceiling, limited leverage, +0.41 pp) converges; MVTec Leather (monotone background, uninformative compatibility signal, −0.11 pp) is neutral. Combined with single-class results in §4.2 (AITeX +2.84 pp; Kolektor +0.29 pp), the pattern confirms context-aware placement is never harmful and delivers its gains conditionally, where baseline headroom and informative surface heterogeneity coincide.
+
+### Cross-architecture validation (YOLO11n)
+
+To verify that the observed gains are not an artifact of a single detector architecture, we repeated the Severstal and AITeX experiments with YOLO11n, a more recent detector generation, under an identical protocol (same splits, same synthetic budget, same three seeds).
+
+**Table 13.** YOLO11n supervised detection performance on Severstal (mean ± std, n = 3 seeds). 4-class steel defects; training-free copy-paste compositing engine.
+
+| Method | mAP@0.5 | Class 1 (c1) | Class 2 (c2) | Class 3 (c3) | Class 4 (c4) |
+|--------|---------|-------------|-------------|-------------|-------------|
+| Baseline | 0.4864 ± 0.0289 | 0.4465 ± 0.0284 | 0.3027 ± 0.0372 | 0.6116 ± 0.0062 | 0.5848 ± 0.0467 |
+| Random | 0.4932 ± 0.0028 | 0.4434 ± 0.0261 | 0.3110 ± 0.0416 | 0.6243 ± 0.0012 | 0.5941 ± 0.0311 |
+| AROMA | 0.5080 ± 0.0067 | 0.4461 ± 0.0353 | 0.3320 ± 0.0255 | 0.6117 ± 0.0039 | 0.6422 ± 0.0370 |
+| Random vs. Baseline | +0.68 pp | −0.30 pp | +0.83 pp | +1.27 pp | +0.93 pp |
+| AROMA vs. Baseline | +2.16 pp | −0.04 pp | +2.93 pp | +0.00 pp | +5.74 pp |
+| AROMA vs. Random | +1.48 pp | +0.27 pp | +2.10 pp | −1.26 pp | +4.81 pp |
+
+**Table 14.** YOLO11n detection performance on AITeX test set (mean ± std, n = 3 seeds). Single-class tiled-pattern dataset.
+
+| Method | mAP@0.5 |
+|--------|---------|
+| Baseline | 0.3637 ± 0.0874 |
+| Random | 0.3967 ± 0.0271 |
+| AROMA | 0.4064 ± 0.0487 |
+| Random vs. Baseline | +3.30 pp |
+| AROMA vs. Baseline | +4.27 pp |
+| AROMA vs. Random | +0.97 pp |
+
+**YOLO11n (Tables 13–14)** reproduces the YOLOv8n pattern. On Severstal (Table 13), AROMA outperforms Random in all three seeds (+1.44, +0.65, +2.34 pp; mean +1.48 pp, 0.5080 vs. 0.4932 mAP@0.5), with the gain again concentrated in the classes where Random's frequency-following synthesis under-serves the minority: c2 (+2.10 pp vs. Random) and c4 (+4.81 pp vs. Random), while c1 and c3 remain at baseline level. AROMA is also the only condition whose recall exceeds Baseline (0.515 vs. 0.503), whereas Random trades recall (0.481) for precision. On AITeX (Table 14), both augmentation arms clearly exceed Baseline (Random +3.30 pp, AROMA +4.27 pp on mAP@0.5; mAP@0.5:0.95 rises from 0.159 to 0.207–0.217), but the AROMA−Random gap (+0.97 pp) sits within the seed-level variance of this small dataset (244–246 training images) and we therefore read the two placement strategies as comparable, both exceeding Baseline. The class-conditional gain structure and its magnitude are thus stable across detector generations, indicating that the compatibility-gated placement effect is a property of the augmented data rather than of a specific detector architecture.

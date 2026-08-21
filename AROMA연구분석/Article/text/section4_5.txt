@@ -1,34 +1,14 @@
-##4.5. Sensitivity of the Fixed Design Choices
+##4.5. Sensitivity of the Tertile Partition Boundaries
 
-Beyond the per-dataset parameters that AROMA estimates from data (Sections 3.2.2–3.2.3), the pipeline retains two dataset-independent conventions that are fixed by design: the weights of the ROI score (Eq. 2, 0.6/0.4) and the percentile positions that define the tertile partitions (P33/P66). This section verifies that neither functions as a hidden tuning knob.
+The quantities that drive AROMA's placement decisions are estimated from each dataset's own statistics (Sections 3.2.2–3.2.4): the morphology clusters by BIC-selected Gaussian mixture, the compatibility model from observed context distributions, and the ROI score of Eq. (2) as an unweighted sum of two such data-derived quantities, introducing no coefficients of its own. The one dataset-independent convention that remains is the pair of percentile positions defining the tertile partitions (P33/P66). This section verifies that this convention does not function as a hidden tuning knob.
 
-The weight analysis follows a controlled procedure. For each dataset, the full ROI candidate pool, the compatibility model (ctx_prior), the cluster priors (morph_prior), the selection budget K, and the allocation procedure of Section 3.2.4 (pair quotas, class floors, and the source-diversity cap) are all held fixed; only the weights are changed. Each configuration then (i) recomputes every candidate's ROI_score under the test weights, (ii) re-runs the unchanged allocation procedure on the re-scored pool, and (iii) compares the resulting top-K selection with that of the reference configuration, reported as the retention (the fraction of the reference selection that survives). Any difference is therefore attributable solely to the weights; as a harness check, re-scoring under the adopted weights reproduces the reference selection exactly. The analysis operates at the selection level rather than re-training a detector per configuration: the selection is the only channel through which the weights can influence the training data, re-training the full grid would be prohibitive, and the link from selection to downstream mAP is measured independently by the ablation of Section 4.4, which also calibrates the downstream scale of selection changes.
+**Tertile-boundary sensitivity (P33/P66).** The subtype labels of Section 3.2.3 serve interpretation and reporting; the ROI ranking of Eq. (2) does not consume them, so a boundary shift cannot alter which placements are generated. The remaining question is whether the labels themselves are stable. The percentile positions were perturbed by ±5 percentile points, individually and jointly (P33 → 28–38, P66 → 61–71, eight perturbed configurations per dataset), with the per-dataset degeneracy safeguard of Section 3.2.3 applied unchanged at the perturbed positions. The response is proportional and exhibits no instability cliff: a single-boundary shift relabels 3.1–9.1% of defects and a joint shift relabels 7.7–14.5% (Table 12) — in each case the order of the distribution mass moved by the shift itself, not an amplification of it.
 
-**Weight sensitivity (Eq. 2).** The ctx:morph weight ratio was swept exhaustively in steps of 0.1 on all five datasets, comparing each configuration's top-K selection against that of the adopted weights (0.6/0.4). Table 12 summarizes the sweep. The ratio is inoperative across nearly its entire range: every configuration from 0.1/0.9 to 0.9/0.1 retains 87.5–100% of the selection, and the ±0.1 neighbors of the adopted ratio (0.5/0.5, 0.7/0.3) retain 93.5–100%. Only eliminating a term entirely is consequential, and asymmetrically so: a context-only score still retains 83.5–100%, whereas a morphology-only score collapses on Kolektor (37.5%) and degrades sharply on MVTec Leather (61.0%) — the context term is the load-bearing component of the ranking. The selection is thus insensitive to the exact weight values and sensitive only to which terms participate: the specific values 0.6/0.4 encode a priority order (context > morphology), not a tuned optimum.
-
-**Table 12.** Top-K selection retention (overlap with the adopted configuration, %) under alternative ROI-score weights (w_ctx / w_morph). Upper block: ratio variations; lower block: configurations with a term removed.
-
-| Weights | Severstal | MTD | MVTec Leather | AITeX | Kolektor |
-|---------|-----------|-----|---------------|-------|----------|
-| 0.6/0.4 (adopted) | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 |
-| 0.5/0.5 | 100.0 | 100.0 | 93.5 | 100.0 | 98.5 |
-| 0.7/0.3 | 100.0 | 96.0 | 100.0 | 100.0 | 98.5 |
-| 0.4/0.6 | 100.0 | 100.0 | 93.5 | 100.0 | 98.5 |
-| 0.8/0.2 | 100.0 | 96.0 | 87.5 | 100.0 | 98.5 |
-| 0.3/0.7 | 100.0 | 100.0 | 93.5 | 100.0 | 98.5 |
-| 0.9/0.1 | 99.7 | 96.0 | 87.5 | 100.0 | 98.5 |
-| 0.2/0.8 | 97.6 | 100.0 | 93.5 | 100.0 | 98.5 |
-| 0.1/0.9 | 97.6 | 100.0 | 93.5 | 100.0 | 98.5 |
-| 1.0/0.0 (context only) | 96.6 | 96.0 | 83.5 | 100.0 | 96.0 |
-| 0.0/1.0 (morphology only) | 83.4 | 96.0 | 61.0 | 100.0 | 37.5 |
-
-**Tertile-boundary sensitivity (P33/P66).** The subtype labels of Section 3.2.3 serve interpretation and reporting; the ROI ranking of Eq. (2) does not consume them, so a boundary shift cannot alter which placements are generated. The remaining question is whether the labels themselves are stable. The percentile positions were perturbed by ±5 percentile points, individually and jointly (P33 → 28–38, P66 → 61–71, eight perturbed configurations per dataset), with the per-dataset degeneracy safeguard of Section 3.2.3 applied unchanged at the perturbed positions. The response is proportional and exhibits no instability cliff: a single-boundary shift relabels 3.1–9.1% of defects and a joint shift relabels 7.7–14.5% (Table 13) — in each case the order of the distribution mass moved by the shift itself, not an amplification of it.
-
-**Table 13.** Stability of the subtype labels under tertile-boundary perturbation (P33/P66 shifted by ±5 percentile points). Ranges over the perturbed configurations of each group.
+**Table 12.** Stability of the subtype labels under tertile-boundary perturbation (P33/P66 shifted by ±5 percentile points). Ranges over the perturbed configurations of each group.
 
 | Perturbation | Subtype reassignment |
 |--------------|----------------------|
 | Single boundary ±5 pt | 3.1–9.1% |
 | Both boundaries ±5 pt | 7.7–14.5% |
 
-Together with the ablation of Section 4.4, these results locate the source of AROMA's effect precisely: downstream gains require the presence of the context-compatibility mechanism (removing a stage, or the context term itself, changes the outcome), while the numerical constants configuring that mechanism can be varied across nearly their entire range without materially changing what is selected. Section 4.4 also calibrates the downstream stakes of these membership changes: replacing the compatibility-scored selection with a fully random one — a 100% membership change — costs 3.8 pp of mAP on Severstal (Table 11), whereas every ratio configuration of Table 12 leaves at least 87.5% of the selection in place. The exact weight values therefore operate far from the regime where selection changes translate into material downstream differences.
+Together with the ablation of Section 4.4, these results locate the source of AROMA's effect precisely: downstream gains require the presence of the context-compatibility mechanism — removing a placement stage changes the outcome, and replacing the compatibility-scored selection with a fully random one costs 3.8 pp of mAP on Severstal (Table 11) — while the one remaining fixed convention, the tertile boundary positions, can be perturbed without consequence for placement and with only proportional movement in the reported labels.

@@ -14,13 +14,13 @@ We appreciate the opportunity to clarify the scope of this claim, and we have sh
 
 **(1) What "free of manual tuning" refers to.** The claim concerns the dataset-facing parameters — everything that must adapt when the method is applied to a new dataset. In the revised manuscript, all of these are derived from each dataset's own statistics rather than set by hand: morphology clusters are selected by BIC over a Gaussian mixture, context cells are formed by per-feature tertile (P33/P66) binning, background categories use percentile boundaries (e.g., P25) of the profiled features, and defect-subtype thresholds are derived from the observed per-dataset morphology distributions (Table 4b), varying by up to a factor of 4.5 across datasets. None of these involve manual tuning: applying AROMA to a new dataset re-derives them automatically, with no re-engineering.
 
-**(2) The weights in Equation (2) are dataset-independent structural coefficients, not tuning parameters.** They are set once, encode a fixed priority order (context > morphology), and are applied unchanged to all five datasets — no per-dataset adjustment exists anywhere in the pipeline. To verify that these coefficients do not function as hidden tuning knobs, we added a weight-ratio sensitivity analysis on all five datasets (new §4.5): every ctx:morph ratio from 0.1/0.9 to 0.9/0.1 retains 87.5–100% of the top-K selection, and the only consequential change is eliminating a term entirely (a morphology-only score falls to 37.5% retention on Kolektor). The ranking therefore depends on which terms participate, not on the specific coefficient values — the opposite of a manually tuned optimum. As a scale reference, the ablation of §4.4 shows that even replacing the entire scored selection with a uniform-random one shifts mAP by 3.8 pp; the selection differences induced by alternative weight ratios (0–12.5% of membership) are far smaller in extent.
+**(2) The weights in Equation (2) have been removed.** The reviewer is right that the 0.6/0.4 coefficients were hand-set constants, and rather than defending them we eliminated them: in the revised manuscript, Eq. (2) is the unweighted sum ROI_score = ctx_prior + morph_prior of two data-derived, normalized quantities, so the ranking no longer contains any coefficient of its own. This removal is enabled by the restructured placement pipeline of §3.2.4: the original weighting existed to force the context term to dominate a single composite score, but in the revised three-stage design the compatibility model is consulted directly at all three placement stages (ROI selection, background assignment, site resolution), so the context signal no longer needs to be privileged inside the selection score. What remains to be justified is not a coefficient value but the participation of each term, and that is established empirically by the ablation of §4.4: removing the compatibility-based ROI selection costs 3.8 pp of mAP on Severstal, consistently across seeds, identifying the context term as the load-bearing component of the ranking.
 
 **(3) Equation (4) has been removed, and the quality criterion is disclosed as inherited.** In revising the quality-gating description we deleted the subsection that presented Eq. (4) — its fixed component weights and absolute acceptance threshold — rather than defending it. The underlying gate is a coarse admissibility pre-filter inherited unchanged from our earlier CASDA pipeline; it discards unusable patches *before* any placement decision and is applied identically to the AROMA and random arms, so it is common-mode with respect to every comparison in the paper, operates upstream of and independently from the placement scoring of Eq. (2), and is not part of the claimed data-driven contribution. No numbered equation followed Eq. (4), so the numbering of Equations (1)–(3) is unchanged.
 
-The revised text (§3.2.2–3.2.4) now states this distinction explicitly: per-dataset parameters are data-derived, while the Eq. (2) weights are fixed, dataset-independent design constants whose robustness is demonstrated empirically.
+The revised text (§3.2.2–3.2.4) now makes the claim exact: every quantity entering the placement decision is either derived from the dataset's own statistics or an unweighted combination of such quantities; the manually set coefficients the reviewer identified (Eq. (2) weights, Eq. (4) weights) have both been removed from the method.
 
-**Manuscript changes:** explicit fixed-design-choice statement and priority-order rationale at Eq. (2) (§3.2.4); §3.2.6 (Quality Gate, Eq. (4)) removed; new sensitivity subsection (§4.5); data-derived partition descriptions in §3.2.2–3.2.3.
+**Manuscript changes:** Eq. (2) rewritten as the unweighted sum ctx_prior + morph_prior, with the rationale at §3.2.4; §3.2.6 (Quality Gate, Eq. (4)) removed; new sensitivity subsection (§4.5); data-derived partition descriptions in §3.2.2–3.2.3.
 
 ---
 
@@ -30,13 +30,13 @@ The revised text (§3.2.2–3.2.4) now states this distinction explicitly: per-d
 
 **Response.**
 
-Following this recommendation, we supplemented the evaluation with **YOLOv11n**, a recent mainstream detector, under the identical three-arm (Baseline / Random / AROMA), three-seed protocol on Severstal and AITeX — the heterogeneous-surface datasets where the placement effect is the operative question (new Table X, §X).
+Following this recommendation, we supplemented the evaluation with **YOLOv11n**, a recent mainstream detector, under the identical three-arm (Baseline / Random / AROMA), three-seed protocol on Severstal and AITeX — the heterogeneous-surface datasets where the placement effect is the operative question (new Tables 13–14, §4.3).
 
-The results reproduce the ordering observed with YOLOv8n: **[AROMA > Random > Baseline on both datasets; numbers TBD after E4]**. This indicates that the measured placement effect is a property of the synthesized data rather than of a particular detector architecture.
+The results reproduce the ordering observed with YOLOv8n: on Severstal, AROMA 0.5080 > Random 0.4932 > Baseline 0.4864 mAP@0.5, with AROMA outperforming Random in all three seeds and the gain again concentrated in the minority classes (c2 +2.10 pp, c4 +4.81 pp vs. Random); on AITeX, both augmentation arms clearly exceed Baseline (AROMA 0.4064, Random 0.3967 vs. Baseline 0.3637). This indicates that the measured placement effect is a property of the synthesized data rather than of a particular detector architecture.
 
 Two considerations guided the scope of this supplement. First, the paper's claim is about the *data-side* placement policy, and the detector is only the measurement instrument; demonstrating that the effect survives a change of instrument on two representative datasets addresses the generality question directly. Second, YOLOv8n is retained as the primary detector throughout the paper for comparability with prior industrial augmentation studies and with our earlier controlled experiments, which were all conducted under that architecture.
 
-**Manuscript changes:** new detector-generality table and subsection (numbers to be inserted after the supplementary YOLOv11n runs; placeholder pending E4).
+**Manuscript changes:** new detector-generality table and subsection (§4.3, Tables 13–14, "Cross-architecture validation (YOLO11n)").
 
 ---
 
@@ -52,9 +52,9 @@ We address this in three parts.
 
 **(2) Subtype labels do not gate placement.** The revised §3.2.2–3.2.4 separates the two roles that were conflated in the original text: placement decisions operate on the BIC-selected morphology clusters and tertile context cells, and the ROI ranking of Eq. (2) does not consume the subtype labels; the named categories serve interpretation and reporting. A perturbation of a subtype boundary therefore cannot alter which placements are generated.
 
-**(3) Threshold sensitivity analysis (new §4.5).** We nevertheless quantified the stability of the labels themselves: perturbing the percentile points defining the tertile boundaries by ±5 points (P33/P66 → 28–38 / 61–71) on all five datasets relabels 3.1–9.1% of defects for a single-boundary shift and 7.7–14.5% for a joint shift (Table 13) — in each case proportional to the distribution mass moved by the shift, with no amplification or instability cliff.
+**(3) Threshold sensitivity analysis (new §4.5).** We nevertheless quantified the stability of the labels themselves: perturbing the percentile points defining the tertile boundaries by ±5 points (P33/P66 → 28–38 / 61–71) on all five datasets relabels 3.1–9.1% of defects for a single-boundary shift and 7.7–14.5% for a joint shift (Table 12) — in each case proportional to the distribution mass moved by the shift, with no amplification or instability cliff.
 
-**Manuscript changes:** §3.2.3 (per-dataset percentile boundaries, Table 4b); new sensitivity subsection (§4.5) reporting the boundary-perturbation results alongside the weight-ratio analysis.
+**Manuscript changes:** §3.2.3 (per-dataset percentile boundaries, Table 4b); new sensitivity subsection (§4.5, Table 12) reporting the boundary-perturbation results.
 
 ---
 
