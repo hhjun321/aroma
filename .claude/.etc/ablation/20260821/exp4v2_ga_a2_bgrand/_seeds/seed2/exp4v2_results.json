@@ -1,0 +1,47 @@
+{
+  "severstal": {
+    "yolov8n": {
+      "aroma": {
+        "map50": 0.4843,
+        "map50_95": 0.223,
+        "precision": 0.5441,
+        "recall": 0.5057,
+        "n_train": 5068,
+        "n_real_train": 2534,
+        "n_synth_train": 2534,
+        "per_class": {
+          "c1": {
+            "map50": 0.4136,
+            "map50_95": 0.1427,
+            "precision": 0.5543,
+            "recall": 0.4374
+          },
+          "c2": {
+            "map50": 0.3545,
+            "map50_95": 0.1272,
+            "precision": 0.3869,
+            "recall": 0.4286
+          },
+          "c3": {
+            "map50": 0.5883,
+            "map50_95": 0.2966,
+            "precision": 0.6032,
+            "recall": 0.5942
+          },
+          "c4": {
+            "map50": 0.5806,
+            "map50_95": 0.3257,
+            "precision": 0.6319,
+            "recall": 0.5627
+          }
+        },
+        "n_synth_per_class": {
+          "0": 646,
+          "1": 532,
+          "2": 717,
+          "3": 639
+        }
+      }
+    }
+  }
+}
