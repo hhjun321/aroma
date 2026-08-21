@@ -1,7 +1,7 @@
 #3. Methodology
 
 ##3.1. Experimental Setup
-AROMA was evaluated on five publicly available industrial anomaly detection da-tasets spanning diverse surface characteristics: AITeX [27] (textile), KolektorSDD [28] (metal), Severstal [29] (steel), MTD [30] (ceramic), and MVTec Leather [3] (organic). These datasets cover a broad range of morphological and contextual complexity, enabling evaluation across heterogeneous industrial domains without per-dataset re-engineering. Their statistics are summarized in Table 1. 
+AROMA was evaluated on five publicly available industrial anomaly detection da-tasets spanning diverse surface characteristics: AITeX [32] (textile), KolektorSDD [33] (metal), Severstal [34] (steel), MTD [35] (ceramic), and MVTec Leather [3] (organic). These datasets cover a broad range of morphological and contextual complexity, enabling evaluation across heterogeneous industrial domains without per-dataset re-engineering. Their statistics are summarized in Table 1. 
 
 ###Table 1. Per-dataset statistics for the five-dataset canonical evaluation roster.
 Dataset	Domain	MCI	CCI
@@ -16,4 +16,4 @@ MVTec Leather	Leather	0.595	0.2
 
 As shown in Figure 3.1, the five datasets span a broad range of complexity (MCI: 0.33–0.60, CCI: 0.20–0.44), placing them in distinct operating regimes rather than clustering in a single visual regime. The CCI axis (0.20–0.44) in particular captures the background-context diversity across the five datasets.
 
-Three experimental conditions were evaluated for each dataset: Baseline (real data only), Random-ROI, and AROMA-ROI. Both augmentation methods used the same training-free copy-paste pipeline and the same synthetic data budget, differing only in the ROI placement mechanism: random placement versus AROMA's data-driven symmetric compatibility gate. The Random-ROI arm is thus canonical uniform copy-paste augmentation [21,22], serving as the external copy-paste baseline. All models were evaluated on the same real test set, ensuring that performance differences were attributable solely to the placement mechanism.
+Three experimental conditions were evaluated for each dataset: Baseline (real data only), Random-ROI, and AROMA-ROI. Both augmentation methods used the same training-free copy-paste pipeline and the same synthetic data budget, differing only in the ROI placement mechanism: random placement versus AROMA's data-driven symmetric compatibility gate. The Random-ROI arm is thus canonical uniform copy-paste augmentation [25,26], serving as the external copy-paste baseline. All models were evaluated on the same real test set, ensuring that performance differences were attributable solely to the placement mechanism.

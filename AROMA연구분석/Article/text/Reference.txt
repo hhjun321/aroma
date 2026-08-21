@@ -7,54 +7,43 @@
 [6] Goodfellow, I.; Pouget-Abadie, J.; Mirza, M.; Xu, B.; Warde-Farley, D.; Ozair, S.; Courville, A.; Bengio, Y. Generative Adversarial Nets. NeurIPS. 2014, pp. 2672–2680.
 [7] Ho, J.; Jain, A.; Abbeel, P. Denoising Diffusion Probabilistic Models. NeurIPS. 2020, 33, pp. 6840–6851.
 [8] Han, H. J.; Moon, I. Y. CASDA: Enhancing Steel Defect Detection Through Context-Aware Data Augmentation Framework. Applied Sciences. 2026, 16(12), 6137. DOI: 10.3390/app16126137.
-[9] Han, H. J.; Moon, I. Y. Research on Object Detection Model-Based Equipment Defect Detection Method. Journal of Advanced Navigation Technology. 2025, 29(6), 859–866. DOI: 10.12673/JANT.2025.29.6.859.
-[10] Roth, K.; Pemula, L.; Zepeda, J.; Schölkopf, B.; Brox, T.; Gehler, P. Towards Total Recall in Industrial Anomaly Detection. CVPR. 2022, pp. 14318–14328. DOI: 10.1109/CVPR52688.2022.01392.
-[11] Batzner, K.; Heckler, L.; König, R. EfficientAD: Accurate Visual Anomaly Detection at Millisecond-Level Latencies. WACV. 2024, pp. 128–138. DOI: 10.1109/WACV57701.2024.00020.
-[12] Liu, Z.; Zhou, Y.; Xu, Y.; Wang, Z. SimpleNet: A Simple Network for Image Anomaly Detection and Localization. CVPR. 2023, pp. 20402–20411. DOI: 10.1109/CVPR52729.2023.01954.
-[13] Deng, H.; Li, X. Anomaly Detection via Reverse Distillation from One-Class Embedding. CVPR. 2022, pp. 9737–9746. DOI: 10.1109/CVPR52688.2022.00951.
-[14] Li, C.-L.; Sohn, K.; Yoon, J.; Pfister, T. CutPaste: Self-Supervised Learning for Anomaly Detection and Localization. CVPR. 2021, pp. 9664–9674. DOI: 10.1109/CVPR46437.2021.00954.
-[15] Zavrtanik, V.; Kristan, M.; Skočaj, D. DRAEM—A Discriminatively Trained Reconstruction Embedding for Surface Anomaly Detection. ICCV. 2021, pp. 8330–8339. DOI: 10.1109/ICCV48922.2021.00822.
-[16] Pérez, P.; Gangnet, M.; Blake, A. Poisson Image Editing. ACM Transactions on Graphics. 2003, 22(3), 313–318. DOI: 10.1145/882262.882269.
-[17] Zhang, G.; Cui, K.; Hung, T.-Y.; Lu, S. Defect-GAN: High-Fidelity Defect Synthesis for Automated Defect Inspection. WACV. 2021, pp. 2524–2534. DOI: 10.1109/WACV48630.2021.00257.
-[18] Niu, S.; Li, B.; Wang, X.; Lin, H. Defect Image Sample Generation With GAN for Improving Defect Recognition. IEEE Transactions on Automation Science and Engineering. 2020, 17(3), 1611–1622. DOI: 10.1109/TASE.2020.2967415.
-[19] Rombach, R.; Blattmann, A.; Lorenz, D.; Esser, P.; Ommer, B. High-Resolution Image Synthesis with Latent Diffusion Models. CVPR. 2022, pp. 10684–10695. DOI: 10.1109/CVPR52688.2022.01042.
-[20] Zhang, L.; Rao, A.; Agrawala, M. Adding Conditional Control to Text-to-Image Diffusion Models. ICCV. 2023, pp. 3836–3847. DOI: 10.1109/ICCV51070.2023.00355.
-[21] Dwibedi, D.; Misra, I.; Hebert, M. Cut, Paste and Learn: Surprisingly Easy Synthesis for Instance Detection. ICCV. 2017, pp. 1301–1310. DOI: 10.1109/ICCV.2017.146.
-[22] Ghiasi, G.; Cui, Y.; Srinivas, A.; Qian, R.; Lin, T.-Y.; Cubuk, E. D.; Le, Q. V.; Zoph, B. Simple Copy-Paste Is a Strong Data Augmentation Method for Instance Segmentation. CVPR. 2021, pp. 2918–2928. DOI: 10.1109/CVPR46437.2021.00294.
-[23] Dvornik, N.; Mairal, J.; Schmid, C. Modeling Visual Context Is Key to Augmenting Object Detection Datasets. ECCV. 2018, pp. 364–380. DOI: 10.1007/978-3-030-01258-8_23.
-[24] Cubuk, E. D.; Zoph, B.; Mané, D.; Vasudevan, V.; Le, Q. V. AutoAugment: Learning Augmentation Strategies from Data. CVPR. 2019, pp. 113–123. DOI: 10.1109/CVPR.2019.00020.
-[25] Cubuk, E. D.; Zoph, B.; Shlens, J.; Le, Q. V. RandAugment: Practical Automated Data Augmentation with a Reduced Search Space. CVPRW. 2020, pp. 702–703. DOI: 10.1109/CVPRW50498.2020.00359.
-[26] Ho, T. K.; Basu, M. Complexity Measures of Supervised Classification Problems. IEEE TPAMI. 2002, 24(3), 289–300. DOI: 10.1109/34.990132.
-[27] Silvestre-Blanes, J.; Albero-Albero, T.; Miralles, I.; Pérez-Llorens, R.; Moreno, J. A Public Fabric Database for Defect Detection Methods and Results. Autex Research Journal. 2019, 19(4), 363–374. DOI: 10.2478/aut-2019-0035.
-[28] Tabernik, D.; Šela, S.; Skvarč, J.; Skočaj, D. Segmentation-Based Deep-Learning Approach for Surface-Defect Detection. Journal of Intelligent Manufacturing. 2020, 31(3), 759–776. DOI: 10.1007/s10845-019-01476-x.
-[29] Severstal: Steel Defect Detection. Kaggle Competition. 2019. Available: <https://www.kaggle.com/c/severstal-steel-defect-detection> (accessed on 28 July 2026).
-[30] Huang, Y.; Qiu, C.; Yuan, K. Surface Defect Saliency of Magnetic Tile. The Visual Computer. 2020, 36(1), 85–96. DOI: 10.1007/s00371-018-1588-5.
-[31] Kirillov, A.; Mintun, E.; Ravi, N.; Mao, H.; Rolland, C.; Gustafson, L.; Xiao, T.; Whitehead, S.; Berg, A. C.; Lo, W.-Y.; Dollár, P.; Girshick, R. Segment Anything. ICCV. 2023, pp. 4015–4026. DOI: 10.1109/ICCV51070.2023.00371.
-[32] Redmon, J.; Divvala, S.; Girshick, R.; Farhadi, A. You Only Look Once: Unified, Real-Time Object Detection. CVPR. 2016, pp. 779–788. DOI: 10.1109/CVPR.2016.91.
-[33] Heusel, M.; Ramsauer, H.; Unterthiner, T.; Nessler, B.; Hochreiter, S. GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium. NeurIPS. 2017, 30, pp. 6626–6637.
-[34] Bińkowski, M.; Sutherland, D. J.; Arbel, M.; Gretton, A. Demystifying MMD GANs. ICLR. 2018.
-[35] Zhang, R.; Isola, P.; Efros, A. A.; Shechtman, E.; Wang, O. The Unreasonable Effectiveness of Deep Features as a Perceptual Metric. CVPR. 2018, pp. 586–595. DOI: 10.1109/CVPR.2018.00068.
-
-# --- 임시 번호 (PROVISIONAL) ---
-# 아래 [36]–[39]는 §3.2.3의 배경 텍스처 지표 정의 문단, [40]–[41]은 같은 절의
-# 결함 형태 지표(solidity / aspect ratio) 정의 문단에서 인용된다.
-# 각 문단 내 등장순으로 부여했다: Shannon → Dalal&Triggs → Ojala → Haralick → G&W → Hu.
-# 전역 등장순 규칙상 본래 [31](SAM) 앞에 와야 하지만, 개선 중 레퍼런스 추가가 반복될 것으로
-# 예상되어 지금은 말미에 임시 부여하고 추후 한 번에 등장순으로 재정렬한다.
-# 재정렬 시 함께 갱신할 파일: section3_2.txt, section3_3.txt, section5.txt, AROMA.txt
-# 미인용 잔여 항목(이번 범위 밖): Otsu thresholding(§3.2.3), BIC(§3.2.2)
+[9] Stavropoulos, P.; Papacharalampopoulos, A.; Petridis, D. A Vision-Based System for Real-Time Defect Detection: A Rubber Compound Part Case Study. Procedia CIRP. 2020, 93, 1230–1235. DOI: 10.1016/j.procir.2020.04.159.
+[10] Han, H. J.; Moon, I. Y. Research on Object Detection Model-Based Equipment Defect Detection Method. Journal of Advanced Navigation Technology. 2025, 29(6), 859–866. DOI: 10.12673/JANT.2025.29.6.859.
+[11] Roth, K.; Pemula, L.; Zepeda, J.; Schölkopf, B.; Brox, T.; Gehler, P. Towards Total Recall in Industrial Anomaly Detection. CVPR. 2022, pp. 14318–14328. DOI: 10.1109/CVPR52688.2022.01392.
+[12] Batzner, K.; Heckler, L.; König, R. EfficientAD: Accurate Visual Anomaly Detection at Millisecond-Level Latencies. WACV. 2024, pp. 128–138. DOI: 10.1109/WACV57701.2024.00020.
+[13] Liu, Z.; Zhou, Y.; Xu, Y.; Wang, Z. SimpleNet: A Simple Network for Image Anomaly Detection and Localization. CVPR. 2023, pp. 20402–20411. DOI: 10.1109/CVPR52729.2023.01954.
+[14] Deng, H.; Li, X. Anomaly Detection via Reverse Distillation from One-Class Embedding. CVPR. 2022, pp. 9737–9746. DOI: 10.1109/CVPR52688.2022.00951.
+[15] Yang, B.; Lei, Y.; Li, N.; Li, X.; Si, X.; Chen, C. Balance Recovery and Collaborative Adaptation Approach for Federated Fault Diagnosis of Inconsistent Machine Groups. Knowledge-Based Systems. 2025, 317, 113480. DOI: 10.1016/j.knosys.2025.113480.
+[16] Li, C.-L.; Sohn, K.; Yoon, J.; Pfister, T. CutPaste: Self-Supervised Learning for Anomaly Detection and Localization. CVPR. 2021, pp. 9664–9674. DOI: 10.1109/CVPR46437.2021.00954.
+[17] Zavrtanik, V.; Kristan, M.; Skočaj, D. DRAEM—A Discriminatively Trained Reconstruction Embedding for Surface Anomaly Detection. ICCV. 2021, pp. 8330–8339. DOI: 10.1109/ICCV48922.2021.00822.
+[18] Pérez, P.; Gangnet, M.; Blake, A. Poisson Image Editing. ACM Transactions on Graphics. 2003, 22(3), 313–318. DOI: 10.1145/882262.882269.
+[19] Zhang, G.; Cui, K.; Hung, T.-Y.; Lu, S. Defect-GAN: High-Fidelity Defect Synthesis for Automated Defect Inspection. WACV. 2021, pp. 2524–2534. DOI: 10.1109/WACV48630.2021.00257.
+[20] Niu, S.; Li, B.; Wang, X.; Lin, H. Defect Image Sample Generation With GAN for Improving Defect Recognition. IEEE Transactions on Automation Science and Engineering. 2020, 17(3), 1611–1622. DOI: 10.1109/TASE.2020.2967415.
+[21] Rombach, R.; Blattmann, A.; Lorenz, D.; Esser, P.; Ommer, B. High-Resolution Image Synthesis with Latent Diffusion Models. CVPR. 2022, pp. 10684–10695. DOI: 10.1109/CVPR52688.2022.01042.
+[22] Hu, T.; Zhang, J.; Yi, R.; Du, Y.; Chen, X.; Liu, L.; Wang, Y.; Wang, C. AnomalyDiffusion: Few-Shot Anomaly Image Generation with Diffusion Model. AAAI. 2024, 38(8), 8526–8534. DOI: 10.1609/aaai.v38i8.28696.
+[23] Zhang, X.; Xu, M.; Zhou, X. RealNet: A Feature Selection Network with Realistic Synthetic Anomaly for Anomaly Detection. CVPR. 2024, pp. 16699–16708.
+[24] Zhang, L.; Rao, A.; Agrawala, M. Adding Conditional Control to Text-to-Image Diffusion Models. ICCV. 2023, pp. 3836–3847. DOI: 10.1109/ICCV51070.2023.00355.
+[25] Dwibedi, D.; Misra, I.; Hebert, M. Cut, Paste and Learn: Surprisingly Easy Synthesis for Instance Detection. ICCV. 2017, pp. 1301–1310. DOI: 10.1109/ICCV.2017.146.
+[26] Ghiasi, G.; Cui, Y.; Srinivas, A.; Qian, R.; Lin, T.-Y.; Cubuk, E. D.; Le, Q. V.; Zoph, B. Simple Copy-Paste Is a Strong Data Augmentation Method for Instance Segmentation. CVPR. 2021, pp. 2918–2928. DOI: 10.1109/CVPR46437.2021.00294.
+[27] Dvornik, N.; Mairal, J.; Schmid, C. Modeling Visual Context Is Key to Augmenting Object Detection Datasets. ECCV. 2018, pp. 364–380. DOI: 10.1007/978-3-030-01258-8_23.
+[28] Fang, H.-S.; Sun, J.; Wang, R.; Gou, M.; Li, Y.-L.; Lu, C. InstaBoost: Boosting Instance Segmentation via Probability Map Guided Copy-Pasting. ICCV. 2019, pp. 682–691. DOI: 10.1109/ICCV.2019.00077.
+[29] Cubuk, E. D.; Zoph, B.; Mané, D.; Vasudevan, V.; Le, Q. V. AutoAugment: Learning Augmentation Strategies from Data. CVPR. 2019, pp. 113–123. DOI: 10.1109/CVPR.2019.00020.
+[30] Cubuk, E. D.; Zoph, B.; Shlens, J.; Le, Q. V. RandAugment: Practical Automated Data Augmentation with a Reduced Search Space. CVPRW. 2020, pp. 702–703. DOI: 10.1109/CVPRW50498.2020.00359.
+[31] Ho, T. K.; Basu, M. Complexity Measures of Supervised Classification Problems. IEEE TPAMI. 2002, 24(3), 289–300. DOI: 10.1109/34.990132.
+[32] Silvestre-Blanes, J.; Albero-Albero, T.; Miralles, I.; Pérez-Llorens, R.; Moreno, J. A Public Fabric Database for Defect Detection Methods and Results. Autex Research Journal. 2019, 19(4), 363–374. DOI: 10.2478/aut-2019-0035.
+[33] Tabernik, D.; Šela, S.; Skvarč, J.; Skočaj, D. Segmentation-Based Deep-Learning Approach for Surface-Defect Detection. Journal of Intelligent Manufacturing. 2020, 31(3), 759–776. DOI: 10.1007/s10845-019-01476-x.
+[34] Severstal: Steel Defect Detection. Kaggle Competition. 2019. Available: <https://www.kaggle.com/c/severstal-steel-defect-detection> (accessed on 28 July 2026).
+[35] Huang, Y.; Qiu, C.; Yuan, K. Surface Defect Saliency of Magnetic Tile. The Visual Computer. 2020, 36(1), 85–96. DOI: 10.1007/s00371-018-1588-5.
 [36] Shannon, C. E. A Mathematical Theory of Communication. Bell System Technical Journal. 1948, 27(3), 379–423. DOI: 10.1002/j.1538-7305.1948.tb01338.x.
 [37] Dalal, N.; Triggs, B. Histograms of Oriented Gradients for Human Detection. CVPR. 2005, pp. 886–893. DOI: 10.1109/CVPR.2005.177.
 [38] Ojala, T.; Pietikäinen, M.; Mäenpää, T. Multiresolution Gray-Scale and Rotation Invariant Texture Classification with Local Binary Patterns. IEEE Transactions on Pattern Analysis and Machine Intelligence. 2002, 24(7), 971–987. DOI: 10.1109/TPAMI.2002.1017623.
 [39] Haralick, R. M. Statistical and Structural Approaches to Texture. Proceedings of the IEEE. 1979, 67(5), 786–804. DOI: 10.1109/PROC.1979.11328.
-[40] Gonzalez, R. C.; Woods, R. E. Digital Image Processing, 4th ed.; Pearson: New York, 2018.
-[41] Hu, M.-K. Visual Pattern Recognition by Moment Invariants. IRE Transactions on Information Theory. 1962, 8(2), 179–187. DOI: 10.1109/TIT.1962.1057692.
-# [42]는 §2.5 context-aware placement 문단에서 인용 (report1 R1-3 대응).
-[42] Fang, H.-S.; Sun, J.; Wang, R.; Gou, M.; Li, Y.-L.; Lu, C. InstaBoost: Boosting Instance Segmentation via Probability Map Guided Copy-Pasting. ICCV. 2019, pp. 682–691. DOI: 10.1109/ICCV.2019.00077.
-# [43]은 §2.1 data decentralization 문단에서 인용 (report1 R1-5 대응).
-[43] Yang, B.; Lei, Y.; Li, N.; Li, X.; Si, X.; Chen, C. Balance Recovery and Collaborative Adaptation Approach for Federated Fault Diagnosis of Inconsistent Machine Groups. Knowledge-Based Systems. 2025, 317, 113480. DOI: 10.1016/j.knosys.2025.113480.
-# [44]-[45]는 §2.3 생성형 증강 문단에서 인용 (report1 R2-7 대응).
-[44] Hu, T.; Zhang, J.; Yi, R.; Du, Y.; Chen, X.; Liu, L.; Wang, Y.; Wang, C. AnomalyDiffusion: Few-Shot Anomaly Image Generation with Diffusion Model. AAAI. 2024, 38(8), 8526–8534. DOI: 10.1609/aaai.v38i8.28696.
-[45] Zhang, X.; Xu, M.; Zhou, X. RealNet: A Feature Selection Network with Realistic Synthetic Anomaly for Anomaly Detection. CVPR. 2024, pp. 16699–16708.
-# [46]은 §2.1 supervised 검사 문단에서 인용 (report1 R3-6 대응).
-[46] Stavropoulos, P.; Papacharalampopoulos, A.; Petridis, D. A Vision-Based System for Real-Time Defect Detection: A Rubber Compound Part Case Study. Procedia CIRP. 2020, 93, 1230–1235. DOI: 10.1016/j.procir.2020.04.159.
+[40] Kirillov, A.; Mintun, E.; Ravi, N.; Mao, H.; Rolland, C.; Gustafson, L.; Xiao, T.; Whitehead, S.; Berg, A. C.; Lo, W.-Y.; Dollár, P.; Girshick, R. Segment Anything. ICCV. 2023, pp. 4015–4026. DOI: 10.1109/ICCV51070.2023.00371.
+[41] Gonzalez, R. C.; Woods, R. E. Digital Image Processing, 4th ed.; Pearson: New York, 2018.
+[42] Hu, M.-K. Visual Pattern Recognition by Moment Invariants. IRE Transactions on Information Theory. 1962, 8(2), 179–187. DOI: 10.1109/TIT.1962.1057692.
+[43] Redmon, J.; Divvala, S.; Girshick, R.; Farhadi, A. You Only Look Once: Unified, Real-Time Object Detection. CVPR. 2016, pp. 779–788. DOI: 10.1109/CVPR.2016.91.
+[44] Heusel, M.; Ramsauer, H.; Unterthiner, T.; Nessler, B.; Hochreiter, S. GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium. NeurIPS. 2017, 30, pp. 6626–6637.
+[45] Bińkowski, M.; Sutherland, D. J.; Arbel, M.; Gretton, A. Demystifying MMD GANs. ICLR. 2018.
+[46] Zhang, R.; Isola, P.; Efros, A. A.; Shechtman, E.; Wang, O. The Unreasonable Effectiveness of Deep Features as a Perceptual Metric. CVPR. 2018, pp. 586–595. DOI: 10.1109/CVPR.2018.00068.
+
+# 미인용 잔여 항목(추가 예정 후보): Otsu thresholding(§3.2.3), BIC(§3.2.2)

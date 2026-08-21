@@ -17,7 +17,7 @@ Train–test partitioning followed the on-disk structure provided by each source
 All downstream results are reported over three random seeds (1, 2, 42) to establish statistical reliability. For each seed, three augmentation conditions were evaluated on an identical real test set under paired testing: (i) baseline: original training data only; (ii) random-ROI: synthetic defects placed uniformly at random locations; (iii) AROMA: synthetic defects placed by the data-driven compatibility-aware policy (Section 3.2.4). Paired testing ensures that all differences in downstream detection performance are attributable to the augmentation strategy, not to randomness in the train-test split or model initialization.
 
 ###3.3.2 Downstream Detection Protocol
-Downstream utility was assessed via supervised YOLOv8n object detection [32]. Each of the three augmentation conditions (baseline / random / AROMA) trained an independent detector and evaluated it by mean average precision at IoU 0.5 (mAP@0.5) on the shared real test set.
+Downstream utility was assessed via supervised YOLOv8n object detection [43]. Each of the three augmentation conditions (baseline / random / AROMA) trained an independent detector and evaluated it by mean average precision at IoU 0.5 (mAP@0.5) on the shared real test set.
 
 Multi-class datasets (Severstal, MVTec Leather, MTD) were evaluated with per-dataset class enumeration, imgsz 640, and rectangular training enabled. Single-class datasets (AITeX, Kolektor) were trained with a single synthetic defect class; AITeX used imgsz 256 with rectangular training disabled (the AITeX tiles are square), while Kolektor used imgsz 640.
 
