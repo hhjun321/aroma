@@ -28,6 +28,7 @@
 | 3 | aitex 실행 — single / 256 / no-rect / 300ep / seeds 1 2 42 | **GPU** |
 | 4 | kolektor 실행 — single / 640 / rect / 100ep / seeds 42 1 2 | **GPU** |
 | 5 | 판정 (baseline/random/aroma + Δ + per-seed 부호 일치) | CPU |
+| 6 | **E4 detector-generality** — YOLOv11n, severstal + aitex만 (R2-2 대응) | **GPU** |
 
 > **3 그룹 파라미터 상이** (`_SPEC §4`): 3종(그룹 A)·aitex(그룹 B)·kolektor(그룹 C)는 imgsz·epochs·rect·class_mode·seed 순서가 다르다. **하나라도 섞으면 비교 불가** — 반드시 그룹별로 분리 실행한다.
 
@@ -344,6 +345,89 @@ for ds in [d for d in ORDER if d in results] + [d for d in results if d not in O
 > **aitex는 tile-level·single-class**: 절대값을 3종(multi)과 직접 비교하지 않는다. Δ(aroma−random)만 유효.
 > **kolektor 해석**: CCI=0.224(낮음, leather/mtd zone과 유사) — aroma≈random 예상되는 저-레버 대조 사례로 해석하며, 예상외 양의 방향이면 잔여 레버 존재로 본다.
 > **정밀 검정**: `per_seed`의 seed별 값으로 paired Wilcoxon/t-test를 별도 수행(rough 판정은 위 부호 일치).
+
+---
+
+## STEP 6 — E4 detector-generality 실행 (YOLOv11n · severstal + aitex)
+
+**목적 (report1 R2-2 대응)**: placement 효과가 YOLOv8n에 특이적이지 않음을 입증한다. 최신 주류 detector **YOLOv11n**으로 severstal(그룹 A 대표)·aitex(그룹 B 대표)만 동일 3-arm·3-seed 프로토콜 재현. 판정 대상은 **순서 보존**(aroma > random > baseline)이지 절대값이 아니다.
+
+**전제**: 스크립트가 `--model yolo11n`을 지원해야 한다 (`ALL_MODEL_KEYS`·choices에 yolo11n 추가된 판 — 2026-08-21 반영). 구판이면 `argparse` choices에서 거부된다. ultralytics는 `yolo11n.pt`를 자동 다운로드한다(**`yolov11n` 아님** — v 없는 명명 주의).
+
+**출력 분리**: 확정 yolov8n 결과(`$EXP4V2_OUT/exp4v2_results.json`)를 무접촉 보존하기 위해 **별도 output_dir** 사용.
+
+```python
+os.environ['EXP4V2_Y11'] = f"{os.environ['SYM_ROOT']}/exp4v2_yolo11"
+```
+
+**6-1. severstal (그룹 A 파라미터 그대로 — multi / 640 / rect / 100ep / batch 128 / patience 25 / seeds 42 1 2 / compile OK)**
+
+```python
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolo11n \
+    --condition all \
+    --dataset_keys severstal \
+    --class_mode multi \
+    --aroma_synthetic_dir  $SYNTH_AROMA \
+    --random_synthetic_dir $SYNTH_RANDOM \
+    --real_data_dir        $AROMA_DATA \
+    --output_dir           $EXP4V2_Y11 \
+    --yolo_cache_dir       $YOLO_CACHE \
+    --imgsz 640 \
+    --val_frac 0.3 \
+    --synth_ratio 1.0 \
+    --baseline_epochs 100 \
+    --patience 25 \
+    --batch 128 \
+    --cache ram \
+    --rect \
+    --workers 12 \
+    --compile \
+    --seeds 42 1 2 \
+    --resume
+```
+
+**6-2. aitex (그룹 B 파라미터 그대로 — single / 256 / no-rect / 300ep / batch 128 / patience 25 / seeds 1 2 42)**
+
+```python
+!python $AROMA_SCRIPTS/experiments/exp4_v2_supervised_detection.py \
+    --model yolo11n \
+    --condition all \
+    --dataset_keys aitex \
+    --aroma_synthetic_dir  $SYNTH_AROMA \
+    --random_synthetic_dir $SYNTH_RANDOM \
+    --real_data_dir        $AROMA_DATA \
+    --output_dir           $EXP4V2_Y11 \
+    --yolo_cache_dir       $YOLO_CACHE \
+    --imgsz 256 \
+    --val_frac 0.3 \
+    --synth_ratio 1.0 \
+    --baseline_epochs 300 \
+    --patience 25 \
+    --batch 128 \
+    --cache ram \
+    --workers 12 \
+    --compile \
+    --seeds 1 2 42 \
+    --resume
+```
+
+**6-3. 판정 (CPU)** — STEP 5 셀 재사용하되 두 줄만 변경:
+
+```python
+with open(f"{os.environ['EXP4V2_Y11']}/exp4v2_results.json") as f:   # EXP4V2_OUT → EXP4V2_Y11
+    results = json.load(f)
+# ...
+    arms = results[ds].get("yolo11n", results[ds])                    # "yolov8n" → "yolo11n"
+```
+
+**판정 규칙 (사전 등록)**: yolov8n 결과와의 비교 축은 **arm 순서**와 **Δ(A−R) 부호**다.
+- 순서 재현 (aroma > random > baseline, 전 seed 부호 일치까지는 미요구) → "detector-일반성 확인"으로 §4에 기입
+- Δ 부호 뒤집힘 → 은폐 금지 — 있는 그대로 보고하고 detector-의존 한계로 §5에 기술
+- 절대 mAP 차이(v8 vs v11)는 해석 대상 아님 (instrument 차이)
+
+> **파라미터 이전 금지**: yolov8n 그룹 파라미터를 그대로 쓴다(사후 튜닝 금지 원칙 동일 적용). yolo11n에 유리하게 knob을 바꾸는 것도, 불리하게 두는 것도 모두 금지 — 유일한 변경점은 `--model`.
+> **소요**: 2 ds × 3 seed × 3 cond = 18 학습. A100 기준 반나절 내.
 
 ---
 

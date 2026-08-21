@@ -135,7 +135,7 @@ except ImportError:
     cv2 = None  # type: ignore[assignment]
 
 
-ALL_MODEL_KEYS = ["yolov8n", "yolov8s", "yolov8m"]
+ALL_MODEL_KEYS = ["yolov8n", "yolov8s", "yolov8m", "yolo11n"]
 ALL_CONDITION_KEYS = ["baseline", "random", "casda", "aroma"]
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
@@ -3265,9 +3265,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument(
         "--model",
-        choices=["yolov8n", "yolov8s", "yolov8m", "all"],
+        choices=["yolov8n", "yolov8s", "yolov8m", "yolo11n", "all"],
         default="yolov8n",
-        help="평가할 YOLOv8 모델 (default: yolov8n)",
+        help="평가할 YOLO 모델 (default: yolov8n). yolo11n = E4 detector-generality arm (R2-2)",
     )
     p.add_argument(
         "--condition",
