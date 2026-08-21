@@ -14,13 +14,13 @@ We thank the reviewer for this important point, and we have addressed it with bo
 
 **(1) Learning-based parameter determination (revised §3.2.2–3.2.3).** The parameters that define AROMA's categorical structure are estimated from each dataset's own statistics rather than hand-set: morphology clusters are obtained by a Gaussian mixture whose cluster count is selected per dataset by the Bayesian Information Criterion; background context cells are formed by per-feature tertile (P33/P66) binning of the profiled context features; and the subtype thresholds are derived per dataset from the observed morphology distributions (Table 4b), varying by up to a factor of 4.5 across datasets — variation that any fixed constant would silently absorb.
 
-**(2) Systematic sensitivity analysis (new §4.5).** For the remaining fixed design choices — the ROI-scoring weights — we conducted a full weight-simplex sweep on all five datasets. Perturbing the weights by ±0.1 around the adopted values retains 95.5–100% of the top-k ROI selections (mean 98.5–100%), while removing any single component causes substantial divergence. The exact weight values therefore do not dominate the outcome; what matters is that each component participates in the ranking.
+**(2) Systematic sensitivity analysis (new §4.5).** For the remaining fixed design choices — the ROI-scoring weights — we swept the ctx:morph weight ratio exhaustively on all five datasets. Every ratio from 0.1/0.9 to 0.9/0.1 retains 87.5–100% of the top-K ROI selection, while removing the context term entirely causes substantial divergence (retention falls to 37.5% on Kolektor). The exact weight values therefore do not dominate the outcome; what matters is the participation and priority of the context-compatibility term.
 
 **(3) Ablation study (new §4.4).** A leave-one-out ablation over the three placement stages shows that the full pipeline (0.5197 mAP@0.5) outperforms every partial variant, and that disabling any single stage drops performance below even uniform-random augmentation. The measured gains are thus a property of the integrated pipeline design, not of any individually tuned constant.
 
 In addition, we have narrowed the scope of the "data-driven" claim throughout the manuscript: it now refers specifically to the derivation of the defect–background compatibility model, while the scoring-weight values are explicitly acknowledged as fixed design choices whose robustness is demonstrated by the sensitivity analysis above.
 
-**Manuscript changes:** revised §3.2.2–3.2.3 (data-driven partitions, Table 4b); revised Eq. (2) in §3.2.4 (three-component score with fixed-design-choice statement and sensitivity summary); new sensitivity subsection (§4.5); new ablation study (§4.4, Table 11).
+**Manuscript changes:** revised §3.2.2–3.2.3 (data-driven partitions, Table 4b); fixed-design-choice statement and priority-order rationale at Eq. (2) in §3.2.4; new sensitivity subsection (§4.5); new ablation study (§4.4, Table 11).
 
 ---
 

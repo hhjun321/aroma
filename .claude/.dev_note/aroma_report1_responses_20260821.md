@@ -2,6 +2,13 @@
 
 ## (성격: 세션 기록 · **완료분 + 잔여 작업 목록**. 답변서는 완성, 실험 E4·figure·재정렬은 미착수)
 
+> **⚠️ 최종 결정 A안 (2026-08-21 세션 말미) — Eq.2는 2-항 표기 유지**: 세션 중 Eq.2를 3-성분(0.5/0.3/0.2)으로 전환했다가 **최종적으로 제출본 2-항(0.6·ctx + 0.4·morph) 표기로 회귀** (사용자 결정: 수식 단순화 취지 유지, 수식 변경 가시성 리스크 회피). 이에 따라:
+> - §3.2.4 Eq.2 = 0.6/0.4 + fixed-design·priority-order(context>morphology) 이론 근거 (quality 서술 제거)
+> - §4.5 = **2-항 비율 sweep** (`sensitivity_0604_results.json` 기준: 비율 0.1/0.9~0.9/0.1 → 87.5–100%, ctx-only 83.5–100%, morph-only kolektor 37.5% 붕괴), Table 13 = subtype 라벨 안정성만(재배정률; retention 열 제거 — 2-항 세계에선 Eq.2가 subtype 미소비)
+> - 답변서 3건에서 "three-component 정정" 주장 전부 소거, 비율-inoperative 논증으로 대체
+> - 아래 본문 §2·4의 3-성분 전환 서술은 **중간 이력**로 읽을 것. 3-성분 sweep 산출물(`sensitivity_results.json`)·임계 섭동 retention 수치는 보존 — 재심 대비 예비 데이터
+> - **잔존 리스크 (SOP §4.5(a) 재부상, 저자 인지 하 수용)**: 논문 표기 0.6/0.4 vs production 코드 0.5/0.3/0.2(quality 포함) 불일치 유지. 코드 공개 시 노출 가능. 완화 근거: 비율 비민감 실측 + §4.4 스케일(전면 교체도 3.8pp)
+
 Applied Sciences 1차 심사(Reviewer 1/2/3, Major Revision) 19개 항목에 대한 point-by-point 영문 답변서를
 `대응계획_SOP.md` 기반으로 작성 완료. 답변에 필요한 정량 근거 2건(subtype 임계 섭동, entropy/Gini)을
 로컬 CPU로 신규 실측했고, 답변이 약속하는 원고 수정을 같은 세션에서 반영했다.

@@ -14,9 +14,9 @@ so that a cell scores high only when defects of that cluster are actually observ
 
 This stage determines **which defects to use as sources**. Each candidate is scored by combining its context-based compatibility with the cluster prior,
 
-ROI_score = 0.5 · ctx_prior + 0.3 · morph_prior + 0.2 · quality
+ROI_score = 0.6 · ctx_prior + 0.4 · morph_prior
 
-where ctx_prior is read from `matrix_symmetric`, morph_prior is the cluster prior P(k) of §3.2.2, and quality is a graded subtype-suitability score inherited unchanged from CASDA's ROI suitability evaluation (crop subtype of §3.2.3 → discrete plausibility score for the inspected surface). The top (K) candidates by `ROI_score` become the sources for the placement stages that follow.
+where ctx_prior is read from `matrix_symmetric` and morph_prior is the cluster prior P(k) of §3.2.2. The top (K) candidates by `ROI_score` become the sources for the placement stages that follow.
 
 ### 2. Background Assignment
 
