@@ -154,8 +154,7 @@ def show(ax, im, title, sub, border=None, color="black", overlay=None, vmax=None
                   extent=(0, gw * 64, gh * 64, 0))
         ax.set_xlim(0, arr.shape[1]); ax.set_ylim(arr.shape[0], 0)
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(title, fontsize=8.8, pad=3, color=color)
-    ax.set_xlabel(sub, fontsize=7.6, color=color)
+    ax.set_title(title, fontsize=12, pad=4, color=color)
     for sp in ax.spines.values():
         sp.set_linewidth(2.2 if border else 0.6)
         sp.set_edgecolor(border or "#666666")
@@ -214,11 +213,6 @@ for ds in DATASETS:
             show(axes[rix, cix], bg, title + star, sub,
                  border=color, color=color, overlay=olay, vmax=vmx)
 
-    fig.text(0.01, 0.004,
-             "tiles tinted by that cell's mass in the row's reference histogram "
-             "(row 1: p_src, row 2: p_cls; brighter = heavier); untinted tiles = void, "
-             "unobserved, or defect-overlapping; final row shown untinted",
-             fontsize=7.6, color="#444444")
     out = os.path.join(OUT_DIR, "[figure 3.2.4 4 %s] bg_score_composition.png" % ds)
     fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)

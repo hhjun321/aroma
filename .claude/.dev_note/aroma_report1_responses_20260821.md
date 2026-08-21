@@ -2,6 +2,14 @@
 
 ## (성격: 세션 기록 · **완료분 + 잔여 작업 목록**. 답변서는 완성, 실험 E4·figure·재정렬은 미착수)
 
+> **🟢 후속 반영 (2026-08-22 세션) — B안 기준 원고·figure·정합 마무리**
+> - **Figure 3.2.4-1 재생성 완료** (`roi_selection_flow.py`): ① 무가중 수식 반영 → ② 흑백 단일화(색 구분·범례 3줄·★ 제거) → ③ bg_score 괄호 설명·site 블럭 서술 제거(수식만) → ④ 박스 예시값(0.961 등)·좌상단 스테이지 라벨 제거 — **전 박스 기호(symbolic) 전용**. 스펙 md 동기화, `_mod` 쌍도 수식만 동기화(구식·재생성 안 함).
+> - **Figure 3.2 (aroma_pipeline) 재생성 완료**: §3.2.6 삭제 반영, Quality Gate 스테이지 박스 제거(6→5). pipeline_spec.md 스테이지 표·캡션 초안 갱신(무가중 수식 포함). §3.2 도입부 "and quality control" 문구 삭제.
+> - **Figure 3.2.4-4 스크립트 수정 완료·재생성 블로커**: 샘플 하단 라벨 제거, 상단 라벨 12pt, 최하단 각주 제거. 단 **재생성 불가** — 로컬 미러(`D:/project/AROMA_DATASET`) 레이아웃이 스크립트 기대(`profiling/profiling/<ds>`, `<ds>/train/good`)와 불일치: 실제는 `profiling/profiling_<ds>`(leather는 `profilng_leather` 오타), severstal·kolektor 원본 이미지 디렉터리 부재. 데이터 복원 또는 Colab 재생성 필요(사용자 결정 대기).
+> - **§5 재작성(초본 최소수정 방침)**: `section5 asis.txt`(초본) 문장 보존 + 사실 정정만 — 수치 갱신(+2.84/+1.32/+0.41/+0.29/−0.11, Kolektor baseline 0.950), leather "역전(−4.91)" 서술을 "동등 이득(≈+9pp)·격차 무"로 교체, ref [44–46]. 답변서 약속분 3건만 유지: n=3 유의성 절, CCI 가설 강등 문장(+future-work 절), 생성형 범위 밖+ControlNet [24] 결합 후속(별도 문단 대신 FID 문단에 2문장 축약).
+> - **답변서↔원고 전수 대조 검증 완료**: 불일치 2건 발견·본문 수정 — ① §5 "larger roster as future work" 절 복원(R1-2(3) 약속분, §5 축약 때 탈락), ② **§3.2.3 homogeneity safeguard 정의 신설**(Table 4b 각주가 "described above"로 인용하나 정의 부재였음 — middle tertile < 15%·std → fixed default 문장 추가; §4.5·R3-1(1)이 전제하는 정의). 나머지(Eq.2, §4.4 Table 11 수치·below-Random 주장, §4.5 Table 12, Tables 13–14, Table 2/4b/5b, §4.1 Δ/p, Abstract 수치·neutrality, §2 인용들, MTD Crack/Uneven) 전부 정합 확인.
+> - 인용 스타일: Introduction만 `[4, 5]` 공백 스타일 유지(원본 스타일), 타 섹션은 `[1,2]` 무공백 — 전면 통일 여부는 조판 시 결정.
+>
 > **🔴 최종 번복 B안 (2026-08-21 후속 세션) — 아래 A안을 대체. Eq.2 = 무가중 합, §4.5 sweep 제거**
 > R2-1·R3-3 공통 지적(0.6/0.4 hand-set constants)에 대해 **가중치 자체를 제거**하는 것으로 최종 결정:
 > - **Eq.2 = `ROI_score = ctx_prior + morph_prior` (상수항 없음)**. 논리: §3.2.4 3단계 재편으로 compat model이 선택·배경할당·위치해상 모두에서 직접 소비되므로 선택 점수 내 priority weighting 불필요. §3.2.4 정당화 문단 재작성(항 필요성은 §4.4 ablation 인용).
@@ -9,7 +17,7 @@
 > - **E4 완료 및 반영**: YOLO11n 3-seed 결과(`.claude/.etc/exp4v2/20260821/yolo11/exp4v2_results_{1,2,42}.json`, casda arm은 오수행으로 제외) → §4.3 말미 "Cross-architecture validation (YOLO11n)" 소절 신설. **Table 13**(Severstal, Table 8 형식 per-class) + **Table 14**(AITeX, Table 6 형식 mAP@0.5 단일 열). Severstal AROMA 3-seed 전승(+1.48pp, c2/c4 집중), AITeX comparable(+0.97pp, seed 분산 이내). R2-2 placeholder 실수치로 채움.
 > - 답변서 3건 모두 동기화: R1-1(2) "가중치 제거+tertile 민감도", R2-1(2)·R3-3(1,2) "removed rather than defended", R3-1(2) 인용 수치를 §4.5 실제 수치(3.1–14.5% relabel)로 정정.
 > - **잔존 리스크 갱신**: 논문 무가중 vs production 코드 0.5/0.3/0.2 불일치는 여전(형태는 다르나 동일 지뢰). sweep 실측("값 비민감·항 참여 민감")이 완화 근거로 유효.
-> - **잔여**: figure `[figure 3.2.4 1] roi_selection_flow*.py`(0.6/0.4 하드코딩) 수정·재생성, `[figure 4.5 1] weight_simplex*` retired 처리, section3_2_4_eng/kor.md 초안·AROMA.txt 조립본 미반영, SOP "0.6/0.4 유지 결정" 기록 갱신.
+> - **잔여**: ~~figure `[figure 3.2.4 1] roi_selection_flow*.py` 수정·재생성~~(22일 완료, 위 🟢 참조), `[figure 4.5 1] weight_simplex*` retired 처리, figure 3.2.4-4 재생성(데이터 블로커), section3_2_4_eng/kor.md 초안·AROMA.txt 조립본 미반영, SOP "0.6/0.4 유지 결정" 기록 갱신.
 >
 > **⚠️ (구) 최종 결정 A안 (2026-08-21 세션 말미, 위 B안으로 대체됨) — Eq.2는 2-항 표기 유지**: 세션 중 Eq.2를 3-성분(0.5/0.3/0.2)으로 전환했다가 **최종적으로 제출본 2-항(0.6·ctx + 0.4·morph) 표기로 회귀** (사용자 결정: 수식 단순화 취지 유지, 수식 변경 가시성 리스크 회피). 이에 따라:
 > - §3.2.4 Eq.2 = 0.6/0.4 + fixed-design·priority-order(context>morphology) 이론 근거 (quality 서술 제거)

@@ -11,31 +11,26 @@
 기호(ROI_score, bg_score, h_s, tgt[k])만 사용하고 본문에 없는 요소(τ, lift 가중, subtype warp)는
 그리지 않는다.
 
-## 데이터 출처 (stage 1 실측값)
+## 데이터 출처
 
-- `aroma_dataset/profiling/profiling/severstal/`
-  - morphology_features: `class1_00ac8372f` → linearity 0.961 / solidity 0.882 / AR 5.09
-  - morphology_clusters: cluster k=1, morph_prior P(k) = 0.24 (859/3620)
-  - compatibility_matrix.json: `matrix_symmetric["1"]` peak cell `0_0_0_1_0` = 1.00
-  - ROI_score = 1.00 + 0.24 = 1.24 (무가중 합 — 2026-08-21 Eq.2 상수항 제거 반영)
-- stage 2–3은 기호만 (특정 표본 수치 미표기 — 세대 혼입 방지)
+- 없음 — **전 박스 기호(symbolic)만 표기** (2026-08-22 개정: stage-1 Severstal 실측 예시값 제거).
+  구판의 실측값 출처(참고): `aroma_dataset/profiling/profiling/severstal/` — linearity 0.961 /
+  solidity 0.882 / AR 5.09, k=1, P(k)=0.24, peak cell `0_0_0_1_0`=1.00.
 
-## 구성 (세로, 스테이지 라벨 이탤릭)
+## 구성 (세로 흐름도, 기호만)
 
 ```
-1. defect crop selection
-   Defect crop (lin/sol/AR) ─┬→ [회색] GMM cluster k=1, P(k)=0.24
-                             └→ [파랑] source context cell, ctx_prior=1.00
-   → ROI_score = ctx + morph = 1.24
-   → Rank all → keep Top-K sources
-2. background assignment
-   [파랑] bg_score = src_fit + class_fit + size_fit → Assign highest-scoring normal image
-3. site resolution
-   [파랑] for each valid position s: site_score = ∩(h_s, tgt[k])
-   → [금색★] argmax → final paste position (bbox)
+Defect crop (morphology features) ─┬→ GMM cluster k, morph_prior P(k)
+                                   └→ source context cell c, ctx_prior = matrix_symmetric(k, c)
+→ ROI_score = ctx_prior + morph_prior
+→ Rank all → keep Top-K sources
+→ bg_score = src_fit + class_fit + size_fit → Assign highest-scoring normal image
+→ site_score = ∩(h_s, tgt[k])
+→ argmax → final paste position (bbox)
 ```
 
-색: 파랑 = matrix_symmetric에서 읽는 호환성 신호(핵심), 회색 = 형태 prior, 금색 = 최종 출력.
+스타일(2026-08-21~22 개정): **흑백 단일** — 색 구분·범례(blue/grey/stage-1 설명 3줄)·★ 글리프 제거,
+좌상단 스테이지 라벨(1./2./3. 이탤릭) 제거, 박스별 예시 수치 제거(기호 전용).
 
 ## 본문 정합 계약
 
