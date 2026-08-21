@@ -32,7 +32,7 @@ ctx_prior(k, c) ∝ √( P_def(k, c) · P_clean(c) )
 ROI 선택 단계에서는 **어떤 결함을 합성의 소스로 사용할 것인지**를 결정한다. 후보 결함은 형태 군집과 해당 결함이 관측된 문맥 특성을 기준으로 표현되며, 각 후보의 호환성 점수를 계산하여 상위 (K)개의 후보를 선택한다.
 
 후보의 점수는 문맥 기반 호환성과 형태 군집의 사전확률을 결합하여 다음과 같이 계산한다.
-ROI_score = 0.6 · ctx_prior + 0.4 · morph_prior 
+ROI_score = 0.5 · ctx_prior + 0.3 · morph_prior + 0.2 · quality 
 
 여기서 morph_prior 는 §3.2.2에서 정의한 형태 군집의 사전확률 (P(k))이며, ctx_prior 는 `matrix_symmetric`으로부터 얻어지는 문맥 기반 호환성 값이다.
 두 분포는 동일한 이산 문맥 셀 공간에서 정의된다. 

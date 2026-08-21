@@ -7,6 +7,20 @@ The compatibility-driven selection of Section 3.2.4 deliberately concentrates pl
 
 As shown in Figure 4.1-1, both arms cover every morphology cluster, and the uniform Random arm attains equal or higher context coverage on all five datasets (most visibly MTD, 0.85 vs. 0.48) — an expected consequence of the design, since AROMA concentrates placements on compatible cells rather than spreading them. The per-pair coverage quota nevertheless keeps AROMA's rare-pair coverage at or above Random's on AITeX (1.00 vs. 0.87), Severstal (0.99 vs. 0.93), and MTD (1.00 vs. 0.68); Kolektor is the exception (0.60 vs. 1.00), and MVTec Leather's candidate pool contains no rare pairs. Placement breadth is thus traded for compatibility, and the downstream consequence of this trade is measured in Section 4.3.
 
+Table 5b complements the coverage statistics with two distributional-evenness measures of the selected set: the normalized Shannon entropy (H / log n) and the Gini coefficient of the morphology-cluster frequency distribution, computed for both arms at the same equalized budget.
+
+**Table 5b.** Distributional evenness of the selected ROIs (morphology-cluster distribution): normalized Shannon entropy (higher = more even) and Gini coefficient (lower = more even), AROMA vs. equal-budget uniform Random selection from the same candidate pool.
+
+| Dataset | Entropy (AROMA) | Entropy (Random) | Gini (AROMA) | Gini (Random) |
+|---------|-----------------|------------------|--------------|---------------|
+| Severstal | 0.984 | 0.956 | 0.122 | 0.207 |
+| MTD | 0.956 | 0.867 | 0.210 | 0.338 |
+| MVTec Leather | 0.896 | 0.899 | 0.243 | 0.243 |
+| AITeX | 0.815 | 0.859 | 0.406 | 0.336 |
+| Kolektor | 0.883 | 0.802 | 0.296 | 0.390 |
+
+Two observations follow. First, AROMA's selection is as even as or more even than the uniform-random selection on four of the five datasets (higher entropy and lower Gini on Severstal, MTD, and Kolektor; a tie on MVTec Leather). This is a direct consequence of the per-pair coverage quotas in the allocation (§3.2.4): uniform sampling inherits the candidate pool's cluster imbalance, whereas the quota actively spreads selections across morphology–context pairs. Second, on AITeX — the most heterogeneous surface — AROMA deliberately trades distributional evenness for compatibility (entropy 0.815 vs. 0.859; Gini 0.406 vs. 0.336), concentrating placements on compatible pairs; this breadth-for-compatibility trade is the intended behavior, and its downstream consequence is measured in §4.2, where AITeX shows AROMA's largest gain over random placement. Entropy and Gini measure distributional evenness rather than placement quality; they are reported alongside — not in place of — the coverage statistics above.
+
 **Figure 4.1-2.** Qualitative ROI placement comparison. Baseline shows the real defect region; AROMA and Random overlay five identical-size candidate boxes scored by compatibility versus placed uniformly at random.
 
 Figure 4.1-2 illustrates this behavior qualitatively by directly invoking the same compatibility-scan and uniform-random placement functions on one fixed representative image per dataset a constructed illustration of the placement mechanism itself, distinct from the independently re-selected Random arm of Figure 4.1-1. The compatibility-scored candidates concentrate away from void or texture-degenerate regions, whereas the uniformly placed candidates disregard local context and land on such regions.

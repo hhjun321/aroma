@@ -49,3 +49,12 @@
 [39] Haralick, R. M. Statistical and Structural Approaches to Texture. Proceedings of the IEEE. 1979, 67(5), 786–804. DOI: 10.1109/PROC.1979.11328.
 [40] Gonzalez, R. C.; Woods, R. E. Digital Image Processing, 4th ed.; Pearson: New York, 2018.
 [41] Hu, M.-K. Visual Pattern Recognition by Moment Invariants. IRE Transactions on Information Theory. 1962, 8(2), 179–187. DOI: 10.1109/TIT.1962.1057692.
+# [42]는 §2.5 context-aware placement 문단에서 인용 (report1 R1-3 대응).
+[42] Fang, H.-S.; Sun, J.; Wang, R.; Gou, M.; Li, Y.-L.; Lu, C. InstaBoost: Boosting Instance Segmentation via Probability Map Guided Copy-Pasting. ICCV. 2019, pp. 682–691. DOI: 10.1109/ICCV.2019.00077.
+# [43]은 §2.1 data decentralization 문단에서 인용 (report1 R1-5 대응).
+[43] Yang, B.; Lei, Y.; Li, N.; Li, X.; Si, X.; Chen, C. Balance Recovery and Collaborative Adaptation Approach for Federated Fault Diagnosis of Inconsistent Machine Groups. Knowledge-Based Systems. 2025, 317, 113480. DOI: 10.1016/j.knosys.2025.113480.
+# [44]-[45]는 §2.3 생성형 증강 문단에서 인용 (report1 R2-7 대응).
+[44] Hu, T.; Zhang, J.; Yi, R.; Du, Y.; Chen, X.; Liu, L.; Wang, Y.; Wang, C. AnomalyDiffusion: Few-Shot Anomaly Image Generation with Diffusion Model. AAAI. 2024, 38(8), 8526–8534. DOI: 10.1609/aaai.v38i8.28696.
+[45] Zhang, X.; Xu, M.; Zhou, X. RealNet: A Feature Selection Network with Realistic Synthetic Anomaly for Anomaly Detection. CVPR. 2024, pp. 16699–16708.
+# [46]은 §2.1 supervised 검사 문단에서 인용 (report1 R3-6 대응).
+[46] Stavropoulos, P.; Papacharalampopoulos, A.; Petridis, D. A Vision-Based System for Real-Time Defect Detection: A Rubber Compound Part Case Study. Procedia CIRP. 2020, 93, 1230–1235. DOI: 10.1016/j.procir.2020.04.159.
