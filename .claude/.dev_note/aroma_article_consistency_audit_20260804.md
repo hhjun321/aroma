@@ -1,6 +1,15 @@
 # Article/text 정합 감사 — `ring_sgm` 검증 결과 대조 (2026-08-04)
 
-## (성격: 감사 결과 · **미착수**. 항목별 원문 인용·제안 문장 포함)
+## (성격: 감사 결과 · **부분 착수** — 2026-08-12 §3.2.4 재구성으로 일부 반영. 항목별 원문 인용·제안 문장 포함)
+
+> **2026-08-12 반영 노트** (§3.2.4 전면 재구성 — 3질문 골격: 모델→ROI선택→배경→자리. 계획: `plans/twinkling-humming-codd.md`, 근거: `핵심이론스터디/selection_*.md`):
+> - 항목 2 (0.6/0.4 '무 하드코딩' 과장): **반영** — "fixed at 0.6 and 0.4 for every dataset … not derived from the data"
+> - 항목 4 ('Figure 7' dangling): **반영** — 콜아웃 제거, 사실 서술만 유지
+> - 'During composition' 프레이밍 (line 206 계열): **반영** — "resolved at selection time, before composition; synthesis consumes the coordinate … no further position search"
+> - 항목 27 (폴백 공시): **부분 반영** — §3.2.4에 무백분율 폴백 문단 신설. §3.2.5·§5 몫은 미반영
+> - 항목 28 (unobserved 정의): **변형 반영** — 제안은 §3.2.2였으나 §3.2.4 모델 문단에 절단 격자 정의 삽입. §3.2.2 삽입 여부는 별도 판단
+> - 신규 명료화 (감사 밖): ranking-not-filter 문장, footprint 존재확인/ring 채점 분업, 도장=개별 bbox/과녁=군집, min의 초과 절단
+> - ROI_score 0.6/0.4 vs 정본 CLI realism(0.5/0.3/0.2) **불일치 미해결** — frozen table 산출 당시 score_mode 확인 필요 (신규 발견 2026-08-12)
 
 `ring_sgm` + `k_fit` 개정과 실제 산출물 검증(`aroma_adjacent_context_bg_selection.md` §3-5)에 비춰
 `AROMA연구분석/Article/text/*.txt` 에서 고쳐야 할 지점을 전수 감사한 결과다.

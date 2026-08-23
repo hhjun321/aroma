@@ -7,9 +7,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import csv, io, json
+import csv, io, json, os
 
-PROF = "D:/aroma_dataset/profiling"
+PROF = os.environ.get("AROMA_DATASET_ROOT", "D:/project/aroma_dataset") + "/profiling/profiling"
 OUT  = "D:/project/aroma/AROMA연구분석/Article/figure/image/[figure 3.2.2 1] morphology_clusters.png"
 PALETTE = ["#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#b279a2"]
 
@@ -42,17 +42,16 @@ for ax, ds in zip(axes, ["severstal", "aitex"]):
     for c in clusters:
         k = c["cluster_id"]; col = PALETTE[k % len(PALETTE)]
         m = kk == k
-        pk = c["n_samples"] / N
         ax.scatter(lar[m], lin[m], s=8, alpha=0.30, color=col, edgecolors="none",
-                   label=f"k{k} · {c.get('label','')} (P={pk:.2f})")
+                   label=f"k{k} · {c.get('label','')}")
         cen = c["centroid"]
         ax.scatter(np.log10(max(cen["aspect_ratio"], 1e-6)), cen["linearity"],
                    marker="*", s=260, color=col, edgecolors="black", linewidths=1.1, zorder=5)
-    ax.set_xlabel("log10(aspect ratio)", fontsize=10)
-    ax.set_ylabel("linearity", fontsize=10)
-    ax.set_title(ds, fontsize=12)
-    ax.tick_params(labelsize=8)
-    leg = ax.legend(loc="lower right", fontsize=8, framealpha=0.95, markerscale=2)
+    ax.set_xlabel("log10(aspect ratio)", fontsize=14)
+    ax.set_ylabel("linearity", fontsize=14)
+    ax.set_title(ds, fontsize=14)
+    ax.tick_params(labelsize=12)
+    leg = ax.legend(loc="lower right", fontsize=10, framealpha=0.95, markerscale=2)
     for lh in leg.legend_handles:
         lh.set_alpha(1.0)
 

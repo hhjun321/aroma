@@ -18,7 +18,8 @@ Metric (independent, dataset-pooled reference)
     with the dataset reference (histogram intersection, 0..1).
   * Texture histogram = [intensity | gradient-magnitude | local-variance] (captures
     the texture cues AROMA's compatibility gate uses; not just intensity).
-  * AROMA assignments from clean_bg_selected.json, Random from clean_bg_random_arm.json.
+  * AROMA assignments from clean_bg_selected_ring.json, Random from
+    clean_bg_random_arm_ring.json (ring_sgm site-selection pipeline outputs, 2026-08-03).
 
 One grouped box/violin pair per dataset (ordered by descending CCI). Per-dataset
 Δ = mean(AROMA) - mean(Random) and a one-sided Mann-Whitney U p-value (H1: AROMA>Random)
@@ -164,8 +165,8 @@ def run():
     names, a_all, r_all, stats = [], [], [], []
     for name, key, root, good, scheme, cci in DATASETS:
         ref = build_ref(root, scheme)
-        a = collect(key, good, ref, "clean_bg_selected.json")
-        r = collect(key, good, ref, "clean_bg_random_arm.json")
+        a = collect(key, good, ref, "clean_bg_selected_ring.json")
+        r = collect(key, good, ref, "clean_bg_random_arm_ring.json")
         if len(a) == 0 or len(r) == 0:
             print(f"skip {name} (a={len(a)} r={len(r)})"); continue
         names.append(name); a_all.append(a); r_all.append(r)

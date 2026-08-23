@@ -7,9 +7,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import csv, io, json
+import csv, io, json, os
 
-PROF = "D:/aroma_dataset/profiling"
+PROF = os.environ.get("AROMA_DATASET_ROOT", "D:/project/aroma_dataset") + "/profiling/profiling"
 IMG  = "D:/project/aroma/AROMA연구분석/Article/figure/image"
 DATASETS = ["aitex", "kolektor", "severstal", "mtd", "mvtec_leather"]
 FEATS = ["local_variance", "edge_density", "texture_entropy",
@@ -52,18 +52,12 @@ for ds in DATASETS:
         for e in edges.get(f, []):
             if lo <= e <= hi:
                 ax.axvline(e, color="red", linestyle="--", linewidth=1.4)
-        ax.set_title(LABELS[f], fontsize=10)
-        ax.set_xlabel("value", fontsize=8)
-        ax.set_ylabel("count", fontsize=8)
-        ax.tick_params(labelsize=7)
-    # 6th cell: legend / note
+        ax.set_title(LABELS[f], fontsize=12)
+        ax.set_xlabel("value", fontsize=12)
+        ax.set_ylabel("count", fontsize=12)
+        ax.tick_params(labelsize=11)
+    # 6th cell: unused
     axes[5].axis("off")
-    axes[5].text(0.02, 0.85,
-                 "Red dashed = P33 / P66 tertile\n(= compat cell boundaries, bin_edges)\n\n"
-                 "Population: all profiled 64px context\npatches for this dataset.\n\n"
-                 "These per-feature bins compose the\n3-level context cell (background_type)\n"
-                 "indexing the compatibility model.",
-                 fontsize=9, va="top", ha="left")
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     out = f"{IMG}/[figure 3.2.2 2 {ds}] context_distribution.png"
     fig.savefig(out, dpi=300, bbox_inches="tight")

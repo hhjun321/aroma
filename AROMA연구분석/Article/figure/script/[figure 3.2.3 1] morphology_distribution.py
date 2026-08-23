@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import csv, io, os, textwrap
+import csv, io, os
 
 ROOT = os.environ.get("AROMA_DATASET_ROOT", "D:/project/aroma_dataset")
 PROF = f"{ROOT}/profiling/profiling"
@@ -38,12 +38,12 @@ TABLE4_FEATS = ["aspect_ratio", "solidity"]
 TERTILE_DEGENERATE_RATIO = 0.15
 FIXED_TERTILE_EQUIV = {"aspect_ratio": (2.0, 5.0), "solidity": (0.7, 0.9)}
 LABELS = {
-    "linearity":    "linearity = 1 - AR^-2\n(no criterion; reparam. of aspect_ratio)",
-    "solidity":     "solidity\n(area / convex-hull area)",
-    "extent":       "extent\n(area / bbox area) - no criterion",
-    "aspect_ratio": "aspect_ratio (log x)\n(major / minor axis)",
-    "eccentricity": "eccentricity = sqrt(linearity)\n(no criterion; reparam. of aspect_ratio)",
-    "circularity":  "circularity - no criterion",
+    "linearity":    "linearity",
+    "solidity":     "solidity",
+    "extent":       "extent",
+    "aspect_ratio": "aspect_ratio (log x)",
+    "eccentricity": "eccentricity",
+    "circularity":  "circularity",
 }
 BLUE = "#4c78a8"
 LOG_X = {"aspect_ratio"}   # heavy right skew — linear bins put the mode in one bar
@@ -101,30 +101,18 @@ for ds in DATASETS:
         else:
             bins = 40
         ax.hist(xc, bins=bins, color=BLUE, edgecolor="white", linewidth=0.3)
-        for t in TABLE4.get(f, ()):
+        # Table 4 criterion features use the pipeline's subtype thresholds
+        # (P33/P66 with homogeneity fallback); the rest show their own raw
+        # P33/P66 tertiles so every panel carries its interval boundaries.
+        ticks = TABLE4.get(f) or (float(np.percentile(x, 33)), float(np.percentile(x, 66)))
+        for t in ticks:
             if lo <= t <= hi:
                 ax.axvline(t, color="red", linestyle="--", linewidth=1.4)
-                ax.text(t, ax.get_ylim()[1] * 0.96, f" {t:.3g}", color="red",
-                        fontsize=7, va="top", ha="left")
-        ax.set_title(LABELS[f], fontsize=9)
-        ax.set_xlabel("value", fontsize=8)
-        ax.set_ylabel("count", fontsize=8)
-        ax.tick_params(labelsize=7)
-    note = (
-        "Red dashed = Table 4 subtype thresholds for this dataset: aspect_ratio "
-        f"{TABLE4['aspect_ratio'][0]:.3g} / {TABLE4['aspect_ratio'][1]:.3g}, "
-        f"solidity {TABLE4['solidity'][0]:.3g} / {TABLE4['solidity'][1]:.3g} "
-        "(its own P33 / P66 tertiles; Table 4b)."
-    )
-    if fellback:
-        note += (" Fixed fallback on " + ", ".join(fellback)
-                 + " - middle tertile below 15% of its standard deviation.")
-    note += (" linearity and eccentricity are deterministic reparameterisations of "
-             "aspect_ratio and carry no criterion. Thresholds outside the 1-99 "
-             "percentile display range are not drawn.")
-    fig.text(0.5, 0.005, "\n".join(textwrap.wrap(note, 150)),
-             fontsize=8, ha="center", va="bottom")
-    plt.tight_layout(rect=[0, 0.06, 1, 0.96])
+        ax.set_title(LABELS[f], fontsize=12)
+        ax.set_xlabel("value", fontsize=12)
+        ax.set_ylabel("count", fontsize=12)
+        ax.tick_params(labelsize=11)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     out = f"{IMG}/[figure 3.2.3 1 {ds}] morphology_distribution.png"
     fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
