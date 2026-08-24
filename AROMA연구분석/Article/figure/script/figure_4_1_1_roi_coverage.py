@@ -5,9 +5,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import json, io, random
+import json, io, os, random
 
-BASE = "D:/aroma_dataset"
+BASE = os.environ.get("AROMA_DATASET_ROOT", "D:/project/aroma_dataset")
 OUT  = "D:/project/aroma/AROMA연구분석/Article/figure/image/[figure 4.1 1] roi_coverage.png"
 DS   = ["aitex", "kolektor", "severstal", "mtd", "mvtec_leather"]
 LBL  = ["AITeX", "Kolektor", "Severstal", "MTD", "Leather"]
