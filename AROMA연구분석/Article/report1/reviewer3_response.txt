@@ -21,8 +21,6 @@ The fixed cascade quoted by the reviewer ("linear_scratch: Linearity > 0.9 AND A
 - Empirical confirmation.
 The new ablation study (section 4.4) shows the downstream gain is produced by the estimated compatibility chain itself: replacing any stage with its random counterpart drops mAP below even uniform-random augmentation, confirming that the measured benefit comes from the data-derived structure rather than from any fixed constant.
 
-Manuscript changes: section 3.2.2–3.2.3 (per-dataset percentile derivation, Table 5, homogeneity safeguard); ROI-scoring equation rewritten as an unweighted sum (section 3.2.4); new sensitivity subsection (section 4.5: boundary perturbation); new ablation study (section 4.4); claim-scope wording revised throughout.
-
 Comment 2: The downstream detection results do not demonstrate the superiority of the AROMA framework. On the Kolektor dataset, AROMA (0.9870 mAP@0.5) is actively worse than the Random baseline (0.9938 mAP@0.5). On the MTD dataset, AROMA (0.9440 mAP@0.5) again underperforms the Random baseline (0.9465 mAP@0.5). Most egregiously, on the MVTec Leather dataset, AROMA (0.8052 mAP@0.5) degrades performance severely, losing to both the original Baseline (0.8321 mAP@0.5) and the Random approach (0.8543 mAP@0.5). A proposed pipeline that fails to beat a naive uniform-random placement baseline on 3 out of the 5 evaluated datasets cannot be claimed as a robust advancement.
 
 Response 2: The reviewer's reading of the submitted numbers was fair, and this comment prompted the most substantial revision in the paper, on two levels: the placement method itself was improved, and the evaluation protocol was corrected.
@@ -33,8 +31,6 @@ The revised section 3.2.4 reformulates the final placement decision as ring-cont
 AROMA outperforms Random in mAP@0.5 on four of the five datasets, with gains of +2.84 pp on AITeX, +1.32 pp on Severstal, +0.41 pp on MTD, and +0.29 pp on Kolektor; the difference on MVTec Leather is −0.11 pp. AROMA also outperforms the real-only Baseline on all five datasets, and no dataset shows a meaningful degradation relative to Random beyond seed-level variation. In particular, Kolektor—the dataset cited as showing that AROMA was "actively worse"—now yields an mAP@0.5 of 0.9866 for AROMA versus 0.9837 for Random.
 
 The revised manuscript explicitly states the boundary of the method's effectiveness as a finding. On a monotone background such as MVTec Leather, the background provides little informative compatibility signal: the compatibility ranking becomes nearly uniform, so the placements produced by AROMA differ only marginally from random placements, and the resulting performance difference is correspondingly negligible (−0.11 pp, within seed-level variation). We state this limitation explicitly: for datasets with largely homogeneous backgrounds, the AROMA methodology offers limited benefit.
-
-Manuscript changes: section 3.2.4 (revised ring-context site resolution); Tables 6–10 (re-measured, 3-seed mean ± std, unified protocol); interpretation in section 4.2–4.3; section 5 (monotonic CCI relationship, effectiveness boundary); Abstract and section 6.
 
 Comment 3: The ROI scoring equation (Equation 2) dictates a score based on 0.6⋅ctx_prior+0.4⋅ The authors state that "the ranking introduces no hand-set constants," yet the weights 0.6 and 0.4 are literally hand-set constants. There is no empirical justification or ablation study provided to prove why these specific weights are optimal. Similarly, Equation 4 assigns arbitrary weights (0.30 for blur, 0.30 for contrast, 0.20 for brightness, 0.20 for noise) to calculate a quality score.
 
@@ -48,13 +44,9 @@ The new section 4.4 ablates the placement pipeline stage by stage (ROI selection
 
 The revised text (section 3.2.2–3.2.4) now makes the claim exact: every quantity entering the placement decision is either derived from the dataset's own statistics or an unweighted combination of such quantities; the manually set coefficients the reviewer identified (the Eq. (2) and Eq. (4) weights of the submitted version) have both been removed from the method.
 
-Manuscript changes: offending sentence removed; ROI-scoring equation reduced to an unweighted, constant-free combination with a role-based rationale (section 3.2.4); new boundary-sensitivity subsection (section 4.5); new ablation study (section 4.4); Quality Gate subsection (Eq. (4)) removed.
-
 Comment 4: The visual presentation of the data is severely lacking. Figures 3, 4, 5, and 6 feature text, axis labels, legends, and annotations that are far too small to be legible.
 
 Response 4: We agree and have regenerated the figures. All plots in the revised manuscript have been improved for better readability, with clearer labels, legends, annotations, line widths, and marker sizes.
-
-Manuscript changes: all figures regenerated under an explicit legibility standard; new figures for the revised section 3.2.4; new tables for section 4.4 and section 4.5.
 
 Comments 5–7: The literature review can also be improved please find attached some recommendations to improve your literature review:
 Panagiotis Stavropoulos, Alexios Papacharalampopoulos, Dimitris Petridis, A vision-based system for real-time defect detection: a rubber compound part case study, Procedia CIRP, Volume 93, 2020, Pages 1230–1235.
@@ -68,4 +60,3 @@ The reference and its relevance to vision-based industrial defect detection have
 - Bergmann et al. (IJCV 2021)
 We additionally cite this reference in section 2.1 when introducing one-class anomaly detection, providing appropriate attribution in this context.
 
-Manuscript changes: section 2.1 (Stavropoulos et al. added; Bergmann et al. cited at the one-class paradigm introduction); References updated; broader literature additions in section 2.1, 2.3, and 2.5.
