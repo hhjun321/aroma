@@ -1,6 +1,15 @@
 # Response to Reviewer 3
 
-We thank the reviewer for the careful reading and constructive comments. Below we respond point by point. Reviewer comments are quoted in italics; our responses follow, with the corresponding manuscript changes indicated.
+We thank the reviewer for the careful reading and constructive comments. The central subject of AROMA is the transition from our earlier CASDA pipeline, in which structural settings were specified manually, to a pipeline in which these settings are derived from each dataset's own statistics. To keep the revision aligned with this data-driven thesis, we have strengthened the method in three areas.
+
+(i) learning-based parameter determination for the categorical structure
+Morphology clusters, context cells, and subtype thresholds are all estimated from the profiled data (revised section 3.2.2–3.2.3).
+
+(ii) removal of manually specified weighting from the ROI-scoring equation
+The revised Eq. (3) combines its two normalized terms as an unweighted sum, leaving no coefficient to tune (revised section 3.2.4).
+
+(iii) a ring-based site-resolution step for ROI selection 
+Each defect is placed at the position whose surrounding context distribution best matches the context observed around that defect morphology in the real data, replacing geometric heuristics and random choice alike (revised section 3.2.4).
 
 ---
 
@@ -8,19 +17,17 @@ We thank the reviewer for the careful reading and constructive comments. Below w
 
 > *The introduction and methodology heavily criticize existing frameworks (like CASDA) for relying on "domain-specific handcrafted rules" and claim that AROMA completely replaces manual tuning with a "data-driven" approach. However, this claim is fundamentally false based on the authors' own methodology. Table 3 explicitly uses hardcoded, manually engineered percentile cascades to define background categories (e.g., "Smooth" requires Local Variance ≤ P25). Furthermore, Table 4 dictates entirely arbitrary, hardcoded rules for defect subtypes (e.g., "linear_scratch" is strictly defined as Linearity > 0.9 AND AspectRatio > 5). These are manual, hand-set constants that contradict the paper's central methodological claim of being entirely data-driven.*
 
-**Response.**
+Response.
 
 We appreciate the opportunity to address this directly, because the two tables the reviewer cites work differently in the revised manuscript than the comment assumes — and where the criticism applied to the submitted version, we have fixed the text.
 
-**(1) The cited Table 4 rule no longer exists.** The fixed cascade quoted by the reviewer ("linear_scratch: Linearity > 0.9 AND AspectRatio > 5") has been replaced: subtype boundaries are now derived per dataset from the observed morphology distributions as tertile boundaries, with the derived values reported in Table 4b. These values vary by up to a factor of 4.5 across the five datasets (aspect-ratio boundary 3.62 on MTD vs. 16.43 on AITeX) — variation that the old fixed rule would have absorbed silently, which is exactly why it was removed. A homogeneity safeguard additionally reverts a feature to a conservative default when its middle tertile is degenerate (below 15% of the feature's standard deviation), so a dataset that is genuinely homogeneous in one feature is not split on measurement noise.
+- The cited Table 4 rule no longer exists.
+The fixed cascade quoted by the reviewer ("linear_scratch: Linearity > 0.9 AND AspectRatio > 5") has been replaced: subtype boundaries are now derived per dataset from the observed morphology distributions as tertile boundaries, with the derived values reported in Table 5.
 
-**(2) Percentile rules are not hand-set constants.** A rule such as "LocalVariance ≤ P25" (Table 3) contains no hardcoded threshold: P25 denotes a position in each dataset's own feature distribution, so the operative numerical threshold is recomputed for every dataset and differs across them. What is fixed is only the partition convention (quartiles for background categories, tertiles for context cells and subtypes) — dataset-agnostic machinery, analogous to choosing a histogram binning, not domain knowledge. We verified this convention is not a hidden tuning knob: perturbing the tertile boundary positions by ±5 percentile points, individually and jointly, relabels only 3.1–14.5% of defects — proportional to the distribution mass moved by the shift, with no instability cliff (new §4.5, Table 12).
+- Empirical confirmation. 
+The new ablation study (section 4.4) shows the downstream gain is produced by the estimated compatibility chain itself: replacing any stage with its random counterpart drops mAP below even uniform-random augmentation, confirming that the measured benefit comes from the data-derived structure rather than from any fixed constant.
 
-**(3) What "data-driven" claims — and what it replaces in CASDA.** CASDA's compatibility matrix encodes domain semantics by hand: an engineer asserts which defect types belong on which background types. AROMA derives exactly this object from patch-level co-occurrence statistics (§3.2.4), and its categorical structure from per-dataset estimation (BIC-selected Gaussian-mixture morphology clusters; tertile context cells). The revised manuscript can now state the claim without exception at the placement level: the scoring weights of Eq. (2) — the one remaining hand-set constant pair in the placement path — have been removed (the score is the unweighted sum of two data-derived priors; see our response to Comment 3), so every quantity entering a placement decision is either estimated from the dataset or an unweighted combination of such estimates. We have also separated the two roles the submitted version conflated: the named categories of Tables 3–4 serve interpretation and reporting; placement decisions operate on the estimated clusters and cells.
-
-**(4) Empirical confirmation.** The new ablation study (§4.4) shows the downstream gain is produced by the estimated compatibility chain itself: replacing any stage with its random counterpart drops mAP below even uniform-random augmentation, confirming that the measured benefit comes from the data-derived structure rather than from any fixed constant.
-
-**Manuscript changes:** §3.2.2–3.2.3 (per-dataset percentile derivation, Table 4b, homogeneity safeguard); Eq. (2) rewritten as an unweighted sum (§3.2.4); new sensitivity subsection (§4.5: boundary perturbation); new ablation study (§4.4); claim-scope wording revised throughout.
+Manuscript changes: §3.2.2–3.2.3 (per-dataset percentile derivation, Table 5, homogeneity safeguard); Eq. (2) rewritten as an unweighted sum (§3.2.4); new sensitivity subsection (§4.5: boundary perturbation); new ablation study (§4.4); claim-scope wording revised throughout.
 
 ---
 
@@ -28,17 +35,18 @@ We appreciate the opportunity to address this directly, because the two tables t
 
 > *The downstream detection results do not demonstrate the superiority of the AROMA framework. On the Kolektor dataset, AROMA (0.9870 mAP@0.5) is actively worse than the Random baseline (0.9938 mAP@0.5). On the MTD dataset, AROMA (0.9440 mAP@0.5) again underperforms the Random baseline (0.9465 mAP@0.5). Most egregiously, on the MVTec Leather dataset, AROMA (0.8052 mAP@0.5) degrades performance severely, losing to both the original Baseline (0.8321 mAP@0.5) and the Random approach (0.8543 mAP@0.5). A proposed pipeline that fails to beat a naive uniform-random placement baseline on 3 out of the 5 evaluated datasets cannot be claimed as a robust advancement.*
 
-**Response.**
+Response.
 
 The reviewer's reading of the submitted numbers was fair, and this comment prompted the most substantial revision in the paper, on two levels: the placement method itself was improved, and the evaluation protocol was corrected.
 
-**(1) The placement mechanism of §3.2.4 was revised, and all results were re-measured.** The revised §3.2.4 reformulates the final placement decision as ring-context distribution matching: each candidate position's surrounding context histogram is matched against the compatibility model's target profile for the defect's morphology cluster, with void and unobserved tiles excluded before scoring. All downstream experiments were re-run with this revised mechanism under a unified multi-seed protocol (n = 3 seeds, identical training configuration across all arms; Tables 6–10). The submitted single-seed numbers additionally contained noise artifacts: in near-ceiling regimes (Kolektor baseline ≈ 0.95, MTD ≈ 0.91) sub-1-pp single-seed differences are dominated by seed variance (the corrected Kolektor baseline alone has seed std 0.0398, four times the gap the reviewer cites), and the MVTec Leather run had suffered a training collapse under a configuration ill-suited to that small dataset. The revised protocol removes these artifacts and reports per-seed sign consistency.
+- The placement mechanism of section 3.2.4 was revised, and all results were re-measured. 
+The revised §3.2.4 reformulates the final placement decision as ring-context distribution matching: each candidate position's surrounding context histogram is matched against the compatibility model's target profile for the defect's morphology cluster, with void and unobserved tiles excluded before scoring. All downstream experiments were re-run with this revised mechanism under a unified multi-seed protocol (n = 3 seeds, identical training configuration across all arms).
 
-**(2) Under the revised method and protocol, the pattern the reviewer criticizes no longer exists.** AROMA vs. Random (mAP@0.5): AITeX +2.84 pp, Severstal +1.32 pp, MTD +0.41 pp, Kolektor +0.29 pp, MVTec Leather −0.11 pp. AROMA outperforms the real-only Baseline on **5 of 5** datasets, and on no dataset does it fall below Random beyond seed noise. In particular Kolektor — cited as "actively worse" — now shows AROMA 0.9866 vs. Random 0.9837.
+AROMA outperforms Random in mAP@0.5 on four of the five datasets, with gains of +2.84 pp on AITeX, +1.32 pp on Severstal, +0.41 pp on MTD, and +0.29 pp on Kolektor; the difference on MVTec Leather is −0.11 pp. AROMA also outperforms the real-only Baseline on all five datasets, and no dataset shows a meaningful degradation relative to Random beyond seed-level variation. In particular, Kolektor—the dataset cited as showing that AROMA was "actively worse"—now yields an mAP@0.5 of 0.9866 for AROMA versus 0.9837 for Random.
 
-**(3) What the paper claims — and where AROMA's methodology does not help.** We do not claim universal superiority over random placement; the revised manuscript states the boundary of the method's effectiveness as a finding. On a monotone background such as MVTec Leather, the background offers no informative compatibility signal: the compatibility ranking collapses onto a near-uniform pool, so the placements AROMA produces barely differ from random placements, and the resulting performance difference is accordingly not meaningful (−0.11 pp, within seed noise). We state this explicitly: **for datasets with largely homogeneous backgrounds, the AROMA methodology offers little benefit** — augmentation itself still helps (both arms gain ≈ +9 pp over baseline on Leather), but the placement policy is not the operative variable there. Across the roster the AROMA–random gap decreases monotonically with background-context complexity (CCI, §5), from +2.84 pp on the most heterogeneous surface to parity on the most homogeneous one, and the worst case observed anywhere is parity. This calibrated claim — consistent gains where baseline headroom and contextual diversity coexist, neutrality on monotone backgrounds — is the robust and reproducible form of the contribution.
+The revised manuscript explicitly states the boundary of the method's effectiveness as a finding. On a monotone background such as MVTec Leather, the background provides little informative compatibility signal: the compatibility ranking becomes nearly uniform, so the placements produced by AROMA differ only marginally from random placements, and the resulting performance difference is correspondingly negligible (−0.11 pp, within seed-level variation). We state this limitation explicitly: for datasets with largely homogeneous backgrounds, the AROMA methodology offers limited benefit.
 
-**Manuscript changes:** §3.2.4 (revised ring-context site resolution); Tables 6–10 (re-measured, 3-seed mean ± std, unified protocol); interpretation in §4.2–4.3; §5 (monotonic CCI relationship, effectiveness boundary); Abstract and §6.
+Manuscript changes: §3.2.4 (revised ring-context site resolution); Tables 6–10 (re-measured, 3-seed mean ± std, unified protocol); interpretation in §4.2–4.3; §5 (monotonic CCI relationship, effectiveness boundary); Abstract and §6.
 
 ---
 
@@ -46,17 +54,17 @@ The reviewer's reading of the submitted numbers was fair, and this comment promp
 
 > *The ROI scoring equation (Equation 2) dictates a score based on 0.6⋅ctx_prior+0.4⋅ The authors state that "the ranking introduces no hand-set constants," yet the weights 0.6 and 0.4 are literally hand-set constants. There is no empirical justification or ablation study provided to prove why these specific weights are optimal. Similarly, Equation 4 assigns arbitrary weights (0.30 for blur, 0.30 for contrast, 0.20 for brightness, 0.20 for noise) to calculate a quality score.*
 
-**Response.**
+Response.
 
-**(1) The quoted sentence was wrong, and both it and the weights themselves have been removed.** The reviewer is right that "the ranking introduces no hand-set constants" contradicted the visible 0.6/0.4 weights. Rather than defending those constants, we eliminated them: the revised Eq. (2) combines the two normalized terms as an unweighted sum, ROI_score = ctx_prior + morph_prior, with a role-based rationale in §3.2.4 — the context term carries the placement signal, spans the full [0, 1] range after row normalization, and therefore naturally dominates the ranking, while the bounded cluster prior orders candidates of equal compatibility.
+- The quoted sentence was wrong, and both it and the weights themselves have been removed.
+The reviewer is right that "the ranking introduces no hand-set constants" contradicted the visible 0.6/0.4 weights. The revised Eq. (2) combines the two normalized terms as an unweighted sum, ROI_score = ctx_prior + morph_prior, with a role-based rationale in section 3.2.4 — the context term carries the placement signal, spans the full [0, 1] range after row normalization, and therefore naturally dominates the ranking, while the bounded cluster prior orders candidates of equal compatibility.
 
-**(2) The removal is justified empirically, not asserted.** We do not claim any weighting is optimal; we verified that none is consequential. Sweeping the ctx:morph ratio exhaustively on all five datasets, every ratio from 0.1/0.9 to 0.9/0.1 retains 87.5–100% of the top-K selection — including the 0.6/0.4 value the reviewer cites, no value in that range is "optimal" because none is operative. The unweighted form's selection coincides with the submitted 0.6/0.4 form's selection to 93.5–100%, so the simplification changes essentially nothing downstream. The only consequential change is eliminating a term entirely, and asymmetrically so: a context-only score still retains 83.5–100%, whereas a morphology-only score collapses on Kolektor (37.5% retention) and degrades sharply on MVTec Leather (61.0%), identifying the context term as the load-bearing component. As a scale reference, the ablation of §4.4 shows that even replacing the entire scored selection with a uniform-random one shifts mAP by only 3.8 pp; the selection differences among weight ratios (0–12.5% of membership) are far smaller in extent.
+- Ablation study is now provided.
+The new section 4.4 ablates the placement pipeline stage by stage (ROI selection, background assignment, site resolution) with downstream mAP as the endpoint: the full pipeline (0.5197) outperforms every leave-one-out variant, and removing the compatibility-based ROI selection causes the largest drop (−3.80 pp, consistent across all three seeds). This complements the sensitivity analysis: the mechanism's presence is what carries the gain; the coefficient values are non-critical.
 
-**(3) Ablation study is now provided.** The new §4.4 ablates the placement pipeline stage by stage (ROI selection, background assignment, site resolution) with downstream mAP as the endpoint: the full pipeline (0.5197) outperforms every leave-one-out variant, and removing the compatibility-based ROI selection causes the largest drop (−3.80 pp, consistent across all three seeds). This complements the sensitivity analysis: the mechanism's presence is what carries the gain; the coefficient values are non-critical.
+The revised text (section 3.2.2–3.2.4) now makes the claim exact: every quantity entering the placement decision is either derived from the dataset's own statistics or an unweighted combination of such quantities; the manually set coefficients the reviewer identified (Eq. (2) weights, Eq. (4) weights) have both been removed from the method.
 
-**(4) Equation (4) has been removed.** We agree these weights were arbitrary in the sense that matters: they were inherited unchanged from our earlier CASDA pipeline rather than derived. In the revision we deleted the quality-gate subsection presenting Eq. (4) — its fixed weights and absolute threshold — instead of defending it. The gate itself is a coarse admissibility pre-filter that discards unusable patches before any placement decision and is applied identically to the AROMA and random arms, so it is common-mode with respect to every comparison in the paper, operates upstream of and independently from the placement scoring of Eq. (2), and is not part of the claimed contribution. No numbered equation followed Eq. (4), so the numbering of Equations (1)–(3) is unchanged.
-
-**Manuscript changes:** offending sentence removed; Eq. (2) reduced to an unweighted, constant-free combination with a role-based rationale (§3.2.4); new boundary-sensitivity subsection (§4.5); new ablation study (§4.4); §3.2.6 (Quality Gate, Eq. (4)) removed.
+Manuscript changes: offending sentence removed; Eq. (2) reduced to an unweighted, constant-free combination with a role-based rationale (§3.2.4); new boundary-sensitivity subsection (§4.5); new ablation study (§4.4); §3.2.6 (Quality Gate, Eq. (4)) removed.
 
 ---
 
@@ -64,11 +72,11 @@ The reviewer's reading of the submitted numbers was fair, and this comment promp
 
 > *The visual presentation of the data is severely lacking. Figures 3, 4, 5, and 6 feature text, axis labels, legends, and annotations that are far too small to be legible.*
 
-**Response.**
+Response.
 
-We agree and have regenerated the figures. All plots in the revised manuscript are re-rendered with legibility as an explicit constraint: axis labels, tick labels, legends, and in-figure annotations are enforced to a minimum effective size of 7–8 pt at the final single-column print width, line widths and marker sizes are increased accordingly, and dense annotation overlays are either enlarged or moved into captions. We note additionally that a substantial fraction of the figures were replaced or newly created in the course of this revision — the placement mechanism of §3.2.4 was revised (new pipeline, compatibility-heatmap, background-assignment, and site-resolution figures), the results of §4 were re-measured under the multi-seed protocol, and new tables accompany the sensitivity and ablation analyses — so the figures the reviewer cites have been superseded rather than merely reformatted.
+We agree and have regenerated the figures. All plots in the revised manuscript have been improved for better readability, with clearer labels, legends, annotations, line widths, and marker sizes.
 
-**Manuscript changes:** all figures regenerated under an explicit legibility standard; new figures for the revised §3.2.4; new tables for §4.4 and §4.5.
+Manuscript changes: all figures regenerated under an explicit legibility standard; new figures for the revised §3.2.4; new tables for §4.4 and §4.5.
 
 ---
 
@@ -78,16 +86,16 @@ We agree and have regenerated the figures. All plots in the revised manuscript a
 > *Panagiotis Stavropoulos, Alexios Papacharalampopoulos, Dimitris Petridis, A vision-based system for real-time defect detection: a rubber compound part case study, Procedia CIRP, Volume 93, 2020, Pages 1230–1235.*
 > *Bergmann, P., Batzner, K., Fauser, M. et al. The MVTec Anomaly Detection Dataset: A Comprehensive Real-World Dataset for Unsupervised Anomaly Detection. Int J Comput Vis 129, 1038–1059 (2021).*
 
-**Response.**
+Response.
 
 We thank the reviewer for the recommendations; both works are now reflected in the manuscript.
 
-**Bergmann et al. (IJCV 2021)** was already cited in the submitted version as the source of the MVTec Anomaly Detection dataset — reference [3] — and MVTec Leather, one of the five datasets in our evaluation roster, is drawn from it (§3.1). In the revised version we additionally cite it where one-class anomaly detection is introduced in §2.1, so the dataset's role in establishing that paradigm is properly attributed.
+- Bergmann et al. (IJCV 2021)
+we additionally cite this reference in §2.1 when introducing one-class anomaly detection, providing appropriate attribution in this context.
 
-**Stavropoulos et al. (Procedia CIRP 2020)** has been added to §2.1: as a vision-based real-time defect detection case study on rubber compound parts, it illustrates the supervised, deployment-oriented end of industrial inspection that motivates our problem setting, and it now anchors the discussion of practical inspection systems alongside the existing surveys.
+- Stavropoulos et al. (Procedia CIRP 2020) has been added to section 2.1.
+The reference and its relevance to vision-based industrial defect detection have been appropriately incorporated into the discussion in section 2.1.
 
-Beyond these two recommendations, the literature review was broadened in this revision: §2.3 adds recent diffusion-based defect generation (AnomalyDiffusion, AAAI 2024; RealNet, CVPR 2024), §2.5 adds context-aware placement in natural scenes (Dvornik et al., ECCV 2018; InstaBoost, ICCV 2019) with an explicit statement of how our industrial setting differs, and §2.1 adds a discussion of data decentralization and federated fault diagnosis (Yang et al., Knowledge-Based Systems 2025).
-
-**Manuscript changes:** §2.1 (Stavropoulos et al. added; Bergmann et al. cited at the one-class paradigm introduction); References updated; broader literature additions in §2.1, §2.3, §2.5.
+Manuscript changes: §2.1 (Stavropoulos et al. added; Bergmann et al. cited at the one-class paradigm introduction); References updated; broader literature additions in §2.1, §2.3, §2.5.
 
 ---

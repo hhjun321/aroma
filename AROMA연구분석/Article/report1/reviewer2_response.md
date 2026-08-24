@@ -1,6 +1,15 @@
 # Response to Reviewer 2
 
-We thank the reviewer for the careful reading and constructive comments. Below we respond point by point. Reviewer comments are quoted in italics; our responses follow, with the corresponding manuscript changes indicated.
+We thank the reviewer for the careful reading and constructive comments. The central subject of AROMA is the transition from our earlier CASDA pipeline, in which structural settings were specified manually, to a pipeline in which these settings are derived from each dataset's own statistics. To keep the revision aligned with this data-driven thesis, we have strengthened the method in three areas.
+
+(i) learning-based parameter determination for the categorical structure
+morphology clusters, context cells, and subtype thresholds are all estimated from the profiled data (revised section 3.2.2–3.2.3).
+
+(ii) removal of manually specified weighting from the ROI-scoring equation
+the revised Eq. (3) combines its two normalized terms as an unweighted sum, leaving no coefficient to tune (revised section 3.2.4).
+
+(iii) a ring-based site-resolution step for ROI selection 
+each defect is placed at the position whose surrounding context distribution best matches the context observed around that defect morphology in the real data, replacing geometric heuristics and random choice alike (revised section 3.2.4).
 
 ---
 
@@ -8,19 +17,13 @@ We thank the reviewer for the careful reading and constructive comments. Below w
 
 > *The paper repeatedly claims to be "free of manual tuning" and "without hand-set constants," yet the hyperparameters in Equations (2) and (4) are manually set.*
 
-**Response.**
+Response.
 
 We appreciate the opportunity to clarify the scope of this claim, and we have sharpened the wording in the revised manuscript so that it cannot be misread.
 
-**(1) What "free of manual tuning" refers to.** The claim concerns the dataset-facing parameters — everything that must adapt when the method is applied to a new dataset. In the revised manuscript, all of these are derived from each dataset's own statistics rather than set by hand: morphology clusters are selected by BIC over a Gaussian mixture, context cells are formed by per-feature tertile (P33/P66) binning, background categories use percentile boundaries (e.g., P25) of the profiled features, and defect-subtype thresholds are derived from the observed per-dataset morphology distributions (Table 4b), varying by up to a factor of 4.5 across datasets. None of these involve manual tuning: applying AROMA to a new dataset re-derives them automatically, with no re-engineering.
+The revised text (section 3.2.2–3.2.4) now makes the claim exact: every quantity entering the placement decision is either derived from the dataset's own statistics or an unweighted combination of such quantities; the manually set coefficients the reviewer identified (Eq. (2) weights, Eq. (4) weights) have both been removed from the method.
 
-**(2) The hyperparameters of Equation (2) have been eliminated, supported by a sensitivity analysis.** We swept the ctx:morph weight ratio exhaustively on all five datasets: no ratio from 0.1/0.9 to 0.9/0.1 changes the top-K ROI selection materially (87.5–100% retention), while eliminating the context term entirely is the only consequential change (retention falls to 37.5% on Kolektor). Since the ratio is demonstrably inoperative for the rank-based selection, the revised Eq. (2) combines the two normalized terms as an unweighted sum; the unweighted form's selection coincides with the submitted weighted form's selection to 93.5–100%. Equation (2) therefore no longer contains manually set constants. As a scale reference, the ablation of §4.4 shows that even replacing the entire scored selection with a uniform-random one shifts mAP by only 3.8 pp; the selection differences among weight ratios (0–12.5% of membership) are far smaller in extent.
-
-**(3) Equation (4) has been removed, and the quality criterion is disclosed as inherited.** In revising the quality-gating description we deleted the subsection that presented Eq. (4) — its fixed component weights and absolute acceptance threshold — rather than defending it. The underlying gate is a coarse admissibility pre-filter inherited unchanged from our earlier CASDA pipeline; it discards unusable patches *before* any placement decision and is applied identically to the AROMA and random arms, so it is common-mode with respect to every comparison in the paper, operates upstream of and independently from the placement scoring of Eq. (2), and is not part of the claimed data-driven contribution. No numbered equation followed Eq. (4), so the numbering of Equations (1)–(3) is unchanged.
-
-The revised text (§3.2.2–3.2.4) now makes the claim exact: every quantity entering the placement decision is either derived from the dataset's own statistics or an unweighted combination of such quantities; the manually set coefficients the reviewer identified (Eq. (2) weights, Eq. (4) weights) have both been removed from the method.
-
-**Manuscript changes:** Eq. (2) reduced to an unweighted, constant-free combination with a role-based rationale (§3.2.4); §3.2.6 (Quality Gate, Eq. (4)) removed; new boundary-sensitivity subsection (§4.5); data-derived partition descriptions in §3.2.2–3.2.3.
+Manuscript changes: Eq. (2) reduced to an unweighted, constant-free combination with a role-based rationale (§3.2.4); §3.2.6 (Quality Gate, Eq. (4)) removed; new boundary-sensitivity subsection (§4.5); data-derived partition descriptions in §3.2.2–3.2.3.
 
 ---
 
@@ -28,15 +31,11 @@ The revised text (§3.2.2–3.2.4) now makes the claim exact: every quantity ent
 
 > *Only YOLOv8n is used as the downstream detector; it is recommended to supplement the experiments with more recent mainstream detectors.*
 
-**Response.**
+Response.
 
-Following this recommendation, we supplemented the evaluation with **YOLOv11n**, a recent mainstream detector, under the identical three-arm (Baseline / Random / AROMA), three-seed protocol on Severstal and AITeX — the heterogeneous-surface datasets where the placement effect is the operative question (new Tables 13–14, §4.3).
+Following this recommendation, we supplemented the evaluation with YOLOv11n, a recent mainstream detector, under the identical three-arm (Baseline / Random / AROMA), three-seed protocol on Severstal and AITeX — the heterogeneous-surface datasets where the placement effect is the operative question (new Tables 13–14, section 4.3).
 
-The results reproduce the YOLOv8n pattern. On Severstal (Table 13), AROMA outperforms Random in all three seeds (+1.44, +0.65, +2.34 pp; mean +1.48 pp, 0.5080 vs. 0.4932 mAP@0.5), with the gain again concentrated in the classes where random, frequency-following synthesis under-serves the minority (c2 +2.10 pp and c4 +4.81 pp vs. Random); AROMA is also the only condition whose recall exceeds the Baseline (0.515 vs. 0.503). On AITeX (Table 14), both augmentation arms clearly exceed the Baseline (Random +3.30 pp, AROMA +4.27 pp on mAP@0.5), and the AROMA−Random gap (+0.97 pp) sits within the seed-level variance of this small dataset, so we read the two placement strategies as comparable there, both exceeding the Baseline. The class-conditional gain structure and its magnitude are thus stable across detector generations, indicating that the measured placement effect is a property of the synthesized data rather than of a particular detector architecture.
-
-Two considerations guided the scope of this supplement. First, the paper's claim is about the *data-side* placement policy, and the detector is only the measurement instrument; demonstrating that the effect survives a change of instrument on two representative datasets addresses the generality question directly. Second, YOLOv8n is retained as the primary detector throughout the paper for comparability with prior industrial augmentation studies and with our earlier controlled experiments, which were all conducted under that architecture.
-
-**Manuscript changes:** new detector-generality paragraph and tables in §4.3 (YOLOv11n, Tables 13–14: Severstal and AITeX, three-arm × three-seed).
+Manuscript changes: new detector-generality paragraph and tables in §4.3 (YOLOv11n, Tables 13–14: Severstal and AITeX, three-arm × three-seed).
 
 ---
 
@@ -44,17 +43,19 @@ Two considerations guided the scope of this supplement. First, the paper's claim
 
 > *Fixed thresholds are used for defect subtype classification without providing a threshold sensitivity analysis.*
 
-**Response.**
+Response.
 
 We address this in three parts.
 
-**(1) The subtype thresholds are no longer fixed constants.** In the revised manuscript (§3.2.3), subtype boundaries are derived per dataset from the observed morphology distributions as percentile boundaries, reported in Table 4b. The derived values vary by up to a factor of 4.5 across datasets (aspect-ratio boundary 3.62 on MTD vs. 16.43 on AITeX), demonstrating precisely the cross-dataset variation that a fixed threshold would absorb silently.
+- The subtype thresholds are no longer fixed constants.
+In the revised manuscript (section 3.2.3), subtype boundaries are derived per dataset from the observed morphology distributions as percentile boundaries, reported in Table 5. The derived values vary by up to a factor of 4.5 across datasets (aspect-ratio boundary 3.62 on MTD vs. 16.43 on AITeX), demonstrating precisely the cross-dataset variation that a fixed threshold would absorb silently.
 
-**(2) Subtype labels do not gate placement.** The revised §3.2.2–3.2.4 separates the two roles that were conflated in the original text: placement decisions operate on the BIC-selected morphology clusters and tertile context cells, and the ROI ranking of Eq. (2) does not consume the subtype labels; the named categories serve interpretation and reporting. A perturbation of a subtype boundary therefore cannot alter which placements are generated.
+- Equation (4) has been removed, and the quality criterion is disclosed as inherited.
+In revising the quality-gating description, we deleted the subsection presenting Eq. (4), including its fixed component weights and absolute acceptance threshold, rather than attempting to justify these manually specified settings. The underlying gate is a coarse admissibility pre-filter inherited unchanged from our earlier CASDA pipeline. It discards unusable patches before any placement decision and is applied identically to both the AROMA and random arms. Thus, it is common to all comparisons in the paper, operates upstream of and independently from the placement scoring in Eq. (2), and is not part of the claimed data-driven contribution.
 
-**(3) Threshold sensitivity analysis (new §4.5).** We nevertheless quantified the stability of the labels themselves: perturbing the percentile points defining the tertile boundaries by ±5 points (P33/P66 → 28–38 / 61–71) on all five datasets relabels 3.1–9.1% of defects for a single-boundary shift and 7.7–14.5% for a joint shift (Table 12) — in each case proportional to the distribution mass moved by the shift, with no amplification or instability cliff.
+The revised text (section 3.2.2–3.2.4) now makes the claim exact: every quantity entering the placement decision is either derived from the dataset's own statistics or an unweighted combination of such quantities; the manually set coefficients the reviewer identified (Eq. (2) weights, Eq. (4) weights) have both been removed from the method.
 
-**Manuscript changes:** §3.2.3 (per-dataset percentile boundaries and derived-threshold table); new sensitivity subsection (§4.5) reporting the boundary-perturbation results.
+Manuscript changes: Eq. (2) reduced to an unweighted, constant-free combination with a role-based rationale (§3.2.4); §3.2.6 (Quality Gate, Eq. (4)) removed; new boundary-sensitivity subsection (§4.5); data-derived partition descriptions in §3.2.2–3.2.3.
 
 ---
 
@@ -62,7 +63,7 @@ We address this in three parts.
 
 > *The CCI formula lists only three components, whereas the text explicitly states "four normalized components."*
 
-**Response.**
+Response.
 
 We thank the reviewer for catching this inconsistency. The formula in the submitted version omitted one component; the text's statement of "four normalized components" was correct. The revised §3.2.1 now states the complete formula,
 
@@ -70,7 +71,7 @@ CCI = Mean(TextureEntropy, ContextClusterCount, FreqComplexity, OrientVariance),
 
 and we have additionally added Table 2, which decomposes the CCI of each of the five datasets into these four measured components (texture entropy, context cluster count, frequency-domain complexity, and gradient-orientation variance), so the formula, the text, and the reported values can be verified against one another directly.
 
-**Manuscript changes:** §3.2.1 (complete four-component formula); new Table 2 (per-dataset CCI decomposition).
+Manuscript changes: §3.2.1 (complete four-component formula); new Table 2 (per-dataset CCI decomposition).
 
 ---
 
@@ -78,21 +79,13 @@ and we have additionally added Table 2, which decomposes the CCI of each of the 
 
 > *Quantitative results for Shannon entropy and the Gini coefficient are not reported.*
 
-**Response.**
+Response.
 
-We now report these values quantitatively. The revised §4.1 adds Table 5b with the normalized Shannon entropy and Gini coefficient of the selected-ROI morphology-cluster distribution, for AROMA and for an equal-budget uniform-random selection from the same candidate pool, on all five datasets:
+We now report these values quantitatively. The revised section 4.1 adds Table 7 with the normalized Shannon entropy and Gini coefficient of the selected-ROI morphology-cluster distribution, for AROMA and for an equal-budget uniform-random selection from the same candidate pool, on all five datasets:
 
-| Dataset | Entropy (AROMA / Random) | Gini (AROMA / Random) |
-|---|---|---|
-| Severstal | 0.984 / 0.956 | 0.122 / 0.207 |
-| MTD | 0.956 / 0.867 | 0.210 / 0.338 |
-| MVTec Leather | 0.896 / 0.899 | 0.243 / 0.243 |
-| AITeX | 0.815 / 0.859 | 0.406 / 0.336 |
-| Kolektor | 0.883 / 0.802 | 0.296 / 0.390 |
+Two observations accompany the table in the revised text. First, AROMA's selection is at least as even as uniform-random selection on four of the five datasets, with higher entropy and lower Gini coefficients on Severstal, MTD, and Kolektor, and a tie on MVTec Leather. Second, on AITeX—the most heterogeneous surface—AROMA deliberately trades distributional evenness for compatibility (entropy: 0.815 vs. 0.859; Gini: 0.406 vs. 0.336), concentrating placements on compatible pairs. This breadth-for-compatibility trade-off is an intended behavior, and its downstream consequence is evaluated in section 4.2, where AITeX shows the largest gain of AROMA over random placement (+2.84 pp). We also clarify that entropy and Gini measure distributional evenness rather than placement quality. Accordingly, the purpose-aligned selection metrics remain the coverage statistics reported in section 4.1, alongside which the new distributional measures are provided.
 
-Two observations accompany the table in the revised text. First, AROMA's selection is as even as or more even than uniform-random selection on four of the five datasets (higher entropy, lower Gini on Severstal, MTD, and Kolektor; tie on MVTec Leather). This is a direct consequence of the per-pair coverage quotas in the allocation (§3.2.4): uniform sampling inherits the candidate pool's cluster imbalance, whereas the quota actively spreads selections across morphology–context pairs. Second, on AITeX — the most heterogeneous surface — AROMA deliberately trades distributional evenness for compatibility (entropy 0.815 vs. 0.859; Gini 0.406 vs. 0.336), concentrating placements on compatible pairs; this breadth-for-compatibility trade is the intended behavior, and its downstream consequence is measured in §4.2 (AITeX is where AROMA's gain over random placement is largest, +2.84 pp). We also note that entropy and Gini measure distributional evenness, not placement quality; the purpose-aligned selection metrics remain the coverage statistics of §4.1, alongside which the new values are reported.
-
-**Manuscript changes:** §4.1 (new Table 5b, entropy and Gini for both arms on all five datasets, with interpretation paragraph).
+Manuscript changes: §4.1 (new Table 5b, entropy and Gini for both arms on all five datasets, with interpretation paragraph).
 
 ---
 
@@ -100,15 +93,11 @@ Two observations accompany the table in the revised text. First, AROMA's selecti
 
 > *The keywords include "ControlNet" and "Stable Diffusion," despite neither technique being used in the proposed method.*
 
-**Response.**
+Response.
 
 We agree and have corrected the keyword list. "ControlNet" and "Stable Diffusion" described related work rather than the proposed method and have been removed. The revised keywords reflect what the paper actually contributes and uses:
 
-*industrial visual inspection; defect detection; data augmentation; copy-paste synthesis; context-aware placement; defect–background compatibility; dataset complexity index; YOLOv8*
-
-(ControlNet-based generation is discussed only as related work in §2.4 and as a possible extension in §5, where it is cited, not claimed.)
-
-**Manuscript changes:** keyword list replaced.
+Manuscript changes: keyword list replaced.
 
 ---
 
@@ -116,16 +105,14 @@ We agree and have corrected the keyword list. "ControlNet" and "Stable Diffusion
 
 > *The references lack relevant works published within the last three years.*
 
-**Response.**
+Response.
 
 We have strengthened the recency of the bibliography. The revised manuscript adds three works from 2024–2025, integrated into the text rather than appended:
 
-- **Hu et al., AAAI 2024 (AnomalyDiffusion)** — few-shot anomaly image generation with diffusion models, cited in §2.3 as the current representative of diffusion-based defect generation;
-- **Zhang et al., CVPR 2024 (RealNet)** — realistic synthetic anomaly generation with strength-controllable diffusion, cited in §2.3 as recent evidence that synthetic-anomaly realism drives downstream detection;
-- **Yang et al., Knowledge-Based Systems 2025** — balance recovery and collaborative adaptation for federated fault diagnosis, cited in the new data-decentralization discussion in §2.1.
+- Hu et al., AAAI 2024 (AnomalyDiffusion) — few-shot anomaly image generation with diffusion models, cited in §2.3 as the current representative of diffusion-based defect generation;
+- Zhang et al., CVPR 2024 (RealNet) — realistic synthetic anomaly generation with strength-controllable diffusion, cited in §2.3 as recent evidence that synthetic-anomaly realism drives downstream detection;
+- Yang et al., Knowledge-Based Systems 2025 — balance recovery and collaborative adaptation for federated fault diagnosis, cited in the new data-decentralization discussion in §2.1.
 
-These join the recent works already present in the submitted version, including Hütten et al. (2024, survey), EfficientAD (WACV 2024), SimpleNet (CVPR 2023), ControlNet (ICCV 2023), and SAM (ICCV 2023). The related-work discussion now covers the 2023–2025 state of the art in both generative defect synthesis and industrial anomaly detection.
-
-**Manuscript changes:** §2.1 and §2.3 (new citations in context); References (three works added, 2024–2025).
+Manuscript changes: §2.1 and §2.3 (new citations in context); References (three works added, 2024–2025).
 
 ---
