@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Rectangle
 
-SYNTH_ROOT = Path("D:/aroma_dataset")          # synth_aroma / synth_random live here
+SYNTH_ROOT = Path("D:/project/aroma_dataset")          # synth_aroma / synth_random live here
 OUT_DIR = Path("D:/project/aroma/AROMA연구분석/Article/figure/image")
 
 BBOX_COLOR = "#ff2d2d"    # red — visible on grayscale textile/metal
@@ -42,9 +42,9 @@ ASPECT_PRESERVE = {"severstal"}
 
 # dataset -> (fig_num, base_root, test_subdir, mask_subdir, mask_suffix, mask_ext)
 DATASETS = {
-    "aitex":         ("4.2 1",  "D:/aroma_dataset",         "aitex_tiled/test", "aitex_tiled/ground_truth", "_mask", ".png"),
-    "kolektor":      ("4.2 2",  "D:/aroma_dataset",         "kolektor/test",    "kolektor/ground_truth",    "_mask", ".png"),
-    "severstal":     (10, "D:/aroma_dataset",         "severstal/test",   "severstal/masks",          "",      ".png"),
+    "aitex":         ("4.2 1",  "D:/project/aroma_dataset",         "aitex_tiled/test", "aitex_tiled/ground_truth", "_mask", ".png"),
+    "kolektor":      ("4.2 2",  "D:/project/aroma_dataset",         "kolektor/test",    "kolektor/ground_truth",    "_mask", ".png"),
+    "severstal":     (10, "D:/project/aroma_dataset",         "severstal/test",   "severstal/masks",          "",      ".png"),
     "mtd":           (11, "D:/project/aroma_dataset", "mtd/test",         "mtd/ground_truth",         "_mask", ".png"),
     "mvtec_leather": (12, "D:/project/aroma_dataset", "leather/test",     "leather/ground_truth",     "_mask", ".png"),
 }
@@ -95,7 +95,7 @@ def draw_panel(ax, img, bbox, title, fill=True):
                                    edgecolor=BBOX_COLOR, linewidth=BBOX_LW))
     else:
         ax.text(0.5, 0.5, "N/A", ha="center", va="center", fontsize=12)
-    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_title(title, fontsize=17, fontweight="bold")
     ax.axis("off")
 
 
@@ -174,20 +174,20 @@ def build_figure(dataset, cfg):
                           (r_img, r_bbox, "Random")])
 
     ok = any(c[0] is not None for r in rows_data for c in r)
-    aspect = float(np.clip(np.median(aspects) if aspects else 1.0, 0.15, 2.0))
+    aspect = float(np.clip(np.median(aspects) if aspects else 1.0, 0.15, 1.15))
     col_w_in = 15.0 / 3.0
     fig_h = col_w_in * aspect * len(pairs) + 1.3   # + title / label headroom
 
     fill = dataset not in ASPECT_PRESERVE
     fig = plt.figure(figsize=(15, fig_h))
-    gs = GridSpec(len(pairs), 3, figure=fig, hspace=0.3, wspace=0.05)
+    gs = GridSpec(len(pairs), 3, figure=fig, hspace=0.16, wspace=0.05)
     for row, cols in enumerate(rows_data):
         for col, (img, bbox, title) in enumerate(cols):
             draw_panel(fig.add_subplot(gs[row, col]), img, bbox, title, fill=fill)
 
     out = OUT_DIR / f"[figure {fig_num}] {dataset}_roi_comparison.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved {out}")
     return ok

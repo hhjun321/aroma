@@ -6,6 +6,7 @@ Mirror of morphology_histograms (defect_type). Overlays real compat cell boundar
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import csv, io, json, os
 
@@ -22,6 +23,13 @@ LABELS = {
     "orientation_consistency": "orientation_consistency\n(entropy; low = coherent)",
 }
 BLUE = "#4c78a8"
+
+def _count_fmt(v, _pos=None):
+    """Thousands separator for 5+ digit counts only (4-digit stays plain)."""
+    n = int(round(v))
+    return f"{n:,}" if abs(n) >= 10000 else str(n)
+
+COUNT_FMT = FuncFormatter(_count_fmt)
 
 def load_feats(ds):
     cols = {f: [] for f in FEATS}
@@ -55,6 +63,7 @@ for ds in DATASETS:
         ax.set_title(LABELS[f], fontsize=12)
         ax.set_xlabel("value", fontsize=12)
         ax.set_ylabel("count", fontsize=12)
+        ax.yaxis.set_major_formatter(COUNT_FMT)
         ax.tick_params(labelsize=11)
     # 6th cell: unused
     axes[5].axis("off")

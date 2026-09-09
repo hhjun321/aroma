@@ -154,7 +154,8 @@ def show(ax, im, title, sub, border=None, color="black", overlay=None, vmax=None
                   extent=(0, gw * 64, gh * 64, 0))
         ax.set_xlim(0, arr.shape[1]); ax.set_ylim(arr.shape[0], 0)
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(title, fontsize=12, pad=4, color=color)
+    ax.set_title(title, fontsize=11.5, pad=5, color=color, fontweight="bold")
+    ax.set_xlabel(sub, fontsize=10.5, color=color, labelpad=5, fontweight="bold")
     for sp in ax.spines.values():
         sp.set_linewidth(2.2 if border else 0.6)
         sp.set_edgecolor(border or "#666666")
@@ -168,21 +169,15 @@ for ds in DATASETS:
     vmax_src = max(ov["sdv"].values()) if ov["sdv"] else 1.0
     vmax_cls = max(ov["cdv"].values()) if ov["cdv"] else 1.0
 
-    fig, axes = plt.subplots(4, 3, figsize=(10.8, 13.2),
-                             gridspec_kw=dict(wspace=0.10, hspace=0.42))
-    fig.suptitle("Background assignment — %s   "
-                 "(bg_score = src_fit + class_fit + size_fit)" % ds,
-                 fontsize=13, y=0.995)
-
+    fig, axes = plt.subplots(4, 3, figsize=(13.4, 13.8),
+                             gridspec_kw=dict(wspace=0.16, hspace=0.46))
     # row 0: 원본(2칸 병합 효과 대신 좌 2칸 사용) + crop
-    show(axes[0, 0], full, "source image (defect bbox in red)",
-         "%dx%d px  ·  tiles tinted by p_src mass" % full.size,
+    show(axes[0, 0], full, "source image (defect bbox in red)", "",
          overlay=ov["tile_vals"](ov["src_iid"], ov["sdv"]), vmax=vmax_src)
     axes[0, 0].add_patch(Rectangle((x, y), w, h, fill=False,
                                    edgecolor="#d62728", linewidth=2.0))
     show(axes[0, 1], crop,
-         "defect crop  (cluster k=%s)" % s.get("cluster_id"),
-         "%dx%d px  ·  %.0f%% of source" % (w, h, 100 * ratio))
+         "defect crop  (cluster k=%s)" % s.get("cluster_id"), "")
     axes[0, 2].axis("off")
 
     groups = [
@@ -204,12 +199,12 @@ for ds in DATASETS:
             else:
                 olay, vmx = None, None      # 최종 행 = 무채색 (실제 결과물 모습)
             if key:                          # cue 행: 해당 cue 값이 주 라벨
-                sub = "%s_fit %.2f   ·   bg_score %.3f" % (key, u[key], tot)
+                sub = "%s_fit %.2f   ·   bg_score %.2f" % (key, u[key], tot)
             else:                            # 최종 행: 합 + 3항 분해
-                sub = "bg_score %.3f\n(src %.2f · cls %.2f · siz %.2f)" % (
+                sub = "bg_score %.2f\n(src %.2f · cls %.2f · siz %.2f)" % (
                     tot, u["src"], u["cls"], u["siz"])
             title = gtitle if cix == 0 else " "
-            star = " ★" if (key is None and cix == 0) else ""
+            star = ""
             show(axes[rix, cix], bg, title + star, sub,
                  border=color, color=color, overlay=olay, vmax=vmx)
 

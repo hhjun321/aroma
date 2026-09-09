@@ -8,9 +8,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np
-import json, io
+import json, io, os
 
-PROF = "D:/aroma_dataset/profiling"
+PROF = os.environ.get("AROMA_DATASET_ROOT", "D:/project/aroma_dataset") + "/profiling/profiling"
 IMG  = "D:/project/aroma/AROMA연구분석/Article/figure/image"
 DATASETS = ["aitex", "kolektor", "severstal", "mtd", "mvtec_leather"]
 TOPN = 20
@@ -33,23 +33,26 @@ def build(ds):
 for ds in DATASETS:
     M, ylabels = build(ds)
     nrow, ncol = M.shape
-    fig, ax = plt.subplots(figsize=(10, 0.55 * nrow + 1.7))
+    fig, ax = plt.subplots(figsize=(11, 0.85 * nrow + 2.2))
     im = ax.imshow(M, aspect="auto", cmap="Blues", vmin=0.0, vmax=1.0)
     for r in range(nrow):
         c = int(np.argmax(M[r]))
         ax.add_patch(Rectangle((c - 0.5, r - 0.5), 1, 1, fill=False,
-                     edgecolor="crimson", linewidth=1.8))
+                     edgecolor="crimson", linewidth=2.2))
     ax.set_xticks(range(ncol))
-    ax.set_xticklabels([f"c{i+1}" for i in range(ncol)], fontsize=7)
+    ax.set_xticklabels([f"c{i+1}" for i in range(ncol)], fontsize=12)
     ax.set_yticks(range(nrow))
-    ax.set_yticklabels(ylabels, fontsize=9)
-    ax.set_xlabel(f"context cell (top {ncol} by compatibility)", fontsize=9)
-    ax.set_title(f"Compatibility (ctx_prior) — {ds}", fontsize=13)
-    cb = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
-    cb.set_label("ctx_prior (matrix_symmetric)", fontsize=8)
-    cb.ax.tick_params(labelsize=7)
+    ax.set_yticklabels(ylabels, fontsize=13)
+    ax.set_xlabel(f"context cell (top {ncol} by compatibility)", fontsize=14)
+    ax.set_title(f"Compatibility (ctx_prior) — {ds}", fontsize=16)
+    cb = fig.colorbar(im, ax=ax, fraction=0.030, pad=0.012)
+    cb.set_label("ctx_prior (matrix_symmetric)", fontsize=13)
+    # explicit decimal-dot tick labels (no locale-dependent comma separator)
+    cb.set_ticks(np.linspace(0.0, 1.0, 6))
+    cb.set_ticklabels([f"{v:.1f}" for v in np.linspace(0.0, 1.0, 6)])
+    cb.ax.tick_params(labelsize=12)
     plt.tight_layout()
-    out = f"{IMG}/[figure 3.2.5 2 {ds}] compatibility_heatmap.png"
-    fig.savefig(out, dpi=300, bbox_inches="tight")
+    out = f"{IMG}/[figure 3.2.4 2 {ds}] compatibility_heatmap.png"
+    fig.savefig(out, dpi=400, bbox_inches="tight")
     plt.close(fig)
     print("saved:", out, "shape", M.shape)

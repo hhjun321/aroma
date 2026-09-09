@@ -51,6 +51,19 @@ DATASETS = [
 ]
 
 
+
+def _sci(v, sig=2):
+    """p-value -> mathtext scientific notation, e.g. 2 x 10^{-11} (not 2e-11)."""
+    if v == 0:
+        return "0"
+    if 1e-3 <= abs(v) < 1e4:
+        txt = ("%%.%dg" % sig) % v
+        return "$%s$" % txt
+    mant, exp = ("%%.%de" % (sig - 1) % v).split("e")
+    mant = mant.rstrip("0").rstrip(".")
+    return r"$%s \times 10^{%d}$" % (mant, int(exp))
+
+
 def _texture_desc(gray, mask=None):
     """[intensity | gradient-magnitude | local-variance] histogram, sum=1."""
     g = gray.astype(np.float32)
@@ -189,21 +202,27 @@ def run():
                    patch_artist=True, boxprops=dict(facecolor="none", edgecolor="#7a3407"),
                    medianprops=dict(color="#7a3407"))
 
+    # 주석 3줄이 violin 상단과 겹치지 않도록 위쪽 여백 확보
+    lo, hi = ax.get_ylim()
+    ax.set_ylim(lo, hi + 0.16)
     ymax = ax.get_ylim()[1]
     for i, (name, cci, ma, mr, d, p, n) in enumerate(stats):
         star = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
-        ax.text(i, ymax * 0.995, f"$\\Delta$={d:+.3f} {star}\np={p:.2g}\nn={n}",
-                ha="center", va="top", fontsize=8.5)
+        ax.text(i, ymax * 0.995,
+                "$\\Delta$=%+.2f %s" % (d, star) + chr(10)
+                + "p=" + _sci(p) + chr(10) + "n=%d" % n,
+                ha="center", va="top", fontsize=9, fontweight="bold")
 
     ax.set_xticks(pos)
-    ax.set_xticklabels([f"{n}\n(CCI={c:.2f})" for n, c, *_ in stats], fontsize=10)
-    ax.set_ylabel("Background compatibility", fontsize=10)
-    ax.set_title("Background selection: AROMA assigns backgrounds more similar to the real defect background than Random",
-                 fontsize=11)
+    ax.set_xticklabels([f"{n}\n(CCI={c:.2f})" for n, c, *_ in stats], fontsize=10, fontweight="bold")
+    ax.set_ylabel("Background compatibility", fontsize=10, fontweight="bold")
+    ax.set_title("Background selection:" + chr(10) +
+                 "AROMA assigns backgrounds more similar to the real defect background than Random",
+                 fontsize=11, fontweight="bold")
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(facecolor="#2c7fb8", alpha=0.6, label="AROMA (compatibility-selected)"),
                        Patch(facecolor="#d95f0e", alpha=0.6, label="Random (uniform)")],
-              loc="lower left", fontsize=9)
+              loc="lower left", prop=dict(size=9, weight="bold"))
     ax.grid(axis="y", alpha=0.25)
     plt.tight_layout()
     outp = os.path.join(OUT, "[figure 4.1 3] bg_similarity_datasets.png")

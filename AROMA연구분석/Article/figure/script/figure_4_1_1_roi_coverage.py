@@ -40,7 +40,7 @@ for ds in DS:
     a, r = coverage(ds); A.append(a); R.append(r)
 
 titles = ["Morphology coverage", "Context coverage", "Rare-pair coverage"]
-fig, axes = plt.subplots(1, 3, figsize=(13, 4.0), sharey=True)
+fig, axes = plt.subplots(1, 3, figsize=(13, 4.6), sharey=True)
 x = np.arange(len(DS)); w = 0.36
 for m, ax in enumerate(axes):
     av = [A[i][m] for i in range(len(DS))]
@@ -49,15 +49,17 @@ for m, ax in enumerate(axes):
     ax.bar(x + w/2, [v if v is not None else 0 for v in rv], w, color=GREY, label="Random")
     for i, (va, vr) in enumerate(zip(av, rv)):
         if va is None and vr is None:
-            ax.text(i, 0.05, "n/a", ha="center", fontsize=9, color="#666666")
+            ax.text(i, 0.05, "n/a", ha="center", fontsize=12, color="#666666")
         else:
-            ax.text(i - w/2, va + 0.015, f"{va:.2f}", ha="center", fontsize=6.5)
-            ax.text(i + w/2, vr + 0.015, f"{vr:.2f}", ha="center", fontsize=6.5)
-    ax.set_xticks(x); ax.set_xticklabels(LBL, fontsize=8, rotation=15)
-    ax.set_ylim(0, 1.12); ax.set_title(titles[m], fontsize=11)
-    ax.tick_params(labelsize=8)
-axes[0].set_ylabel("coverage", fontsize=9)
-axes[0].legend(fontsize=8, loc="lower left")
+            # 두 값이 비슷하면 라벨이 가로로 겹치므로 세로로 어긋나게 배치
+            dy = 0.055 if abs((va or 0) - (vr or 0)) < 0.07 else 0.015
+            ax.text(i - w/2, va + 0.015, f"{va:.2f}", ha="center", fontsize=11)
+            ax.text(i + w/2, vr + dy, f"{vr:.2f}", ha="center", fontsize=11)
+    ax.set_xticks(x); ax.set_xticklabels(LBL, fontsize=12, rotation=15)
+    ax.set_ylim(0, 1.12); ax.set_title(titles[m], fontsize=15)
+    ax.tick_params(labelsize=12)
+axes[0].set_ylabel("coverage", fontsize=14)
+axes[0].legend(fontsize=12, loc="lower left")
 plt.tight_layout()
-fig.savefig(OUT, dpi=300, bbox_inches="tight")
+fig.savefig(OUT, dpi=400, bbox_inches="tight")
 print("saved:", OUT)

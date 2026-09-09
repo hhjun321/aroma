@@ -43,8 +43,8 @@ LABEL_OFFSET = {
     "AITeX":         (0.006, 0.006),
     "Kolektor":      (0.008, -0.004),
     "Severstal":     (0.008, 0.004),
-    "MTD":           (0.008, 0.004),
-    "MVTec Leather": (0.007, -0.006),
+    "MTD":           (-0.008, 0.004),
+    "MVTec Leather": (-0.007, -0.006),
 }
 
 # vertical alignment per label ('bottom' places label above the point)
@@ -54,6 +54,16 @@ LABEL_VA = {
     "Severstal": "bottom",
     "MTD": "bottom",
     "MVTec Leather": "top",
+}
+
+# horizontal alignment per label ('right' places label left of the point,
+# keeping wide labels inside the axes near the right edge)
+LABEL_HA = {
+    "AITeX": "left",
+    "Kolektor": "left",
+    "Severstal": "left",
+    "MTD": "right",
+    "MVTec Leather": "right",
 }
 
 
@@ -93,7 +103,7 @@ def main():
         ax.annotate(
             f"{name}\n({morph} / {ctx})",
             xy=(mci, cci), xytext=(mci + dx, cci + dy),
-            fontsize=9, ha="left", va=LABEL_VA[name],
+            fontsize=9, ha=LABEL_HA[name], va=LABEL_VA[name],
             color="black", zorder=4,
             linespacing=1.15,
         )

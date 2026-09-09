@@ -224,8 +224,8 @@ def pos_box(ax, fp, color, label=None, score=None, lw=2.2, anchor="tl"):
             xy, ha, va = (si * 64 + 8, (sj + bh) * 64 - 12), "left", "bottom"
         else:
             xy, ha, va = (si * 64 + 8, sj * 64 + 12), "left", "top"
-        ax.text(xy[0], xy[1], "%s  %.3f" % (label, score),
-                fontsize=8.5, color=color, weight="bold", ha=ha, va=va,
+        ax.text(xy[0], xy[1], "%s  %.2f" % (label, score),
+                fontsize=11.5, color=color, weight="bold", ha=ha, va=va,
                 bbox=dict(facecolor="white", alpha=0.8, edgecolor="none",
                           pad=1.5))
 
@@ -245,7 +245,7 @@ def tint_ring(ax, img, ring, tgt, vmax, fp, color, fp_lw=2.2):
     for (i, j), c in ring.items():
         v = tgt.get(c, 0.0)
         ax.text(i * 64 + 32, j * 64 + 32, "%.2f" % v, ha="center", va="center",
-                fontsize=6.2, color="white" if v < 0.6 * vmax else "black")
+                fontsize=8.5, color="white" if v < 0.6 * vmax else "black")
     pos_box(ax, fp, color, lw=fp_lw)
     ax.set_xlim(0, arr.shape[1]); ax.set_ylim(arr.shape[0], 0)
     ax.set_xticks([]); ax.set_yticks([])
@@ -262,17 +262,14 @@ for ds in DATASETS:
     fig, (axA, axB, axC) = plt.subplots(
         3, 1, figsize=(12.8, 11.4),
         gridspec_kw=dict(hspace=0.38, height_ratios=[1, 1, 0.72]))
-    fig.suptitle("Site resolution — %s   (cluster k=%s; ring tiles tinted by "
-                 "target mass tgt[k], value printed; shared colour scale)%s"
-                 % (ds, d["k"], d["fallback_note"]), fontsize=11.5, y=0.99)
-
     # A: 원본 결함 이미지의 실제 ring
     tint_ring(axA, d["src_img"], d["src_ring"], d["tgt"], vmax,
               d["src_fp"], RED)
     axA.add_patch(Rectangle((x, y), w, h, fill=False,
                             edgecolor=RED, linewidth=1.4, linestyle=":"))
-    axA.set_title("A   source defect image — ring around the real defect   "
-                  "\u2229(h_ring, tgt[k]) = %.3f" % d["src_score"], fontsize=10)
+    axA.set_title(("A   source defect image" + chr(10) +
+                   "ring around the real defect   "
+                   "∩(h_ring, tgt[k]) = %.2f") % d["src_score"], fontsize=13)
 
     # B: 배정 배경 — best 는 ring tint, mid/worst 는 박스만 (중복 자리는 생략)
     tint_ring(axB, d["bg_img"], best_ring, d["tgt"], vmax,
@@ -283,10 +280,11 @@ for ds in DATASETS:
     if (msi, msj) not in ((bsi, bsj), (wsi, wsj)):
         pos_box(axB, (msi, msj, d["bw"], d["bh"]), AMBER, "mid", mid_sc,
                 anchor="tr")
-    pos_box(axB, (bsi, bsj, d["bw"], d["bh"]), GREEN, "best s*", best_sc)
-    axB.set_title("B   assigned background %s — best / mid / worst of %d "
-                  "admissible positions   site_score(best) = %.3f"
-                  % (d["assigned"], d["n"], best_sc), fontsize=10)
+    pos_box(axB, (bsi, bsj, d["bw"], d["bh"]), GREEN, "best s", best_sc)
+    axB.set_title(("B   assigned background %s" + chr(10) +
+                   "best / mid / worst of %d admissible positions   "
+                   "site_score(best) = %.2f")
+                  % (d["assigned"], d["n"], best_sc), fontsize=13)
 
     # C: 분포 대조 — source ring 실측 h_ring vs tgt[k] vs best 자리 h_s
     h_src = ring_hist(list(d["src_ring"].values()))
@@ -300,23 +298,18 @@ for ds in DATASETS:
     axC.bar(xs, [h_src.get(c, 0.0) for c in cells], width=0.27,
             color="#d98080", label="measured ring of real defect (A)")
     axC.bar(xs + 0.27, [h_bst.get(c, 0.0) for c in cells], width=0.27,
-            color="#7cbf8e", label="ring of resolved site s* (B)")
+            color="#7cbf8e", label="ring of resolved site s (B)")
     axC.set_xticks(xs)
-    axC.set_xticklabels(cells, rotation=60, fontsize=6.5)
-    axC.set_ylabel("probability", fontsize=9, labelpad=2)
-    axC.set_title("C   measured ring cells vs target — "
-                  "∩(h_ring, tgt) = %.3f,  ∩(h_s*, tgt) = %.3f"
-                  % (d["src_score"], best_sc), fontsize=10)
-    axC.legend(fontsize=8, frameon=False)
+    axC.set_xticklabels(cells, rotation=60, fontsize=9.5)
+    axC.set_ylabel("probability", fontsize=12, labelpad=3)
+    axC.set_title(("C   measured ring cells vs target" + chr(10) +
+                   "∩(h_ring, tgt) = %.2f,  ∩(h_s, tgt) = %.2f")
+                  % (d["src_score"], best_sc), fontsize=13)
+    axC.legend(fontsize=11, frameon=False)
     axC.grid(axis="y", alpha=0.25)
 
-    fig.text(0.01, 0.005,
-             "footprint solid, ring dashed; untinted ring tiles were excluded "
-             "from profiling (defect-overlapping, void, or unobserved); "
-             "tile value = tgt[k] mass of that tile's context cell",
-             fontsize=7.6, color="#444444")
     out = os.path.join(OUT_DIR, "[figure 3.2.4 5 %s] placement_ring.png" % ds)
-    fig.savefig(out, dpi=300, bbox_inches="tight")
+    fig.savefig(out, dpi=400, bbox_inches="tight")
     plt.close(fig)
     print("saved:", out, " positions=%d site=%.3f src_ring=%.3f ring_tiles=%d"
           % (d["n"], best_sc, d["src_score"], len(d["src_ring"])))
