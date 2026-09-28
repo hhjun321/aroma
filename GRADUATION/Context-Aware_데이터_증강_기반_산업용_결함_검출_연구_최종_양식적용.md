@@ -1,20 +1,68 @@
-**Context-Aware 데이터 증강 기반**
+<!-- 표지 -->
 
-**산업용 결함 검출 연구**
+박사학위논문
 
-결함 patch 생성에서 context-aware 배치·합성으로 이어지는
+지도교수 문 일 영
 
-네 편의 연구를 통합한 학위논문
+**Context-Aware 데이터 증강 기반 산업용 결함 검출 연구**
 
-**한국기술교육대학교 컴퓨터공학과**
+2027년 2월
 
-지 도 교 수 문 일 영
+한국기술교육대학교 대학원
 
-성 명 한 호 준
+컴퓨터공학과 컴퓨터공학전공
 
-2 0 2 6
+한 호 준
 
-# 국문 초록
+<!-- 책등 -->
+
+Context-Aware 데이터 증강 기반 산업용 결함 검출 연구 · 2027 · 2 · 한 호 준
+
+<!-- 속표지 -->
+
+박사학위논문
+
+지도교수 문 일 영
+
+**Context-Aware 데이터 증강 기반 산업용 결함 검출 연구**
+
+**Context-Aware Data Augmentation for Industrial Defect Detection**
+
+2027년 2월
+
+한국기술교육대학교 대학원
+
+컴퓨터공학과 컴퓨터공학전공
+
+한 호 준
+
+<!-- 제출서 -->
+
+**Context-Aware 데이터 증강 기반 산업용 결함 검출 연구**
+
+**Context-Aware Data Augmentation for Industrial Defect Detection**
+
+이 논문을 공학박사 학위논문으로 제출합니다
+
+2027년 2월
+
+한국기술교육대학교 대학원
+
+컴퓨터공학과 컴퓨터공학전공
+
+한 호 준
+
+<!-- 인준지: 심사 후 인준서 삽입 (빈 쪽) -->
+
+<!-- 감사의 글 -->
+
+**감사의 글**
+
+※ 작성 예정
+
+# 국문요약
+
+**Context-Aware 데이터 증강 기반 산업용 결함 검출 연구**
 
 제조 현장의 품질보증은 제품 신뢰성 확보와 경제적 손실 방지의 핵심
 요소이며, 딥러닝 기반 자동 외관 검사(Automated Visual Inspection, AVI)의
@@ -36,48 +84,133 @@ ControlNet 기반 생성으로 결함 자체까지 새로 합성한 context-awar
 제시하여, 네 편의 연구가 우연한 나열이 아니라 하나의 연속된 발전
 과정임을 보인다.
 
-**주요어**: 결함 검출, 데이터 증강, 관심 영역(ROI), ControlNet,
+주제어: 결함 검출, 데이터 증강, 관심 영역(ROI), ControlNet,
 Context-Aware Synthesis, 클래스 불균형
 
-# Abstract
+# 목 차
 
-Quality assurance in manufacturing is central to product reliability and
-cost control, and deep learning--based Automated Visual Inspection (AVI)
-has substantially improved inspection efficiency and accuracy. However,
-real industrial settings suffer from intrinsic defect rarity and severe
-class imbalance, causing detection models to underfit minority defect
-classes. This dissertation integrates four published papers authored by
-the candidate into a single research trajectory addressing this
-data-scarcity problem through defect data augmentation. Each study
-builds on the prior one\'s output around a single question --- where to
-place a candidate defect region (ROI) and what to place there: (1)
-GAN/Diffusion-based defect-patch augmentation, (2) ControlNet-based
-defect generation combined with background-brightness-similarity-based
-ROI search and Poisson blending, (3) data-driven automation of ROI
-compatibility that generalizes across industrial datasets without
-per-domain re-engineering (AROMA), and (4) specialization of that
-automated framework to the steel-surface domain combined with
-ControlNet-based generative synthesis of the defect content itself
-(CASDA). Each chapter reports its methodology and results together with
-the specific limitation carried forward into the next, showing that the
-four studies form one continuous progression rather than an incidental
-list.
+- 국문요약
+- 표 목차
+- 그림 목차
+- 제1장 서 론
+  - 제1절. 연구 배경 및 필요성
+  - 제2절. 문제 정의
+  - 제3절. 연구 목표 및 연구 질문
+  - 제4절. 연구의 발전 서사
+  - 제5절. 연구의 기여
+  - 제6절. 논문의 구성
+- 제2장 관련 연구
+  - 제1절. 산업용 결함 검출과 자동 외관 검사
+  - 제2절. 데이터 증강과 클래스 불균형
+  - 제3절. 생성모델 기반 결함 합성
+  - 제4절. Context-Aware 결함 합성
+  - 제5절. Copy--Paste와 ROI 기반 합성
+  - 제6절. 데이터 기반 파이프라인 적응
+  - 제7절. 결함 검출 모델과 평가 지표
+  - 제8절. 벤치마크 데이터셋
+  - 제9절. 공통 실험 환경
+- 제3장 객체탐지 모델기반 장비 결함검출 방법에 대한 연구
+  - 제1절. 개요
+  - 제2절. 방법론
+  - 제3절. 실험 결과
+  - 제4절. 한계 및 다음 단계로의 연결
+- 제4장 결함검출 모델 성능 개선을 위한 결함데이터 증강 방법에 대한 연구
+  - 제1절. 개요
+  - 제2절. 방법론
+  - 제3절. 실험 결과
+  - 제4절. 한계 및 다음 단계로의 연결
+- 제5장 적응형 ROI 기반 형태 인지 증강(AROMA)
+  - 제1절. 개요
+  - 제2절. 방법론
+    - 1. 복잡도 지표 (CCI): 배경 텍스처 분류 수식
+    - 2. 복잡도 지표 (MCI): 결함 형태 분류 수식
+    - 3. 합성 (Blending Synthesis)
+  - 제3절. 실험 결과
+  - 제4절. 한계 및 다음 단계로의 연결
+- 제6장 문맥 인지 강철 결함 증강(CASDA)
+  - 제1절. 개요
+  - 제2절. 방법론: 5단계 파이프라인
+  - 제3절. 실험 결과
+  - 제4절. 한계
+- 제7장 결 론
+  - 제1절. 연구 요약
+  - 제2절. 연구의 의의
+  - 제3절. 향후 연구 방향
+- 참고문헌
+- ABSTRACT
 
-**Keywords**: Defect Detection, Data Augmentation, Region of Interest
-(ROI), ControlNet, Context-Aware Synthesis, Class Imbalance
+# 표 목차
 
-**목 차**
+- \<표1-1\> 네 편의 게재 논문과 핵심 방식
+- \<표2-1\> 사용 데이터셋 개관
+- \<표2-2\> 공통 실험 환경
+- \<표3-1\> 결함 별 이미지 및 데이터 증강 후 이미지 수량 비교
+- \<표3-2\> YOLOv8 모델 성능 평가
+- \<표3-3\> YOLOv8s 모델 성능 및 과적합 분석
+- \<표4-1\> KolektorSDD 데이터셋 구성
+- \<표4-2\> 최적의 데이터 분할 비율 선정 (EfficientNet 기준)
+- \<표4-3\> ControlNet 학습 환경
+- \<표4-4\> 원본셋 모델과 증강셋 모델의 성능 비교
+- \<표5-1\> 데이터셋별 MCI·CCI 통계
+- \<표5-2\> ROI 배경 텍스처 분류 기준
+- \<표5-3\> 결함 하위유형 분류 기준
+- \<표5-4\> 데이터셋 분할 및 증강 규모
+- \<표5-5\> AITeX YOLOv8n 검출 성능 (mean ± std, n=3 seeds)
+- \<표5-6\> Kolektor YOLOv8n 검출 성능 (mean ± std, n=3 seeds)
+- \<표5-7\> Severstal YOLOv8n 검출 성능 (4-class, mean ± std, n=3 seeds)
+- \<표5-8\> MTD YOLOv8n 검출 성능 (5-class, mean ± std, n=3 seeds)
+- \<표5-9\> MVTec Leather YOLOv8n 검출 성능 (5-class, mean ± std, n=3 seeds)
+- \<표6-1\> ROI 적합도 분류 결과
+- \<표6-2\> 증강 통계 요약
+- \<표6-3\> EB-YOLOv8 검출 성능 (Severstal, mean ± std, n=2 seeds)
 
-> *※ 제3\~5장은 개요·방법론·실험 결과·한계 및 다음 단계로의 연결
-> 순으로 구성한다. 제6장은 다음 장으로 이어지는 서사가 없어 \"한계 및
-> 다음 단계로의 연결\" 대신 \"한계\"로 종결한다. 네 편의 연구가 공통으로
-> 기반하는 이론·배경은 제2장 관련 연구에 통합하고, 참고문헌은 장별로
-> 수록하지 않고 제8장 References에 통합한다. Future work 챕터는 본 초안
-> 범위에서 제외한다.*
+# 그림 목차
 
-# 제1장 서론
+- \[그림 3-1\] (a) Short, (b) Spur, (c) Spurious copper, (d) Missing hole, (e) Mouse bite, (f) Open circuit 결함 이미지
+- \[그림 3-2\] 생성모델 학습을 위한 데이터셋 구조
+- \[그림 3-3\] GAN 학습 과정의 흐름도
+- \[그림 3-4\] GAN 기반 생성 이미지
+- \[그림 3-5\] Diffusion 학습 과정의 흐름도
+- \[그림 3-6\] Diffusion 기반 생성 이미지
+- \[그림 3-7\] 증강된 PCB 결함 데이터셋의 학습 및 검증 샘플 분포
+- \[그림 3-8\] YOLOv8s Basic, Gan, Diffusion 모델 성능 평가
+- \[그림 3-9\] YOLOv8s 모델 Box Loss 학습·검증 곡선 — (a) Train Loss, (b) Test Loss
+- \[그림 4-1\] 결함이미지와 마스크이미지
+- \[그림 4-2\] 생성된 결함이미지와 마스크이미지
+- \[그림 4-3\] 유효 영역 추출
+- \[그림 4-4\] Poisson blending을 이용한 데이터 합성
+- \[그림 4-5\] 원본셋 모델과 증강셋 모델의 mIoU 성능비교
+- \[그림 4-6\] 원본셋 모델과 증강셋 모델의 Dice 성능비교
+- \[그림 5-1\] AROMA 파이프라인
+- \[그림 5-2\] 데이터셋 복잡도 지형(MCI vs. CCI)
+- \[그림 5-3\] Severstal·AITeX의 데이터 기반 형태 클러스터
+- \[그림 5-4\] 배경 맥락 특성 분포와 tertile 경계 — (a) Severstal, (b) AITeX
+- \[그림 5-5\] 결함 형태 특성 분포와 표 5-3 경계값 — (a) Severstal, (b) AITeX
+- \[그림 5-6\] 데이터셋별 대칭 호환성(ctx_prior) 히트맵
+- \[그림 5-7\] ROI 선택 및 호환성 기반 배치 흐름
+- \[그림 5-8\] 실제 이미지에서의 배경 할당
+- \[그림 5-9\] 원본 결함의 ring 맥락과 확정된 배치 위치 비교
+- \[그림 5-10\] ROI 배치 커버리지 비교
+- \[그림 5-11\] 정성적 ROI 배치 비교
+- \[그림 5-12\] 배경 선택 호환성 비교
+- \[그림 5-13\] AITeX ROI 비교
+- \[그림 5-14\] Kolektor ROI 비교
+- \[그림 5-15\] Severstal ROI 비교
+- \[그림 5-16\] MTD ROI 비교
+- \[그림 5-17\] MVTec Leather ROI 비교
+- \[그림 6-1\] CASDA 파이프라인
+- \[그림 6-2\] 기하학적 ROI 특성화 파이프라인
+- \[그림 6-3\] 형태 특성 분포 — (1) linearity($\lambda$), (2) aspect ratio($\alpha$), (3) solidity($\sigma$)
+- \[그림 6-4\] 배경 텍스처 분류 파이프라인
+- \[그림 6-5\] 정상 배경 패치에서 계산한 패치별 배경 분산 분포
+- \[그림 6-6\] 동일 패치 집합에서 계산한 배경 엣지 밀도 분포
+- \[그림 6-7\] CASDA 1단계에서 분류된 결함 하위유형별(상단)·배경 유형별(하단) 대표 ROI 샘플
+- \[그림 6-8\] CASDA 2단계의 3채널 힌트 이미지 구성
+- \[그림 6-9\] CASDA 3단계에서 ControlNet으로 생성한 결함 샘플
 
-## 1.1 연구 배경 및 필요성
+# 제1장 서 론
+
+## 제1절. 연구 배경 및 필요성
 
 제조 현장에서 품질보증은 제품의 신뢰성을 확보하고 품질 관련 경제적 손실을 최소화하기 위한 핵심 요소이다. 딥러닝 기반 자동 외관 검사(Automated Visual Inspection, AVI) 기술의 도입으로 검사 효율성과 정확성이 향상되어 왔으나, 실제 산업 환경에서는 결함 발생률이 낮아 결함 샘플을 충분히 확보하기 어렵고, 정상 및 결함 클래스 간 심각한 데이터 불균형으로 인해 소수 결함 클래스에 대한 모델의 학습 성능이 저하되는 문제가 지속적으로 제기되고 있다.
 
@@ -85,15 +218,7 @@ list.
 
 본 논문은 제3장부터 제5장까지 각 연구의 방법론과 실험 결과를 제시하고, 후속 연구로 이어지는 기술적 한계와 개선 방향을 논의한다. 마지막 제6장에서는 제안된 프레임워크의 종합적인 한계와 향후 연구 방향을 제시한다. 이를 통해 개별 논문에서 제안된 방법론을 단순히 나열하는 데 그치지 않고, 결함 생성, ROI 탐색 및 배치, 데이터 기반 자동화, 특정 산업 도메인에 대한 문맥 인식 증강으로 이어지는 일관된 연구 발전 과정을 체계적으로 제시한다.
 
-## 1.1 Abstract
-
-Quality assurance in manufacturing is a critical factor in ensuring product reliability and minimizing economic losses associated with quality defects. The adoption of deep learning-based Automated Visual Inspection (AVI) has improved inspection efficiency and accuracy. However, in real-world industrial environments, defect samples are inherently scarce due to the low incidence of defects, while severe class imbalance between normal and defective samples further degrades model performance, particularly in learning minority defect classes.
-
-This dissertation integrates four published papers conducted by the author into a coherent research trajectory aimed at addressing data scarcity and class imbalance through data augmentation techniques. Each study builds upon the findings and limitations of previous research, progressively advancing methodological approaches around a common research question: how to identify candidate defect regions, or Regions of Interest (ROIs), and determine appropriate defect patterns for placement and synthesis within those regions. Specifically, the four studies comprise: (1) defect patch augmentation using generative models, including Generative Adversarial Networks (GANs) and diffusion models; (2) a defect synthesis approach integrating ControlNet-based defect generation, background brightness similarity-based ROI identification, and Poisson blending; (3) AROMA, a data-driven ROI automation framework designed to generalize across multiple industrial datasets without dataset-specific redesign; and (4) CASDA, a context-aware data augmentation framework specialized for steel surface defect detection, incorporating contextual information in ROI selection and ControlNet-based generation of defect patterns.
-
-Chapters 3 through 5 present the methodologies and experimental results of the respective studies, while discussing their technical limitations and potential improvements that motivate subsequent research. Chapter 6 provides an overall discussion of the limitations of the proposed frameworks and outlines directions for future research. Through this structure, the dissertation goes beyond presenting the four individual papers as independent contributions and establishes a systematic research progression encompassing defect generation, ROI identification and placement, data-driven automation, and context-aware augmentation tailored to a specific industrial domain.
-
-## 1.2 문제 정의
+## 제2절. 문제 정의
 
 본 논문은 산업 결함 검출을 위한 결함 이미지 증강을 연구 대상으로 하며, 이를 결함 생성(What to place)과 결함 배치(Where to place)의 두 가지 하위 문제로 정의한다.
 
@@ -105,7 +230,7 @@ Chapters 3 through 5 present the methodologies and experimental results of the r
 
 이에 본 논문은 결함 이미지 증강을 P1과 P2로 명시적으로 분리하고, 특히 기존 연구에서 상대적으로 제한적으로 다루어진 P2를 중심으로 연구를 확장한다. 구체적으로, 데이터로부터 배치 기준을 자동으로 도출하는 방향으로 ROI 탐색 및 선택 방법을 고도화하고, 이를 통해 산업 데이터셋의 특성 변화에 유연하게 대응할 수 있는 증강 전략을 모색한다. 나아가 최종적으로 결함 생성과 배치 과정을 하나의 프레임워크로 통합함으로써, 결함의 시각적 특성과 배경 문맥 간의 적합성을 함께 고려하는 결함 이미지 증강 방법을 제시한다.
 
-## 1.3 연구 목표 및 연구 질문
+## 제3절. 연구 목표 및 연구 질문
 
 본 논문의 목표는 결함 데이터 희소성·불균형 환경에서 검출 성능을
 개선하는 context-aware 데이터 증강 방법론을 확립하고, 그 유효 조건과
@@ -127,7 +252,7 @@ Chapters 3 through 5 present the methodologies and experimental results of the r
     생성모델과 결합하면, 실제 patch 재사용(copy-paste)의 다양성 한계를
     넘어 소수 클래스 검출 성능을 개선할 수 있는가? (제6장)
 
-## 1.4 연구의 발전 서사
+## 제4절. 연구의 발전 서사
 
 본 논문은 위의 문제의식 아래 저자가 수행한 4편의 게재 논문을 하나의 연구
 궤적으로 통합한다. 네 편의 연구는 모두 "데이터 증강을 통한 결함 검출
@@ -136,7 +261,7 @@ Chapters 3 through 5 present the methodologies and experimental results of the r
 배치·합성하는 방식(P2)을 순차적으로 정교화한 뒤, 마지막 연구에서 두
 문제를 단일 프레임워크로 재결합하는 발전 과정을 이룬다(표 1-1).
 
-**표 1-1. 네 편의 게재 논문과 핵심 방식**
+\<표1-1\> 네 편의 게재 논문과 핵심 방식
 
   -----------------------------------------------------------------------
   **단계**   **논문**                **핵심 방식**
@@ -179,7 +304,7 @@ Chapters 3 through 5 present the methodologies and experimental results of the r
     기반 생성모델을 결합하여 결함 자체를 새로 합성함으로써, 실제 \>
     patch를 그대로 재사용하는 copy-paste의 다양성 한계를 넘어섬
 
-## 1.5 연구의 기여
+## 제5절. 연구의 기여
 
 본 논문의 학술적 기여는 개별 논문의 성과를 합산한 것이 아니라, 네 편의
 연구가 하나의 축을 따라 일관되게 발전했다는 점 자체에 있다. 구체적인
@@ -211,7 +336,7 @@ Chapters 3 through 5 present the methodologies and experimental results of the r
     미확보)를 함께 보고하여, 제안 기법의 적용 조건과 그 실증적 한계를 \>
     함께 규명하였다.
 
-## 1.6 논문의 구성
+## 제6절. 논문의 구성
 
 본 논문의 이후 구성은 다음과 같다. 제2장은 네 편의 연구가 공통으로
 기반하는 이론적 배경과 관련 연구(산업용 결함 검출, 데이터 증강, 생성모델
@@ -223,7 +348,7 @@ Poisson blending), 제5장에서 AROMA(데이터 기반 defect--background 호�
 모델), 제6장에서 CASDA(ControlNet 기반 context-aware 합성 프레임워크)를
 순서대로 다룬다. 제3\~5장은 각 장 말미에 다음 장으로 이어지는 한계를
 명시하고, 제7장에서는 네 연구의 결과를 종합하여 연구의 의의와 향후 연구
-방향을 논의한다. 각 장에서 인용한 참고문헌은 제8장 References에 통합하여
+방향을 논의한다. 각 장에서 인용한 참고문헌은 권말의 참고문헌에 통합하여
 수록한다.
 
 # 제2장 관련 연구
@@ -232,7 +357,7 @@ Poisson blending), 제5장에서 AROMA(데이터 기반 defect--background 호�
 통합하여 정리한다. 각 장에서는 해당 연구 고유의 실험 설정과 사용 방식만
 서술하고, 기법의 일반 원리와 선행 연구 대비 위치는 본 장을 참조한다.
 
-## 2.1 산업용 결함 검출과 자동 외관 검사
+## 제1절. 산업용 결함 검출과 자동 외관 검사
 
 산업용 결함 검출은 전통적으로 지도학습 문제로 정식화되어, 조밀하게
 어노테이션된 결함 이미지로 객체탐지·분할 네트워크를 학습시켜 표면 이상을
@@ -255,7 +380,7 @@ One-Class Classification \[8\] 등이 정상 샘플의 특징 분포 모델링�
 논문과 같이 로컬 통계만으로 동작하는 데이터 측 증강은 그 방향과 상보적인
 위치에 있다.
 
-## 2.2 데이터 증강과 클래스 불균형
+## 제2절. 데이터 증강과 클래스 불균형
 
 정상/결함 클래스 간의 심각한 불균형은 합성곱 신경망의 성능을 체계적으로
 저하시키는 요인으로 규명되어 있으며 \[10\], 제조 도메인에서의 클래스
@@ -271,7 +396,7 @@ CutPaste \[15\]와 합성 이상 기반의 DRAEM \[16\]이 대표적이다. 그�
 만들어내므로, 증강의 관건은 단순한 양이 아니라 사실성(realism)으로
 이동해 왔다.
 
-## 2.3 생성모델 기반 결함 합성
+## 제3절. 생성모델 기반 결함 합성
 
 생성모델은 다양하고 사실적인 결함 이미지를 합성하는 수단으로 활발히
 탐구되어 왔다. 적대적 생성 신경망(GAN) \[17\]은 생성자와 판별자의 경쟁
@@ -293,7 +418,7 @@ AnomalyDiffusion \[25\], 합성 이상 사실성·강도의 제어가 다운스�
 고립적으로 모델링할 뿐, 결함이 개연성 있게 나타나야 할 배경 맥락을
 명시적으로 고려하지 않는다는 공통된 공백을 갖는다.
 
-## 2.4 Context-Aware 결함 합성
+## 제4절. Context-Aware 결함 합성
 
 공간적·맥락적 제약을 결함 생성 과정에 통합하려는 연구가 성장하고 있다.
 ControlNet \[30\]은 사전학습된 diffusion 모델의 생성 능력을 유지하면서
@@ -309,7 +434,7 @@ ControlNet \[30\]은 사전학습된 diffusion 모델의 생성 능력을 유지
 도출하는 문제는 여전히 열린 과제였으며 본 논문 제5장의 AROMA가 이를
 직접 다룬다.
 
-## 2.5 Copy--Paste와 ROI 기반 합성
+## 제5절. Copy--Paste와 ROI 기반 합성
 
 Dwibedi 등 \[32\]이 대중화하고 인스턴스 분할용으로 정제된 \[33\]
 copy--paste 증강은 실제 결함 픽셀을 보존하면서 생성모델의 학습 비용과
@@ -329,7 +454,7 @@ ROI(Region of Interest)의 선택이 합성 데이터의 사실성과 다운스�
 경계의 이질감을 줄이는 표준 기법으로는 경계 gradient를 보존하며 색상을
 재구성하는 Poisson blending \[36\]이 널리 쓰인다.
 
-## 2.6 데이터 기반 파이프라인 적응
+## 제6절. 데이터 기반 파이프라인 적응
 
 개별 증강 연산자를 넘어, 파이프라인 구성 자체를 데이터 특성에 자동
 적응시키는 연구가 진행되어 왔다. AutoAugment \[37\]와 RandAugment
@@ -342,7 +467,7 @@ ROI(Region of Interest)의 선택이 합성 데이터의 사실성과 다운스�
 measure-then-derive 메커니즘과, context-aware 배치가 유효한 조건을
 특성화하는 복잡도 지수(MCI, CCI)를 제안한다.
 
-## 2.7 결함 검출 모델과 평가 지표
+## 제7절. 결함 검출 모델과 평가 지표
 
 다운스트림 검출기로는 단일 단계 객체탐지의 표준인 YOLO 계열 \[40\]이
 실시간 산업 검사에 널리 쓰이며, 2단계 검출기 Faster R-CNN \[41\]과 함께
@@ -354,7 +479,7 @@ mAP(mean Average Precision)·mIoU·Dice 계수로 평가하고, 합성 이미지
 유사도인 LPIPS \[46\]로 평가한다. 본 논문의 각 장은 이 지표들을 공통
 프로토콜로 사용한다.
 
-## 2.8 벤치마크 데이터셋
+## 제8절. 벤치마크 데이터셋
 
 본 논문의 네 연구는 6개 공개 산업 결함 데이터셋을 사용한다(표 2-1).
 PCB_DATASET은 베이징대학교 인간-로봇 상호작용 오픈랩(PKU-HRI)이 공개한
@@ -364,7 +489,7 @@ PCB 결함 데이터셋으로, PCB 제조 공정 \[47\]과 수용 기준 \[48\]�
 \[51\]은 철강 표면(Kaggle 경진대회), MTD \[52\]는 자기 타일 표면,
 MVTec AD \[53\]의 Leather 카테고리는 가죽 표면 결함을 제공한다.
 
-**표 2-1. 사용 데이터셋 개관**
+\<표2-1\> 사용 데이터셋 개관
 
   --------------------------------------------------------------------------
   **Dataset**     **도메인**     **규모(이미지)** **사용 장**
@@ -383,14 +508,14 @@ MVTec AD \[53\]의 Leather 카테고리는 가죽 표면 결함을 제공한다.
   MVTec Leather   가죽           245              제5장
   --------------------------------------------------------------------------
 
-## 2.9 공통 실험 환경
+## 제9절. 공통 실험 환경
 
 본 논문의 네 연구는 모두 표 2-2의 공통 환경에서 실험을 수행하였다.
 GPU는 연구 시점에 따라 NVIDIA Tesla L4(제3\~5장) 또는 T4(제6장,
 ControlNet fine-tuning)를 사용하였으며, 그 외 실행 환경과 프레임워크는
 동일하다. 각 장에서는 해당 연구 고유의 모델·학습 설정만 서술한다.
 
-**표 2-2. 공통 실험 환경**
+\<표2-2\> 공통 실험 환경
 
   -----------------------------------------------------------------------
   **Item**               **Description**
@@ -413,7 +538,7 @@ ControlNet fine-tuning)를 사용하였으며, 그 외 실행 환경과 프레�
 
 # 제3장 객체탐지 모델기반 장비 결함검출 방법에 대한 연구
 
-## 3.1 개요
+## 제1절. 개요
 
 본 장은 PCB(인쇄회로기판) 제조 공정에서 발생하는 6가지 결함(open, short,
 mouse bite, spur, pinhole/missing hole, spurious copper)을 YOLOv8 기반
@@ -426,7 +551,7 @@ mouse bite, spur, pinhole/missing hole, spurious copper)을 YOLOv8 기반
 Diffusion 두 가지 생성모델 기반 증강으로 보완하고, 두 증강 기법이 검출
 성능과 일반화 안정성에 미치는 영향을 비교 분석한다.
 
-## 3.2 방법론
+## 제2절. 방법론
 
 결함 데이터가 부족하면 검출 모델의 성능이 저하되므로, 본 장은
 생성모델을 통해 결함 이미지를 증강하여 데이터 부족 문제를 보강한다.
@@ -435,8 +560,7 @@ PCB_DATASET은 PCB 제조 공정에서 흔히 발견되는 6가지 결함 유형
 
 ![그림 3-1](figures/fig3-1.jpg)
 
-**그림 3-1.** (a) Short, (b) Spur, (c) Spurious copper, (d) Missing hole,
-(e) Mouse bite, (f) Open circuit 결함 이미지
+\[그림 3-1\] (a) Short, (b) Spur, (c) Spurious copper, (d) Missing hole, (e) Mouse bite, (f) Open circuit 결함 이미지
 
 그림 3-1의 (a)\~(f)는 각각 short, spur, spurious copper, missing hole,
 mouse bite, open circuit에 해당하며, 이후의 생성모델 학습과 증강은 모두
@@ -453,7 +577,7 @@ open_circuit, short, spur, spurious_copper)로 분리한다. 동일 이미지 �
 
 ![그림 3-2](figures/fig3-2.jpg)
 
-**그림 3-2.** 생성모델 학습을 위한 데이터셋 구조
+\[그림 3-2\] 생성모델 학습을 위한 데이터셋 구조
 
 그림 3-2는 이 분리 구조를 보여준다. 결함 유형별로 경로를 나누어
 생성모델을 개별 학습시키고, 생성 결과를 원본 라벨 위치로 되돌려 놓음으로써
@@ -467,7 +591,7 @@ GAN 기반 증강에서는 생성자(Generator)와 판별자(Discriminator)가
 
 ![그림 3-3](figures/fig3-3.jpg)
 
-**그림 3-3.** GAN 학습 과정의 흐름도
+\[그림 3-3\] GAN 학습 과정의 흐름도
 
 그림 3-3에서 생성자는 random noise를 입력받아 fake data를 만들고,
 판별자는 real data와 fake data를 입력받아 어느 쪽이 실제인지 판별한다.
@@ -476,7 +600,7 @@ GAN 기반 증강에서는 생성자(Generator)와 판별자(Discriminator)가
 
 ![그림 3-4](figures/fig3-4.jpg)
 
-**그림 3-4.** GAN 기반 생성 이미지
+\[그림 3-4\] GAN 기반 생성 이미지
 
 그림 3-4는 이렇게 생성된 결함 이미지로, 기존 데이터셋에 존재하지 않는
 결함 패턴을 학습 데이터에 추가하는 데 사용된다.
@@ -489,7 +613,7 @@ Diffusion 기반 증강에서는 데이터에
 
 ![그림 3-5](figures/fig3-5.jpg)
 
-**그림 3-5.** Diffusion 학습 과정의 흐름도
+\[그림 3-5\] Diffusion 학습 과정의 흐름도
 
 그림 3-5의 Diffusion 모델은 노이즈 추가(Forward Process)와 노이즈
 제거(Reverse Process)를 학습하며, GAN 대비 학습이 안정적이고 고품질
@@ -497,7 +621,7 @@ Diffusion 기반 증강에서는 데이터에
 
 ![그림 3-6](figures/fig3-6.jpg)
 
-**그림 3-6.** Diffusion 기반 생성 이미지
+\[그림 3-6\] Diffusion 기반 생성 이미지
 
 그림 3-6의 생성 이미지는 GAN 증강 데이터와 동일하게 원본 데이터셋에
 포함되어 학습에 활용된다. 두 방식으로
@@ -509,7 +633,7 @@ Diffusion 기반 증강에서는 데이터에
 비율(826장/146장)로 무작위 분할하였다. 검증 데이터는 원본 모델과 증강
 모델의 공정한 성능 비교를 위해 두 조건에서 동일하게 구성하였다.
 
-**표 3-1. 결함 별 이미지 및 데이터 증강 후 이미지 수량 비교**
+\<표3-1\> 결함 별 이미지 및 데이터 증강 후 이미지 수량 비교
 
   ------------------------------------------------------------------------
   **Defect Type**              **Images**            **Images (증강 후)**
@@ -533,7 +657,7 @@ Diffusion 기반 증강에서는 데이터에
 
 ![그림 3-7](figures/fig3-7.jpg)
 
-**그림 3-7.** 증강된 PCB 결함 데이터셋의 학습 및 검증 샘플 분포
+\[그림 3-7\] 증강된 PCB 결함 데이터셋의 학습 및 검증 샘플 분포
 
 그림 3-7의 녹색 막대가 학습 데이터에 해당하며, 클래스별 결함 수가
 확장되면서 클래스 간 분포가 비교적 균등해졌음을 보여준다. 검증 데이터는
@@ -546,12 +670,12 @@ Diffusion 기반 증강에서는 데이터에
 사용하였으며, 세 조건 모두 동일한 학습 설정을 적용해 증강 기법 간 공정한
 비교가 되도록 하였다.
 
-## 3.3 실험 결과
+## 제3절. 실험 결과
 
 모델 성능은 Precision, Recall, mAP50, mAP50-95 네 가지 지표로
 평가하였다(표 3-2).
 
-**표 3-2. YOLOv8 모델 성능 평가**
+\<표3-2\> YOLOv8 모델 성능 평가
 
   -------------------------------------------------------------------------------
   **Model**   **Type**    **Precision**   **Recall**   **mAP50**   **mAP50-95**
@@ -577,7 +701,7 @@ Basic 조건을 기준으로 비교하면, 더 큰 규모의 YOLOv8m이 YOLOv8s 
 
 ![그림 3-8](figures/fig3-8.jpg)
 
-**그림 3-8.** YOLOv8s Basic, Gan, Diffusion 모델 성능 평가
+\[그림 3-8\] YOLOv8s Basic, Gan, Diffusion 모델 성능 평가
 
 그림 3-8은 YOLOv8s의 세 조건(Basic·GAN·Diffusion)을 지표별로 비교한
 것으로, 표 3-2의 수치를 시각적으로 대조할 수 있다.
@@ -602,10 +726,9 @@ YOLOv8s·YOLOv8m 모두에서 mAP50 0.96, mAP50-95 0.51/0.53을 기록하여 GAN
 
 ![그림 3-9 (b)](figures/fig3-9b.jpg)
 
-**그림 3-9.** YOLOv8s 모델 Box Loss 학습·검증 곡선 — (a) Train Loss,
-(b) Test Loss
+\[그림 3-9\] YOLOv8s 모델 Box Loss 학습·검증 곡선 — (a) Train Loss, (b) Test Loss
 
-**표 3-3. YOLOv8s 모델 성능 및 과적합 분석**
+\<표3-3\> YOLOv8s 모델 성능 및 과적합 분석
 
   ------------------------------------------------------------------------
   **Model**       **Train       **Test Loss** **Gap**   **Overfitting**
@@ -636,7 +759,7 @@ Diffusion_s(0.53)와 유사한 수준의 과적합 양상을 보였다. 두 증�
 근소하게 낮은 GAN 증강 모델이 상대적으로 안정적인 선택지로 고려될 수
 있다.
 
-## 3.4 한계 및 다음 단계로의 연결
+## 제4절. 한계 및 다음 단계로의 연결
 
 본 연구는 증강된 결함 이미지를 원본과 \"동일한 위치\"에 그대로
 재배치하는 방식을 사용해, 결함이 배치될 배경과의 통계적·형태적 호환성은
@@ -648,7 +771,7 @@ Diffusion_s(0.53)와 유사한 수준의 과적합 양상을 보였다. 두 증�
 
 # 제4장 결함검출 모델 성능 개선을 위한 결함데이터 증강 방법에 대한 연구
 
-## 4.1 개요
+## 제1절. 개요
 
 본 장은 ControlNet 기반 생성 모델, 유효영역(ROI) 추출, Poisson
 blending을 결합한 데이터 증강 기법 \[55\]를 다룬다. 제3장의 PCB 연구가 결함
@@ -658,13 +781,13 @@ patch 자체의 생성에 집중하고 배치 위치는 원본과 동일하게 �
 결함 52장)을 대상으로, 결함이 희소한 산업 환경에서 결함 검출 모델의
 성능을 개선하는 것이 목표다.
 
-## 4.2 방법론
+## 제2절. 방법론
 
 KolektorSDD \[49\]는 50개의 전기 정류기에서 수집된 399장의 그레이스케일
 이미지로 구성된다(표 4-1, 그림 4-1). 모든 이미지는 512×512로 리사이징
 후 정규화하여 사용한다.
 
-**표 4-1. KolektorSDD 데이터셋 구성**
+\<표4-1\> KolektorSDD 데이터셋 구성
 
   ------------------------------------------------------------------------
   **구분**                 **정상**        **결함**        **전체**
@@ -678,7 +801,7 @@ KolektorSDD \[49\]는 50개의 전기 정류기에서 수집된 399장의 그레
 
 ![그림 4-1](figures/fig4-1.jpg)
 
-**그림 4-1.** 결함이미지와 마스크이미지
+\[그림 4-1\] 결함이미지와 마스크이미지
 
 그림 4-1은 KolektorSDD의 결함 이미지와 이에 대응하는 마스크 이미지를
 보여준다. 마스크는 결함 영역을 픽셀 단위로 지정하며, 이후 ControlNet의
@@ -694,7 +817,7 @@ EfficientNet은 8:2에서 mIoU 0.2348, Dice 0.3325로 가장 높은 성능을
 따라 본 연구는 8:2 비율(결함 이미지 기준 학습 42장:검증 10장, 약 4:1)을
 최종 채택하였다.
 
-**표 4-2. 최적의 데이터 분할 비율 선정 (EfficientNet 기준)**
+\<표4-2\> 최적의 데이터 분할 비율 선정 (EfficientNet 기준)
 
   -----------------------------------------------------------------------
   **분할비율**                            **mIoU**        **Dice**
@@ -715,7 +838,7 @@ KolektorSDD에서 추출한 결함 마스크가 조건 C가 되고 출력은 생
 패치 이미지가 된다(그림 4-2). 프롬프트는 \"a surface defect on a metallic
 background\"로 고정하며, 학습 환경은 표 4-3과 같다.
 
-**표 4-3. ControlNet 학습 환경**
+\<표4-3\> ControlNet 학습 환경
 
   -----------------------------------------------------------------------
   **Item**                 **Description**
@@ -739,7 +862,7 @@ background\"로 고정하며, 학습 환경은 표 4-3과 같다.
 
 ![그림 4-2](figures/fig4-2.jpg)
 
-**그림 4-2.** 생성된 결함이미지와 마스크이미지
+\[그림 4-2\] 생성된 결함이미지와 마스크이미지
 
 그림 4-2는 ControlNet이 결함 마스크를 조건으로 생성한 결함 패치와 그
 마스크의 예시다. 조건으로 준 마스크의 형태를 따르면서도 원본과 동일하지
@@ -756,7 +879,7 @@ background\"로 고정하며, 학습 환경은 표 4-3과 같다.
 
 ![그림 4-3](figures/fig4-3.jpg)
 
-**그림 4-3.** 유효 영역 추출
+\[그림 4-3\] 유효 영역 추출
 
 그림 4-3은 결함 주변 배경 정보를 추출한 뒤 정상 이미지에서 밝기가 가장
 유사한 영역을 슬라이딩 윈도우로 탐색해 유효 ROI를 확정하는 흐름을
@@ -772,7 +895,7 @@ gradient(변화량)를 유지하면서 ROI 배경 이미지의 경계값에 맞�
 
 ![그림 4-4](figures/fig4-4.jpg)
 
-**그림 4-4.** Poisson blending을 이용한 데이터 합성
+\[그림 4-4\] Poisson blending을 이용한 데이터 합성
 
 그림 4-4는 선택된 ROI에 생성 결함을 Poisson blending으로 삽입한
 결과로, 단순 copy-paste에서 나타나는 경계면의 급격한 색상 변화 없이
@@ -783,7 +906,7 @@ gradient(변화량)를 유지하면서 ROI 배경 이미지의 경계값에 맞�
 이미지의 결함 영역을 픽셀 단위로 예측하는 모델의 백본으로 합성곱 신경망
 기반의 ResNet34와 EfficientNet을 선정해 비교 분석하였다.
 
-## 4.3 실험 결과
+## 제3절. 실험 결과
 
 제안한 ControlNet 기반 생성 이미지와 유효영역 ROI 합성 기법의 효과를
 검증하기 위해, 원본 데이터만 사용한 모델(Real_Only)과 제안된 증강
@@ -791,7 +914,7 @@ gradient(변화량)를 유지하면서 ROI 배경 이미지의 경계값에 맞�
 계수(정의는 2.7절 참조)로 비교하였다(표 4-4). 모든 실험은 8:2 데이터
 분할 비율에서 수행하였다.
 
-**표 4-4. 원본셋 모델과 증강셋 모델의 성능 비교**
+\<표4-4\> 원본셋 모델과 증강셋 모델의 성능 비교
 
   ---------------------------------------------------------------------------
   **증강 비율** **ResNet34    **ResNet34    **EfficientNet   **EfficientNet
@@ -818,7 +941,7 @@ gradient(변화량)를 유지하면서 ROI 배경 이미지의 경계값에 맞�
 
 ![그림 4-5](figures/fig4-5.jpg)
 
-**그림 4-5.** 원본셋 모델과 증강셋 모델의 mIoU 성능비교
+\[그림 4-5\] 원본셋 모델과 증강셋 모델의 mIoU 성능비교
 
 그림 4-5에서 ResNet34 계열이 EfficientNet보다 전반적으로 높은 mIoU를
 기록하며, ResNet34 0.5 모델이 0.8919로 최고점을 찍은 뒤 0.7에서
@@ -842,9 +965,9 @@ ResNet34는 증강셋 학습 전 구간에서 Dice 0.87 이상을 유지하며 �
 
 ![그림 4-6](figures/fig4-6.jpg)
 
-**그림 4-6.** 원본셋 모델과 증강셋 모델의 Dice 성능비교
+\[그림 4-6\] 원본셋 모델과 증강셋 모델의 Dice 성능비교
 
-## 4.4 한계 및 다음 단계로의 연결
+## 제4절. 한계 및 다음 단계로의 연결
 
 ROI 추출이 결함 주변 픽셀의 평균 밝기 기반으로만 이뤄져, 실제 산업
 이미지의 복잡한 배경 텍스처·결함의 구조적 특성을 충분히 반영하지 못하는
@@ -854,9 +977,9 @@ ROI 추출이 결함 주변 픽셀의 평균 밝기 기반으로만 이뤄져, �
 반영하는 방향은 제6장(CASDA)에서 다룬다.
 
 
-# 제5장 AROMA: Adaptive ROI-based Morphology-Aware Augmentation
+# 제5장 적응형 ROI 기반 형태 인지 증강(AROMA)
 
-## 5.1 개요
+## 제1절. 개요
 
 AROMA \[56\]는 제4장에서 다룬 배경 유사도 기반 ROI 탐색을, 수작업 규칙
 없이 데이터로부터 자동으로 도출하는 방향으로 확장한 프레임워크다. 제4장의 ROI
@@ -872,7 +995,7 @@ Leather-가죽)에 재설계 없이 적용 가능함을 검증함으로써, ROI 
 baseline 개선 여지와 배경 맥락 복잡도(CCI)가 함께 충족되는 데이터셋에
 한정되고, 어느 한 조건이 결여되면 무작위 배치와 수렴하거나 역전된다.
 
-## 5.2 방법론
+## 제2절. 방법론
 
 AROMA 파이프라인은 데이터셋 프로파일링·복잡도 분석에서 시작해 결함
 합성과 품질 관리로 이어진다(그림 5-1). 먼저
@@ -884,33 +1007,33 @@ CCI(Context Complexity Index, 텍스처 엔트로피·주파수 복잡도·방�
 
 ![그림 5-1](figures/fig5-1.png)
 
-**그림 5-1.** AROMA 파이프라인
+\[그림 5-1\] AROMA 파이프라인
 
-### 5.2.1 복잡도 지표 (CCI): 배경 텍스처 분류 수식
+### 1. 복잡도 지표 (CCI): 배경 텍스처 분류 수식
 
 배경 텍스처 분류는 백분위수 기반 자동 적응 임계값을 사용:
 
-$$\text{Smooth} = \text{LocalVariance} \leq P_{25}$$
+$$\text{Smooth} = \text{LocalVariance} \leq P_{25} \tag{1}$$
 
-$$\text{Directional} = \left( \text{OrientEntropy} \leq P_{25} \right) \land \left( \text{FreqComplexity} \leq P_{25} \right)$$
+$$\text{Directional} = \left( \text{OrientEntropy} \leq P_{25} \right) \land \left( \text{FreqComplexity} \leq P_{25} \right) \tag{2}$$
 
-$$\text{Periodic} = \text{FreqComplexity} \geq P_{75}$$
+$$\text{Periodic} = \text{FreqComplexity} \geq P_{75} \tag{3}$$
 
-$$\text{Organic} = \left( \text{TextureEntropy} \geq P_{50} \right) \land \left( \text{LocalVariance} \geq P_{75} \right)$$
+$$\text{Organic} = \left( \text{TextureEntropy} \geq P_{50} \right) \land \left( \text{LocalVariance} \geq P_{75} \right) \tag{4}$$
 
 여기서 $P_{k}$는 각 데이터셋에서 자동 계산된 백분위수이므로, 동일한
 알고리즘이 모든 데이터셋에 자동 적응한다.
 
-### 5.2.2 복잡도 지표 (MCI): 결함 형태 분류 수식
+### 2. 복잡도 지표 (MCI): 결함 형태 분류 수식
 
 결함 클러스터 개수는 BIC(Bayesian Information Criterion)로 자동 최적화:
 
-$$K^{*} = \arg\max_{k}\text{BIC}(k)$$
+$$K^{*} = \arg\max_{k}\text{BIC}(k) \tag{5}$$
 
 클러스터 개수 $K^{*}$는 데이터셋마다 자동으로 결정되므로 수동 임계값
 설정이 불필요하다.
 
-**표 5-1. 데이터셋별 MCI·CCI 통계**
+\<표5-1\> 데이터셋별 MCI·CCI 통계
 
   ------------------------------------------------------------------------
   **Dataset**           **Domain**               **MCI**      **CCI**
@@ -939,7 +1062,7 @@ $$K^{*} = \arg\max_{k}\text{BIC}(k)$$
 
 ![그림 5-2](figures/fig5-2.png)
 
-**그림 5-2.** 데이터셋 복잡도 지형(MCI vs. CCI)
+\[그림 5-2\] 데이터셋 복잡도 지형(MCI vs. CCI)
 
 그림 5-2는 다섯 데이터셋이 MCI--CCI 평면에서 서로 다른 좌표를
 차지함을 보여준다. 이 배치가 5.3절에서 context-aware 배치의 효과가
@@ -958,7 +1081,7 @@ $$K^{*} = \arg\max_{k}\text{BIC}(k)$$
 
 ![그림 5-3](figures/fig5-3.png)
 
-**그림 5-3.** Severstal·AITeX의 데이터 기반 형태 클러스터
+\[그림 5-3\] Severstal·AITeX의 데이터 기반 형태 클러스터
 
 그림 5-3의 별표는 각 형태 클러스터의 중심을 나타내며 클러스터 색과
 일치한다.
@@ -967,13 +1090,13 @@ $$K^{*} = \arg\max_{k}\text{BIC}(k)$$
 
 ![그림 5-4 (b)](figures/fig5-4b.png)
 
-**그림 5-4.** 배경 맥락 특성 분포와 tertile 경계 — (a) Severstal, (b) AITeX
+\[그림 5-4\] 배경 맥락 특성 분포와 tertile 경계 — (a) Severstal, (b) AITeX
 
 그림 5-4는 프로파일된 다섯 개 배경 맥락 특성과 그 P33/P66 tertile
 경계를 보여준다. 동일한 구간화 절차를 적용해도 경계값 자체가
 데이터셋마다 달라지므로 생성되는 맥락 셀도 서로 달라진다.
 
-**표 5-2. ROI 배경 텍스처 분류 기준**
+\<표5-2\> ROI 배경 텍스처 분류 기준
 
   ------------------------------------------------------------------------
   **Category**   **Computational Criteria**          **Example Surface**
@@ -1011,12 +1134,12 @@ circularity) 분포를 확인한 결과, 표 5-3의 분류 경계값은 밀집�
 
 ![그림 5-5 (b)](figures/fig5-5b.png)
 
-**그림 5-5.** 결함 형태 특성 분포와 표 5-3 경계값 — (a) Severstal, (b) AITeX
+\[그림 5-5\] 결함 형태 특성 분포와 표 5-3 경계값 — (a) Severstal, (b) AITeX
 
 그림 5-5의 붉은 점선은 기준을 갖는 두 특성 위에 표시한 표 5-3의
 하위유형 임계값이며, aspect ratio는 로그 축으로 표시하였다.
 
-**표 5-3. 결함 하위유형 분류 기준**
+\<표5-3\> 결함 하위유형 분류 기준
 
   -----------------------------------------------------------------------
   **Subtype**      **Classification Criteria (위에서   **Description**
@@ -1060,7 +1183,7 @@ morph_prior와 ctx_prior를 산출하고, 이 둘의 합이 후보를 순위화�
 
 ![그림 5-6](figures/fig5-6.png)
 
-**그림 5-6.** 데이터셋별 대칭 호환성(ctx_prior) 히트맵
+\[그림 5-6\] 데이터셋별 대칭 호환성(ctx_prior) 히트맵
 
 그림 5-6은 형태 클러스터 × 맥락 셀 히트맵으로, 각 행에서 붉은 상자가
 그 형태 클러스터와 가장 호환적인 맥락 셀을 표시한다. 이질적인
@@ -1069,7 +1192,7 @@ morph_prior와 ctx_prior를 산출하고, 이 둘의 합이 후보를 순위화�
 
 ![그림 5-7](figures/fig5-7.png)
 
-**그림 5-7.** ROI 선택 및 호환성 기반 배치 흐름
+\[그림 5-7\] ROI 선택 및 호환성 기반 배치 흐름
 
 배치 위치가 확정되면 각 ROI에 배정할 정상 배경 이미지를 결정한다. 배경
 후보는 히스토그램 교차 ∩(a,b) = Σ_c min(a(c), b(c))를 기반으로 한 세
@@ -1080,7 +1203,7 @@ bg_score = src_fit + class_fit + size_fit으로 순위화하며, 점수가 가�
 
 ![그림 5-8](figures/fig5-8.png)
 
-**그림 5-8.** 실제 이미지에서의 배경 할당
+\[그림 5-8\] 실제 이미지에서의 배경 할당
 
 그림 5-8은 두 히스토그램 기반 척도가 후보 풀의 서로 다른 측면에
 반응하고, 최종 bg_score 순위가 이를 결합해 배경을 확정하는 과정을
@@ -1095,7 +1218,7 @@ site_score = ∩(h_s, tgt[k])이 최대가 되는 지점으로 확정한다(그�
 
 ![그림 5-9](figures/fig5-9.png)
 
-**그림 5-9.** 원본 결함의 ring 맥락과 확정된 배치 위치 비교
+\[그림 5-9\] 원본 결함의 ring 맥락과 확정된 배치 위치 비교
 
 그림 5-9에서 원본 이미지의 결함을 둘러싼 타일과 배정된 배경에서 선택된
 위치를 둘러싼 타일은 동일한 색상 척도의 tgt[k] 질량으로 착색되어,
@@ -1107,7 +1230,7 @@ blending)을 사용해 AROMA와 Random 배치를 동일한 합성 예산·동일
 blending 연산으로 비교한다. 각 데이터셋의 분할과 조건별 합성 예산은 표
 5-4와 같다.
 
-**표 5-4. 데이터셋 분할 및 증강 규모**
+\<표5-4\> 데이터셋 분할 및 증강 규모
 
 +-----------+-------+------+-------+----------+-------+--------------+
 | **        | **Dom | **Go | **Def | **Trai   | **    | **Classes**  |
@@ -1135,7 +1258,7 @@ blending 연산으로 비교한다. 각 데이터셋의 분할과 조건별 합�
 | Leather   | ather |      |       |          |       |              |
 +-----------+-------+------+-------+----------+-------+--------------+
 
-### 5.2.5 합성 (Blending Synthesis)
+### 3. 합성 (Blending Synthesis)
 
 선택된 결함 패치는 지정된 bounding box 위치에서 대상 정상 이미지에
 배치된다. AROMA와 random-ROI 두 조건 모두에 동일하게 적용되는 blend
@@ -1157,7 +1280,7 @@ validation fraction 0.3, batch size 64). 입력 해상도는 다중클래스
 Kolektor는 imgsz 640, 타일이 정방형인 AITeX는 imgsz 256에 직사각형
 학습을 비활성화하였다.
 
-## 5.3 실험 결과
+## 제3절. 실험 결과
 
 ROI 선택 메커니즘을 평가한 결과(그림 5-10),
 선택 개수를 동일하게 맞춘 비교(큰 쪽 집합을 고정 시드로 하위표집)에서
@@ -1173,7 +1296,7 @@ AROMA가 배치의 폭보다 호환성을 우선한 결과이며, 그 다운스�
 
 ![그림 5-10](figures/fig5-10.png)
 
-**그림 5-10.** ROI 배치 커버리지 비교
+\[그림 5-10\] ROI 배치 커버리지 비교
 
 그림 5-10은 형태·맥락·희귀 쌍 세 축의 커버리지를 AROMA와 동일 크기의
 균일 무작위 선택 사이에서 비교한 것이다.
@@ -1194,7 +1317,7 @@ ROI 집합과 결함 인스턴스를 공유하되 배경 이미지 할당만 무
 
 ![그림 5-11](figures/fig5-11.png)
 
-**그림 5-11.** 정성적 ROI 배치 비교
+\[그림 5-11\] 정성적 ROI 배치 비교
 
 그림 5-11은 데이터셋마다 고정한 대표 이미지 한 장에 동일한 호환성
 스캔 함수와 균일 무작위 배치 함수를 직접 호출해 얻은 결과로, 배치
@@ -1202,11 +1325,11 @@ ROI 집합과 결함 인스턴스를 공유하되 배경 이미지 할당만 무
 
 ![그림 5-12](figures/fig5-12.png)
 
-**그림 5-12.** 배경 선택 호환성 비교
+\[그림 5-12\] 배경 선택 호환성 비교
 
 단일 클래스 데이터셋에서는 뚜렷한 대조가 나타난다(표 5-5, 표 5-6).
 
-**표 5-5. AITeX YOLOv8n 검출 성능 (mean ± std, n=3 seeds)**
+\<표5-5\> AITeX YOLOv8n 검출 성능 (mean ± std, n=3 seeds)
 
   -----------------------------------------------------------------------
   **Method**                          **mAP@0.5**
@@ -1218,7 +1341,7 @@ ROI 집합과 결함 인스턴스를 공유하되 배경 이미지 할당만 무
   AROMA                               0.4683 ± 0.0461
   -----------------------------------------------------------------------
 
-**표 5-6. Kolektor YOLOv8n 검출 성능 (mean ± std, n=3 seeds)**
+\<표5-6\> Kolektor YOLOv8n 검출 성능 (mean ± std, n=3 seeds)
 
   -----------------------------------------------------------------------
   **Method**                          **mAP@0.5**
@@ -1239,18 +1362,18 @@ ROI 집합과 결함 인스턴스를 공유하되 배경 이미지 할당만 무
 
 ![그림 5-13](figures/fig5-13.png)
 
-**그림 5-13.** AITeX ROI 비교
+\[그림 5-13\] AITeX ROI 비교
 
 ![그림 5-14](figures/fig5-14.png)
 
-**그림 5-14.** Kolektor ROI 비교
+\[그림 5-14\] Kolektor ROI 비교
 
 그림 5-13과 그림 5-14는 각 데이터셋에서 제안 절차의 단계별 샘플
 이미지를 제시한다.
 
 다중 클래스 데이터셋에서도 동일한 패턴이 관찰된다(표 5-7\~5-9).
 
-**표 5-7. Severstal YOLOv8n 검출 성능 (4-class, mean ± std, n=3 seeds)**
+\<표5-7\> Severstal YOLOv8n 검출 성능 (4-class, mean ± std, n=3 seeds)
 
   -----------------------------------------------------------------------
   **Method**                          **mAP@0.5**
@@ -1262,7 +1385,7 @@ ROI 집합과 결함 인스턴스를 공유하되 배경 이미지 할당만 무
   AROMA                               0.5041 ± 0.0181
   -----------------------------------------------------------------------
 
-**표 5-8. MTD YOLOv8n 검출 성능 (5-class, mean ± std, n=3 seeds)**
+\<표5-8\> MTD YOLOv8n 검출 성능 (5-class, mean ± std, n=3 seeds)
 
   -----------------------------------------------------------------------
   **Method**                          **mAP@0.5**
@@ -1274,8 +1397,7 @@ ROI 집합과 결함 인스턴스를 공유하되 배경 이미지 할당만 무
   AROMA                               0.9440 ± 0.0152
   -----------------------------------------------------------------------
 
-**표 5-9. MVTec Leather YOLOv8n 검출 성능 (5-class, mean ± std, n=3
-seeds)**
+\<표5-9\> MVTec Leather YOLOv8n 검출 성능 (5-class, mean ± std, n=3 seeds)
 
   -----------------------------------------------------------------------
   **Method**                          **mAP@0.5**
@@ -1298,15 +1420,15 @@ MVTec Leather의 하락은 그림에서도 볼 수 있듯이, 전체적으로 �
 
 ![그림 5-15](figures/fig5-15.png)
 
-**그림 5-15.** Severstal ROI 비교
+\[그림 5-15\] Severstal ROI 비교
 
 ![그림 5-16](figures/fig5-16.png)
 
-**그림 5-16.** MTD ROI 비교
+\[그림 5-16\] MTD ROI 비교
 
 ![그림 5-17](figures/fig5-17.png)
 
-**그림 5-17.** MVTec Leather ROI 비교
+\[그림 5-17\] MVTec Leather ROI 비교
 
 종합하면, AITeX(+4.96 pp)→Severstal(+1.06 pp)→MTD(-0.25 pp)→MVTec
 Leather(-4.91 pp)로 이어지는 순서는 CCI가 높은 순서와 정확히 일치한다.
@@ -1319,7 +1441,7 @@ AROMA와 Random 간 차이는 3개 시드의 대응 비교(paired t, df=2)에서
 크기나 유의성이 아니라 CCI를 따라 부호가 순서대로 뒤집히는 패턴 자체에
 근거한다.
 
-## 5.4 한계 및 다음 단계로의 연결
+## 제4절. 한계 및 다음 단계로의 연결
 
 AROMA는 여러 산업 도메인에 재설계 없이 일반화되는 자동화된 ROI 검출·배치
 프레임워크를 확립했지만, 여전히 \"기존 결함 patch를 재배치\"하는
@@ -1334,9 +1456,9 @@ copy-paste 프레임에 머무른다. 결함 자체의 신규 생성이 아니�
 한계를 넘어선다.
 
 
-# 제6장 CASDA: Context-Aware Steel Defect Augmentation
+# 제6장 문맥 인지 강철 결함 증강(CASDA)
 
-## 6.1 개요
+## 제1절. 개요
 
 CASDA \[31\]는 제5장(AROMA)이 확립한 자동화된 ROI 검출·copy-paste 프레임워크를
 강철 표면(Severstal) 단일 도메인에 특화시킨 연구다. 도메인을 좁히는
@@ -1347,7 +1469,7 @@ CASDA \[31\]는 제5장(AROMA)이 확립한 자동화된 ROI 검출·copy-paste 
 확장한 5단계 프레임워크이며, Severstal 철강 결함 데이터셋으로
 검증하였다.
 
-## 6.2 방법론: 5단계 파이프라인
+## 제2절. 방법론: 5단계 파이프라인
 
 Severstal Steel Defect Detection 데이터셋 \[51\]은 다수의 결함 클래스가 서로
 다른 형태적 특성과 발생 빈도를 가지며, 특히 Class 2가 심각하게
@@ -1360,7 +1482,7 @@ Severstal Steel Defect Detection 데이터셋 \[51\]은 다수의 결함 클래�
 
 ![그림 6-1](figures/fig6-1.jpg)
 
-**그림 6-1.** CASDA 파이프라인
+\[그림 6-1\] CASDA 파이프라인
 
 **1단계: 기하학적 ROI 특성화.** 결함 마스크의 공분산 행렬 고유값 분해로
 linearity를, 볼록껍질 대비 실제 면적비로 solidity를, bounding box 대비
@@ -1369,20 +1491,20 @@ ratio를 계산하여 결함을 linear_scratch/irregular/compact_blob/general
 4개 유형으로 분류한다(그림 6-2). 결함 유형 분류 수식(고정
 기준)은 다음과 같다:
 
-$$\text{linear\_scratch} \Leftrightarrow \lambda > 0.85 \land \alpha > 5.0$$
+$$\text{linear\_scratch} \Leftrightarrow \lambda > 0.85 \land \alpha > 5.0 \tag{6}$$
 
-$$\text{irregular} \Leftrightarrow \sigma < 0.7$$
+$$\text{irregular} \Leftrightarrow \sigma < 0.7 \tag{7}$$
 
-$$\text{compact\_blob} \Leftrightarrow \alpha < 2.0 \land \sigma > 0.9$$
+$$\text{compact\_blob} \Leftrightarrow \alpha < 2.0 \land \sigma > 0.9 \tag{8}$$
 
-$$\text{general} \Leftrightarrow \text{otherwise}$$
+$$\text{general} \Leftrightarrow \text{otherwise} \tag{9}$$
 
 여기서: $\lambda$ = 선형성(Linearity), $\sigma$ = 건고도(Solidity),
 $\alpha$ = 종횡비(Aspect Ratio)
 
 ![그림 6-2](figures/fig6-2.jpg)
 
-**그림 6-2.** 기하학적 ROI 특성화 파이프라인
+\[그림 6-2\] 기하학적 ROI 특성화 파이프라인
 
 그림 6-2의 각 행은 결함 하위유형(Linear Scratch, Irregular, Compact
 Blob, General)에, 각 열은 처리 단계에 대응한다. ROI 윈도우와 결함
@@ -1395,20 +1517,19 @@ $\sigma$=0.9)에는 로그 스케일 Otsu 분할을 적용하였다(그림 6-3).
 
 ![그림 6-3](figures/fig6-3.png)
 
-**그림 6-3.** 형태 특성 분포 — (1) linearity($\lambda$), (2) aspect
-ratio($\alpha$), (3) solidity($\sigma$)
+\[그림 6-3\] 형태 특성 분포 — (1) linearity($\lambda$), (2) aspect ratio($\alpha$), (3) solidity($\sigma$)
 
 배경 표면 또한 64픽셀 슬라이딩 그리드 위에서 Canny 엣지 밀도와 Sobel
 방향성 맵으로 분석해 Smooth, Vertical Stripe, Horizontal Stripe,
 Textured, Complex 5개 유형으로 분류한다(그림 6-4). 배경 텍스처 분류에는 Severstal 기반의 고정 임계값을 사용한다:
 
-$$\text{Smooth} = \text{LocalVariance} \leq 14.09$$
+$$\text{Smooth} = \text{LocalVariance} \leq 14.09 \tag{10}$$
 
-$$\text{Complex} = \text{LocalVariance} > 14.09\text{ 또는 }\text{EdgeDensity} > 0.607$$
+$$\text{Complex} = \text{LocalVariance} > 14.09\text{ 또는 }\text{EdgeDensity} > 0.607 \tag{11}$$
 
 ![그림 6-4](figures/fig6-4.jpg)
 
-**그림 6-4.** 배경 텍스처 분류 파이프라인
+\[그림 6-4\] 배경 텍스처 분류 파이프라인
 
 그림 6-4의 각 행은 배경 유형(Smooth, Vertical Stripe, Horizontal
 Stripe, Textured, Complex)에, 각 열은 처리 단계에 대응한다. 64픽셀
@@ -1424,11 +1545,11 @@ Stripe, Textured, Complex)에, 각 열은 처리 단계에 대응한다. 64픽�
 
 ![그림 6-5](figures/fig6-5.png)
 
-**그림 6-5.** 정상 배경 패치에서 계산한 패치별 배경 분산 분포
+\[그림 6-5\] 정상 배경 패치에서 계산한 패치별 배경 분산 분포
 
 ![그림 6-6](figures/fig6-6.png)
 
-**그림 6-6.** 동일 패치 집합에서 계산한 배경 엣지 밀도 분포
+\[그림 6-6\] 동일 패치 집합에서 계산한 배경 엣지 밀도 분포
 
 매칭 품질·공간
 연속성·배경 안정성을 통합한 ROI 적합도 점수를 산출한 결과, 학습
@@ -1437,7 +1558,7 @@ Stripe, Textured, Complex)에, 각 열은 처리 단계에 대응한다. 64픽�
 선택적으로 사용하고, 제외군(7.2%, 235개)은 템플릿 풀에서 배제하였다(표
 6-1).
 
-**표 6-1. ROI 적합도 분류 결과**
+\<표6-1\> ROI 적합도 분류 결과
 
   ------------------------------------------------------------------------
   **그룹**              **비율**   **개수**   **용도**
@@ -1456,8 +1577,7 @@ Stripe, Textured, Complex)에, 각 열은 처리 단계에 대응한다. 64픽�
 
 ![그림 6-7](figures/fig6-7.jpg)
 
-**그림 6-7.** CASDA 1단계에서 분류된 결함 하위유형별(상단)·배경
-유형별(하단) 대표 ROI 샘플
+\[그림 6-7\] CASDA 1단계에서 분류된 결함 하위유형별(상단)·배경 유형별(하단) 대표 ROI 샘플
 
 **2단계: ControlNet 구성.** ControlNet \[30\]
 구현체(lllyasviel/sd-controlnet-canny)를 Stable Diffusion
@@ -1480,7 +1600,7 @@ surface with directional texture (pristine), class 2.\"라는 프롬프트로
 
 ![그림 6-8](figures/fig6-8.jpg)
 
-**그림 6-8.** CASDA 2단계의 3채널 힌트 이미지 구성
+\[그림 6-8\] CASDA 2단계의 3채널 힌트 이미지 구성
 
 그림 6-8의 각 행은 결함 클래스(Class 1~4)에, 각 열은 구성 단계에
 대응한다. 결함 마스크를 오버레이한 ROI 패치에서 시작해 형태 특성 기반
@@ -1502,7 +1622,7 @@ R채널, 표면 방향성 G채널, 표면 거칠기 B채널을 거쳐 최종 힌
 기존 학습 데이터셋에 통합, 데이터 다양성과 클래스 균형이 개선된 최종
 학습 데이터셋을 구성한다.
 
-**표 6-2. 증강 통계 요약**
+\<표6-2\> 증강 통계 요약
 
   -----------------------------------------------------------------------
   **항목**                      **값**
@@ -1528,7 +1648,7 @@ Class 2는 데이터 희소성이 가장 심각한 클래스로, 기존 247개�
 증강 비율 42.7%는 생성 데이터의 다양성을 활용하면서도 원본 데이터의
 분포적 특성을 보존하기 위해 의도적으로 유지한 수치다.
 
-## 6.3 실험 결과
+## 제3절. 실험 결과
 
 제안 프레임워크의 다운스트림 효과를 검증하기 위해 BiFPN을 도입한
 EB-YOLOv8을 벤치마크 아키텍처로 선정하고, 두 개의 독립 시드(42, 456)로
@@ -1536,7 +1656,7 @@ EB-YOLOv8을 벤치마크 아키텍처로 선정하고, 두 개의 독립 시드
 시드가 완전히 동일한 평가 결과를 산출한 경우로, 해당 모델--조건 조합이
 시드 변동에 둔감함을 의미한다.
 
-**표 6-3. EB-YOLOv8 검출 성능 (Severstal, mean ± std, n=2 seeds)**
+\<표6-3\> EB-YOLOv8 검출 성능 (Severstal, mean ± std, n=2 seeds)
 
   ------------------------------------------------------------------------
   **Method**     **mAP@0.5**   **Class 1  **Class 2  **Class 3  **Class 4
@@ -1586,13 +1706,13 @@ Copy-Paste(0.394)를 상회해 단순 patch 재조합을 넘어선 구조적 다
 
 ![그림 6-9](figures/fig6-9.jpg)
 
-**그림 6-9.** CASDA 3단계에서 ControlNet으로 생성한 결함 샘플
+\[그림 6-9\] CASDA 3단계에서 ControlNet으로 생성한 결함 샘플
 
 그림 6-9는 동일한 힌트 조건에서 생성된 결함 샘플을 원본 GT와 비교한
 것으로, 단일 힌트 입력에서 시각적으로 서로 다른 복수의 출력이 산출됨을
 보여준다.
 
-## 6.4 한계
+## 제4절. 한계
 
 본 장의 결과는 두 개의 시드(n=2)로 수행한 소규모 실험에 기반한다. 참고로
 실시한 형식적 가설 검정(Wilcoxon signed-rank, BH-FDR 보정, α=0.05)은
@@ -1606,9 +1726,9 @@ Copy-Paste(0.394)를 상회해 단순 patch 재조합을 넘어선 구조적 다
 챕터에서 다룬다(본 초안 범위 외).
 
 
-# 제7장 결론
+# 제7장 결 론
 
-## 7.1 연구 요약
+## 제1절. 연구 요약
 
 본 논문은 결함 검출 성능 개선을 위한 데이터 증강 연구를 결함 patch
 생성(제3장) → ROI 배치 탐색의 도입(제4장) → ROI 배치의 데이터 기반
@@ -1659,7 +1779,7 @@ context-aware 생성이 단순 patch 재사용보다 판별력 있는 minority-c
 Copy-Paste 0.394로 우세하다는 점이 실제 patch 재사용의 다양성 한계를
 넘어섰다는 서사축을 함께 뒷받침한다.
 
-## 7.2 연구의 의의
+## 제2절. 연구의 의의
 
 네 편의 연구는 개별적으로 발표되었으나, 본 논문에서 재구성한 서사를 통해
 \"결함 patch를 생성하는 문제\"와 \"생성된 결함을 배치할 위치를 정하는
@@ -1675,7 +1795,7 @@ baseline 개선 여지와 배경 맥락 복잡도(CCI)가 동시에 충족되지
 한계(제6장) 등 제안 기법이 실패하거나 무효화되는 조건까지 함께 규명하여,
 제안 방법의 적용 범위를 실증적으로 한정하였다.
 
-## 7.3 향후 연구 방향
+## 제3절. 향후 연구 방향
 
 CASDA의 실험 결과에서는 ROI 매칭이 결함 주변 배경의 통계적 속성에 크게
 의존한다는 근본적 한계가 드러나며, 이는 다양한 제조 현장의 결함 발생
@@ -1684,7 +1804,8 @@ CASDA의 실험 결과에서는 ROI 매칭이 결함 주변 배경의 통계적 
 ROI인 경우의 object detection 선행 등)는 본 초안의 범위에서 제외하며,
 별도 챕터로 후속 작성한다.
 
-# 제8장 References
+
+# 참고문헌
 
 \[1\] Rippel, O.; Merhof, D. Anomaly Detection for Automated Visual
 Inspection: A Review. In Bildverarbeitung in der Automation;
@@ -1924,3 +2045,42 @@ Augmentation. (저널명 미기입), (연도), (권(호)), (페이지). DOI: (�
 Gustafson, L.; Xiao, T.; Whitehead, S.; Berg, A. C.; Lo, W.-Y.; Dollár,
 P.; Girshick, R. Segment Anything. ICCV. 2023, pp. 4015--4026. DOI:
 10.1109/ICCV51070.2023.00371.
+
+# ABSTRACT
+
+**Context-Aware Data Augmentation for Industrial Defect Detection**
+
+Han, Ho Jun
+
+Department of Computer Science & Engineering
+
+Major of Computer Science & Engineering
+
+The Graduate School
+
+Korea University of Technology and Education
+
+Quality assurance in manufacturing is central to product reliability and
+cost control, and deep learning--based Automated Visual Inspection (AVI)
+has substantially improved inspection efficiency and accuracy. However,
+real industrial settings suffer from intrinsic defect rarity and severe
+class imbalance, causing detection models to underfit minority defect
+classes. This dissertation integrates four published papers authored by
+the candidate into a single research trajectory addressing this
+data-scarcity problem through defect data augmentation. Each study
+builds on the prior one\'s output around a single question --- where to
+place a candidate defect region (ROI) and what to place there: (1)
+GAN/Diffusion-based defect-patch augmentation, (2) ControlNet-based
+defect generation combined with background-brightness-similarity-based
+ROI search and Poisson blending, (3) data-driven automation of ROI
+compatibility that generalizes across industrial datasets without
+per-domain re-engineering (AROMA), and (4) specialization of that
+automated framework to the steel-surface domain combined with
+ControlNet-based generative synthesis of the defect content itself
+(CASDA). Each chapter reports its methodology and results together with
+the specific limitation carried forward into the next, showing that the
+four studies form one continuous progression rather than an incidental
+list.
+
+Keywords: Defect Detection, Data Augmentation, Region of Interest
+(ROI), ControlNet, Context-Aware Synthesis, Class Imbalance
