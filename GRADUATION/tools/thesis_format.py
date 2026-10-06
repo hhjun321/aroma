@@ -6,6 +6,7 @@
    (B5 판형, 구역별 쪽번호, 목차/표 목차/그림 목차 필드, 캡션·표·수식 서식)
 
 실행: python GRADUATION/tools/thesis_format.py
+      python GRADUATION/tools/thesis_format.py --from-md   (OUT_MD -> docx 만)
 """
 import re
 import subprocess
@@ -524,8 +525,13 @@ def postprocess(docx_path):
 
 
 def main():
-    md, stats = build_md(SRC.read_text(encoding="utf-8"))
-    OUT_MD.write_text(md, encoding="utf-8")
+    if "--from-md" in sys.argv:
+        # OUT_MD 를 직접 손본 뒤 docx 만 다시 만들 때 (OUT_MD 덮어쓰기 금지)
+        md = OUT_MD.read_text(encoding="utf-8")
+        stats = {"equations": len(re.findall(r"\\tag\{\d+\}", md))}
+    else:
+        md, stats = build_md(SRC.read_text(encoding="utf-8"))
+        OUT_MD.write_text(md, encoding="utf-8")
     print("md:", OUT_MD.name, stats)
 
     tmp = ROOT / "tools" / "_build"
