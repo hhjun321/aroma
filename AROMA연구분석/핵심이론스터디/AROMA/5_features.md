@@ -270,6 +270,8 @@ cascade = 위에서부터 **첫 매치 승**(졸업논문: "식 5-3에서 5-6 �
 5. **(2026-11-06 추가) 졸업논문 4항 "추출된 후보 영역에는 2항의 기준(표 5-2)에 따라 배경 텍스처 범주 라벨을 부여한다" — AROMA 코드에 대응물 없음.** `classify_patch` 호출처는 CASDA `stage1_roi_extraction.py`뿐(§3.0). 1~3보다 상위 리스크("안 돈다" 수준). 방어선 = 1항 말미 "해석·보고용 라벨". 정정 시 4항 문장을 "CASDA(제6장)에서는 … AROMA는 셀 코드로 대체" 로 바꾸는 게 최소 비용.
 6. **(2026-11-06 추가) 졸업논문 3항 "하위유형 라벨은 합성 시 elastic-warping 변형 파라미터 선택에 사용" — AROMA 코드에 elastic 0건.** `elastic` 은 CASDA `stage2_defect_seed_generation.py`·`stage4_diffusion_synthesis.py`(제6장)에만 존재. copy-paste 주 실험에서 subtype이 실제 닿는 곳 = 단일클래스 셋 class_fit (5-13) 의 클래스 축 대체(`clean_bg_selection.py:679`) + 기본 꺼진 quality gate. "ROI 순위(5-9, 5-10)에 쓰이지 않는다"는 참이나 "(5-13)에는 쓰인다(단일클래스)"가 빠짐. 또 `roi_selection.py:380 subtype_mode` 기본 `fixed`(CASDA 상수) — 논문 정본 percentile은 `--subtype_mode percentile` 명시 전달 시에만(step3 가이드).
 
+7. **(2026-11-11 추가) ROI_score (5-9)의 ctx_prior가 식 (5-10) 행렬이 아님.** `roi_selection.py:429` `compat_json.get("matrix")` = 구형 이미지 단위 P(c|k)(결함 이미지 패치 평균 특징 → 셀 1개로 센 조건부 분포, 기하평균·P_clean 없음). `matrix_symmetric`은 roi_selection에 0건. (5-10) 실소비처 = `clean_bg_selection.py:538`(tgt[k]·k_fit) + `generate_defects.py:2972`(compat_mode symmetric, site_score). 그림 5-6 히트맵 스크립트는 `matrix_symmetric` → 그림·본문은 일치, ROI 선택 코드만 어긋남. 생성 과정 상세 = `v5_페이지별_스터디가이드.md` 28번.
+
 **해소된 불일치(갱신 2026-11-03)**: 영문 Article §3.2.1의 MCI "intensity variation" 표현은 졸업논문에서 "형태 군집 라벨 분포의 엔트로피(Entropy)"로 바로잡혔다(§5.4). ppt_guide "argmax BIC"도 argmin으로 정정 완료(§5.3).
 
 ---
@@ -467,3 +469,4 @@ cascade 순서가 결과를 바꾼다(코드 주석 "Order is load-bearing"): AR
 |---|---|---|
 | 2026-11-03 | §0 개념 모델 합의(디스크립터/filter/라벨/벡터) | §1 |
 | 2026-11-06 | §1 패치·셀 구조, §1.2 브리지, §2 CCI 검산, §3.0 표 5-2 호출처, §5 결함 6종·k·K*·MCI·subtype, §6 소비처 지도·6.1 추적 | §6.1 [2]~[3] 수식 세부(5-11~5-16) 또는 §4 불일치 처리 방향 결정 |
+| 2026-11-11 | (v5 가이드 병행) §4-7 추가: ROI_score가 구형 matrix 사용. 호환성 행렬 생성 과정은 가이드 28번에 정리 | 가이드 기준 진행. §6.1 [2]~[3]은 가이드 29·30번으로 충족 |
